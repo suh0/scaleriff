@@ -1,0 +1,60 @@
+# ── Python ──────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+
+# ── 가상환경 ────────────────────────────────────────────────────
+venv/
+.venv/
+env/
+.env/
+
+# ── 런타임 캐시 / 임시 ─────────────────────────────────────────
+cache/
+*.cache
+
+# ── ML 학습 산출물 (default_markov.json만 예외 추적) ───────────
+models/*.pt
+models/*.bin
+models/markov.json
+data/
+# 동봉 부트스트랩 모델은 추적 유지
+!models/default_markov.json
+
+# ── Weimar Jazz DB (대용량 바이너리) ───────────────────────────
+*.db
+*.sqlite
+*.sqlite3
+
+# ── 오디오 / 미디어 (다운로드 캐시) ────────────────────────────
+*.wav
+*.mp3
+*.m4a
+*.flac
+*.ogg
+*.opus
+*.webm
+
+# ── 로그 ────────────────────────────────────────────────────────
+*.log
+pip_install*.log
+
+# ── OS / 에디터 잡파일 ──────────────────────────────────────────
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.idea/
+.vscode/
+*.code-workspace
+
+# ── pytest / coverage ───────────────────────────────────────────
+.pytest_cache/
+.coverage
+htmlcov/

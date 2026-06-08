@@ -1,0 +1,31 @@
+# 즉흥연주 트레이너 — 앱 런타임 의존성 (Python 3.11 고정)
+# ML 학습용 의존성(torch 등)은 ml/train/requirements.txt 참고 (Colab 오프라인)
+
+# GUI
+PyQt6>=6.6
+
+# 수치/신호처리
+numpy>=1.24,<2.1
+scipy>=1.10
+
+# MIR (코드/키/BPM) — librosa 백엔드
+librosa>=0.10
+soundfile>=0.12
+audioread>=3.0
+
+# (선택) 다운비트 트래킹 — madmom DBNDownBeatTrackingProcessor.
+#   설치되면 자동으로 비트·다운비트 소스로 사용(코드 변경 불필요).
+#   Windows는 C 확장 컴파일에 "Microsoft C++ Build Tools" 필요.
+#   미설치 시 librosa 다운비트 추정으로 폴백.
+#   설치:  pip install Cython wheel
+#          pip install madmom --no-build-isolation
+# madmom>=0.16
+
+# 인제스션 (링크 → 오디오)
+yt-dlp>=2024.1
+# ffmpeg 바이너리 동봉 (시스템 ffmpeg 불필요) — yt-dlp 추출 + 압축오디오 디코딩
+imageio-ffmpeg>=0.4
+
+# MIDI 키보드 입력
+mido>=1.3
+python-rtmidi>=1.5
