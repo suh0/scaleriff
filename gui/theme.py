@@ -46,9 +46,10 @@ KEY_PRESSED_OUT    = "#ef4444"  # 스케일 밖 친 건반 테두리
 KEY_PRESSED_LABEL  = "#f5c842"  # 친 건반 도수 텍스트 — 노랑
 
 # ── 공통 UI 엘리먼트 ─────────────────────────────────────────────
-WHITE      = "#ffffff"
-SCRUB_FILL = "#3a3a3a"
-SCRUB_HEAD = "#ffffff"
+WHITE        = "#ffffff"
+SCRUB_FILL   = "#3a3a3a"
+SCRUB_HEAD   = "#ffffff"
+HOVER_OVERLAY = "rgba(255,255,255,0.08)"  # 버튼 hover 반투명 오버레이
 
 # ── 하위 호환 별칭 ────────────────────────────────────────────────
 TEXT_ACCENT = TEXT_MUTED
@@ -99,7 +100,7 @@ def qss_outline_btn() -> str:
     return (
         f"QPushButton{{background:transparent;color:{TEXT_PRIMARY};"
         f"border:1px solid {BORDER_ACTIVE};border-radius:10px;padding:11px 18px;font-size:14px;}}"
-        f"QPushButton:hover{{background:rgba(255,255,255,0.08);}}"
+        f"QPushButton:hover{{background:{HOVER_OVERLAY};}}"
     )
 
 
