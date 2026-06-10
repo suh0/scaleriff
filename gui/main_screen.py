@@ -56,13 +56,13 @@ class MainScreen(QWidget):
         top.addSpacing(10)
         self.song_lbl = QLabel("—")
         self.song_lbl.setStyleSheet(
-            f"color:{T.TEXT_PRIMARY};font-family:'{T.FONT_SERIF_KR}';"
-            "font-size:15px;font-weight:bold;")
+            f"color:{T.TEXT_PRIMARY};font-family:'{T.FONT_SANS}';"
+            "font-size:15px;font-weight:700;")
         top.addWidget(self.song_lbl)
         top.addStretch(1)
         self.bpm_lbl = QLabel("")
         self.bpm_lbl.setStyleSheet(
-            f"color:{T.TEXT_ACCENT};font-family:'{T.FONT_MONO}';font-size:12px;")
+            f"color:{T.TEXT_MUTED};font-family:'{T.FONT_MONO}';font-size:12px;")
         top.addWidget(self.bpm_lbl)
         root.addLayout(top)
 
@@ -75,13 +75,13 @@ class MainScreen(QWidget):
         cur = QVBoxLayout(); cur.setSpacing(2)
         self.chord_lbl = QLabel("—")
         self.chord_lbl.setStyleSheet(
-            f"color:{T.TEXT_PRIMARY};font-family:'{T.FONT_SERIF}';"
-            "font-size:28px;font-weight:bold;border:none;")
+            f"color:{T.TEXT_PRIMARY};font-family:'{T.FONT_SANS_EN}';"
+            "font-size:28px;font-weight:900;border:none;")
         cur.addWidget(self.chord_lbl)
         self.scale_lbl = QLabel("")
         self.scale_lbl.setStyleSheet(
-            f"color:{T.TEXT_ACCENT};font-family:'{T.FONT_MONO}';"
-            "font-size:15px;font-weight:bold;border:none;letter-spacing:1px;")
+            f"color:{T.TEXT_MUTED};font-family:'{T.FONT_MONO}';"
+            "font-size:15px;font-weight:700;border:none;letter-spacing:1px;")
         cur.addWidget(self.scale_lbl)
         hl.addLayout(cur)
         hl.addStretch(1)
@@ -129,15 +129,15 @@ class MainScreen(QWidget):
         self.scrub.seekRequested.connect(self._on_seek)
         root.addWidget(self.scrub)
 
-        # ── 재생/일시정지 (골드 원형) ──
+        # ── 재생/일시정지 (흰 원형, §6.1) ──
         bottom = QHBoxLayout()
         bottom.addStretch(1)
         self.play_btn = QPushButton("▶")
         self.play_btn.setFixedSize(60, 60)
         self.play_btn.setStyleSheet(
-            f"QPushButton{{background:{T.GOLD};color:{T.BG_BASE};border:none;"
-            f"border-radius:30px;font-size:22px;font-weight:bold;}}"
-            f"QPushButton:hover{{background:{T.GOLD_LIGHT};}}")
+            f"QPushButton{{background:{T.WHITE};color:{T.BG_BASE};border:none;"
+            f"border-radius:30px;font-size:22px;font-weight:700;}}"
+            f"QPushButton:hover{{background:{T.TEXT_BODY};}}")
         self.play_btn.clicked.connect(self._toggle_play)
         bottom.addWidget(self.play_btn)
         bottom.addStretch(1)
@@ -158,8 +158,8 @@ class MainScreen(QWidget):
         if self._play_along:
             self.along_btn.setText("👥 같이 연주 ●")
             self.along_btn.setStyleSheet(
-                f"QPushButton{{background:{T.GOLD};color:{T.BG_BASE};border:none;"
-                f"border-radius:10px;padding:11px 16px;font-size:14px;font-weight:bold;}}")
+                f"QPushButton{{background:{T.WHITE};color:{T.BG_BASE};border:none;"
+                f"border-radius:10px;padding:11px 16px;font-size:14px;font-weight:700;}}")
         else:
             self.along_btn.setText("👥 같이 연주")
             self.along_btn.setStyleSheet(T.qss_outline_btn())

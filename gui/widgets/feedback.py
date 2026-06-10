@@ -1,7 +1,7 @@
-"""피드백 영역 — ScaleRiff (디자인 스펙). 채점 없음.
+"""피드백 영역 — ScaleRiff (디자인 스펙 v4). 채점 없음.
 
 마지막 친 음: 음이름 + 분류(코드톤/스케일음/스케일 밖) + 기능 라벨.
-"틀린 음 없어요" 톤 상시 노출. 분류색은 히트 램프와 맞춤.
+"틀린 음 없어요" 톤 상시 노출. 분류색은 키보드 기능색(초록/흰/빨강)과 맞춤.
 """
 from __future__ import annotations
 
@@ -10,9 +10,9 @@ from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel
 from analyze.theory import function_label, pc_name
 from gui import theme as T
 
-CHORD_TONE = ("코드톤 — 가장 안정적", T.HEAD)
-SCALE_TONE = ("스케일음 — 잘 어울려요", T.GOLD_LIGHT)
-OUT_TONE = ("스케일 밖 — 색다른 맛, 다음 음으로 풀어주면 멋져요", "#c8642a")
+CHORD_TONE = ("코드톤 — 가장 안정적",               T.KEY_CHORD)        # 초록
+SCALE_TONE = ("스케일음 — 잘 어울려요",              T.TEXT_BODY)        # 흰
+OUT_TONE   = ("스케일 밖 — 색다른 맛, 다음 음으로 풀어주면 멋져요", T.KEY_OUT)  # 빨강
 
 
 def _classify(pc, note_set, chord_tones):
@@ -37,7 +37,7 @@ class FeedbackPanel(QWidget):
         row = QHBoxLayout()
         self.note_lbl = QLabel("—")
         self.note_lbl.setStyleSheet(
-            f"color:{T.HEAD};font-family:'{T.FONT_MONO}';font-size:22px;font-weight:bold;")
+            f"color:{T.TEXT_PRIMARY};font-family:'{T.FONT_MONO}';font-size:22px;font-weight:bold;")
         self.note_lbl.setMinimumWidth(64)
         row.addWidget(self.note_lbl)
 

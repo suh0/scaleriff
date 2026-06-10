@@ -46,8 +46,8 @@ class AnalyzingScreen(QWidget):
 
         self.title = QLabel("분석 중…")
         self.title.setStyleSheet(
-            f"color:{T.TEXT_PRIMARY};font-family:'{T.FONT_SERIF_KR}';"
-            "font-size:24px;font-weight:bold;")
+            f"color:{T.TEXT_PRIMARY};font-family:'{T.FONT_SANS}';"
+            "font-size:24px;font-weight:700;")
         self.title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lay.addWidget(self.title)
 
@@ -65,7 +65,7 @@ class AnalyzingScreen(QWidget):
         self.bar.setFixedHeight(10)
         self.bar.setStyleSheet(
             f"QProgressBar{{background:{T.BG_SURFACE};border:none;border-radius:5px;}}"
-            f"QProgressBar::chunk{{background:{T.GOLD};border-radius:5px;}}")
+            f"QProgressBar::chunk{{background:{T.WHITE};border-radius:5px;}}")
         lay.addWidget(self.bar)
 
         self.log = QTextEdit()

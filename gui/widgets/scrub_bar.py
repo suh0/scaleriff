@@ -83,11 +83,11 @@ class ScrubBar(QWidget):
 
         # 재생된 부분
         head_x = self._sec_to_x(self._pos)
-        p.setBrush(QColor(T.GOLD))
+        p.setBrush(QColor(T.SCRUB_FILL))
         p.setPen(Qt.PenStyle.NoPen)
         p.drawRoundedRect(QRectF(0, track_y, head_x, track_h), 4, 4)
 
-        # 헤드
-        p.setBrush(QColor(T.HEAD))
-        p.setPen(QPen(QColor(T.GOLD_LIGHT), 1))
+        # 헤드 — 흰 원
+        p.setBrush(QColor(T.SCRUB_HEAD))
+        p.setPen(QPen(QColor(T.BORDER_DEFAULT), 1))
         p.drawEllipse(QRectF(head_x - 6, track_y + track_h / 2 - 6, 12, 12))

@@ -37,7 +37,7 @@ def _logo_widget(size=72):
         w.setFixedSize(QSize(size, size))
         return w
     lab = QLabel("◍")
-    lab.setStyleSheet(f"color:{T.GOLD};font-size:{size}px;")
+    lab.setStyleSheet(f"color:{T.TEXT_PRIMARY};font-size:{size}px;")
     return lab
 
 
@@ -60,8 +60,8 @@ class _Onboarding(QWidget):
         cl.setContentsMargins(30, 30, 30, 30)
         self.title = QLabel()
         self.title.setStyleSheet(
-            f"color:{T.TEXT_PRIMARY};font-family:'{T.FONT_SERIF_KR}';"
-            "font-size:22px;font-weight:bold;border:none;")
+            f"color:{T.TEXT_PRIMARY};font-family:'{T.FONT_SANS}';"
+            "font-size:22px;font-weight:700;border:none;")
         self.title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.body = QLabel()
         self.body.setStyleSheet(f"color:{T.TEXT_BODY};font-size:14px;border:none;")
@@ -125,8 +125,8 @@ class LinkScreen(QWidget):
 
         title = QLabel("ScaleRiff")
         title.setStyleSheet(
-            f"color:{T.GOLD_LIGHT};font-family:'{T.FONT_SERIF}';"
-            "font-size:38px;font-weight:bold;")
+            f"color:{T.TEXT_PRIMARY};font-family:'{T.FONT_SANS_EN}';"
+            "font-size:38px;font-weight:900;")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lay.addWidget(title)
         sub = QLabel("좋아하는 곡 위에서 배우는 즉흥 연주")
@@ -153,9 +153,9 @@ class LinkScreen(QWidget):
         lay.addSpacing(20)
         self.go_btn = QPushButton("분석 시작")
         self.go_btn.setStyleSheet(
-            f"QPushButton{{background:{T.GOLD};color:{T.BG_BASE};border:none;border-radius:10px;"
-            f"padding:14px;font-size:16px;font-weight:bold;}}"
-            f"QPushButton:hover{{background:{T.GOLD_LIGHT};}}")
+            f"QPushButton{{background:{T.WHITE};color:{T.BG_BASE};border:none;border-radius:10px;"
+            f"padding:14px;font-size:16px;font-weight:700;}}"
+            f"QPushButton:hover{{background:{T.TEXT_BODY};}}")
         self.go_btn.clicked.connect(self._submit)
         lay.addWidget(self.go_btn)
 

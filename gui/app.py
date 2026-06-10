@@ -20,8 +20,8 @@ class AppWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         T.load_fonts()                       # 번들 폰트 로드(있으면)
-        base = QFont(T.FONT_SANS, 11)        # v3: 본문 상향
-        base.setWeight(QFont.Weight.Medium)  # v3: light(300) 금지, 최소 Medium
+        base = QFont(T.FONT_SANS, 11)        # v4: Noto Sans KR 한글 기본
+        base.setWeight(QFont.Weight.Medium)  # v4: light(300) 금지, 최소 Medium(500)
         self.setFont(base)
         self.setWindowTitle("ScaleRiff")
         self.resize(1040, 740)

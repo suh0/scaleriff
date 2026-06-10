@@ -37,14 +37,14 @@ class ScoreScreen(QWidget):
         top.addWidget(self.link_btn)
         self.title = QLabel("코드 진행")
         self.title.setStyleSheet(
-            f"color:{T.TEXT_PRIMARY};font-family:'{T.FONT_SERIF_KR}';"
-            "font-size:18px;font-weight:bold;")
+            f"color:{T.TEXT_PRIMARY};font-family:'{T.FONT_SANS}';"
+            "font-size:18px;font-weight:700;")
         top.addSpacing(8)
         top.addWidget(self.title)
         top.addStretch(1)
         self.key_lbl = QLabel("")
         self.key_lbl.setStyleSheet(
-            f"color:{T.TEXT_ACCENT};font-family:'{T.FONT_MONO}';font-size:12px;")
+            f"color:{T.TEXT_MUTED};font-family:'{T.FONT_MONO}';font-size:12px;")
         top.addWidget(self.key_lbl)
         root.addLayout(top)
 
@@ -151,11 +151,11 @@ class ScoreScreen(QWidget):
         c = QLabel(chord_txt)
         c.setStyleSheet(
             f"color:{T.TEXT_PRIMARY if is_new_chord else T.TEXT_DIM};"
-            f"font-family:'{T.FONT_SERIF}';font-size:16px;font-weight:bold;border:none;")
+            f"font-family:'{T.FONT_SANS_EN}';font-size:16px;font-weight:700;border:none;")
         v.addWidget(c)
         s = QLabel(scale_txt)
         s.setStyleSheet(
-            f"color:{T.TEXT_ACCENT if multi else T.TEXT_MUTED};"
+            f"color:{T.BORDER_ACTIVE if multi else T.TEXT_MUTED};"
             f"font-family:'{T.FONT_MONO}';font-size:10px;border:none;")
         v.addWidget(s)
 

@@ -1,11 +1,11 @@
-"""피아노 키보드 위젯 — ScaleRiff (SCALERIFF_DESIGN_SPEC §5 Scheme A++).
+"""피아노 키보드 위젯 — ScaleRiff (SCALERIFF_DESIGN_SPEC §5 v4).
 
 - 범위: 2옥타브(C4–B5, MIDI 60~83).
 - 흰건반 가로:세로 비율(WHITE_RATIO) 고정 → 어떤 창에서도 비율 유지(레터박스).
-- 히트 램프 상태색: 기본→스케일음→코드톤→스케일밖(번트). 흰/검 별도 HEX(theme.KW/KB).
-- 친 건반: 채우기 대신 골드 글로우 링(§5.3).
+- 상태색: 코드톤=초록 테두리, 스케일밖=빨강 테두리, 기본=회색(theme.KW/KB v4).
+- 친 건반: 흰 글로우 링(§5.3) + '●' 라벨.
 - 기능 라벨(도수)은 코드톤·스케일음 위에 표시(§5).
-- 모드(§5.5): guide=전체 표시 / quiz=가림(기본색)→친 건반만 해제, 코드 바뀌면 리셋.
+- 모드(§5.4): guide=전체 표시 / quiz=가림(기본색)→친 건반만 해제, 코드 바뀌면 리셋.
 """
 from __future__ import annotations
 
@@ -120,11 +120,14 @@ class PianoWidget(QWidget):
             x = x0 + i * kw
             r = QRectF(x + 1, y0, kw - 2, kh - 1)
             st = self._state(midi)
-            fill, border, txt = T.KW[st]
+            fill, border, txt, bw = T.KW[st]
             p.fillRect(r, QColor(fill))
-            p.setPen(QPen(QColor(border), 1))
-            p.drawRoundedRect(r, 3, 3)
-            self._draw_degree(p, f, midi, txt, QRectF(x + 1, y0 + kh - lh - 6, kw - 2, lh))
+            if border:
+                p.setPen(QPen(QColor(border), bw))
+                p.drawRoundedRect(r, 3, 3)
+            label = "●" if st == "PRESSED" else None
+            self._draw_degree(p, f, midi, txt,
+                              QRectF(x + 1, y0 + kh - lh - 6, kw - 2, lh), label)
             if st == "PRESSED":
                 pressed_rects.append(r)
 
@@ -137,30 +140,41 @@ class PianoWidget(QWidget):
                 x = x0 + (i + 1) * kw - black_w / 2
                 r = QRectF(x, y0, black_w, black_h)
                 st = self._state(bmidi)
-                fill, border, txt = T.KB[st]
+                fill, border, txt, bw = T.KB[st]
                 p.fillRect(r, QColor(fill))
-                p.setPen(QPen(QColor(border), 1))
-                p.drawRoundedRect(r, 3, 3)
+                if border:
+                    p.setPen(QPen(QColor(border), bw))
+                    p.drawRoundedRect(r, 3, 3)
+                label = "●" if st == "PRESSED" else None
                 self._draw_degree(p, f, bmidi, txt,
-                                  QRectF(x, y0 + black_h - lh - 4, black_w, lh))
+                                  QRectF(x, y0 + black_h - lh - 4, black_w, lh), label)
                 if st == "PRESSED":
                     pressed_rects.append(r)
 
-        # 친 건반 글로우(§5.3): 골드 링 + 반투명 외곽
+        # 친 건반 글로우(§5.3): 배경 갭 → 흰 링 → 발광
         for r in pressed_rects:
             p.setBrush(Qt.BrushStyle.NoBrush)
-            p.setPen(QPen(QColor(255, 208, 96, 90), 6))
-            p.drawRoundedRect(r.adjusted(-2, -2, 2, 2), 4, 4)
+            # 배경색 갭 (2px)
+            p.setPen(QPen(QColor(T.BG_BASE), 4))
+            p.drawRoundedRect(r.adjusted(-1, -1, 1, 1), 4, 4)
+            # 흰 링
             p.setPen(QPen(QColor(T.GLOW), 2.5))
-            p.drawRoundedRect(r, 3, 3)
+            p.drawRoundedRect(r.adjusted(0.5, 0.5, -0.5, -0.5), 3, 3)
+            # 외곽 발광 (반투명)
+            p.setPen(QPen(QColor(255, 255, 255, 60), 6))
+            p.drawRoundedRect(r.adjusted(-2, -2, 2, 2), 5, 5)
 
-    def _draw_degree(self, p, f, midi, txt_col, rect):
+    def _draw_degree(self, p, f, midi, txt_col, rect, override: str | None = None):
+        """도수 라벨 또는 override 텍스트를 건반 아래에 그린다."""
         pc = midi % 12
-        if txt_col is None or pc not in self._degrees:
+        if txt_col is None:
+            return
+        text = override if override is not None else self._degrees.get(pc)
+        if text is None:
             return
         p.setFont(f)
-        p.setPen(txt_col)
-        p.drawText(rect, Qt.AlignmentFlag.AlignCenter, self._degrees[pc])
+        p.setPen(QColor(txt_col))
+        p.drawText(rect, Qt.AlignmentFlag.AlignCenter, text)
 
     # ── 마우스 입력 ──────────────────────────────────────────────
     def _midi_at(self, mx: float, my: float) -> int | None:
