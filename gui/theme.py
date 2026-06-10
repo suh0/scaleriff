@@ -1,9 +1,9 @@
-"""ScaleRiff 디자인 토큰 — SCALERIFF_DESIGN_SPEC.md v5/v6 단일 출처.
+"""ScaleRiff 디자인 토큰 — SCALERIFF_DESIGN_SPEC.md v7 단일 출처.
 
 컨셉: Black & White Minimal + 배지(Badge) 시스템.
 - 건반 자체 fill/border는 상태와 무관하게 항상 동일
 - 상태는 오직 건반 위 작은 배지(동그라미)로만 표시 — 당구공처럼
-- 친 건반: 배지 없음 + 도수 텍스트 #f5c842(노랑) + 상태별 border
+- 친 건반: 배지 그대로 유지 + 상태별 컬러 border만 추가 (노란색 없음)
 - light(300) 굵기 금지 — Inter 최소 500, Space Mono 700
 """
 from __future__ import annotations
@@ -40,10 +40,9 @@ KEY_WP_FILL       = "#eeeee8"  # 친 건반 흰 (미세 변화)
 KEY_BP_FILL       = "#2a2a2a"  # 친 건반 검은 (미세 변화)
 
 # ── §5.3 친 건반 상태 border ─────────────────────────────────────
-KEY_PRESSED_CHORD  = "#22c55e"  # 코드톤 친 건반 테두리
-KEY_PRESSED_SCALE  = "#888888"  # 스케일음 친 건반 테두리
-KEY_PRESSED_OUT    = "#ef4444"  # 스케일 밖 친 건반 테두리
-KEY_PRESSED_LABEL  = "#f5c842"  # 친 건반 도수 텍스트 — 노랑
+KEY_PRESSED_CHORD = "#22c55e"  # 코드톤 친 건반 테두리
+KEY_PRESSED_SCALE = "#888888"  # 스케일음 친 건반 테두리
+KEY_PRESSED_OUT   = "#ef4444"  # 스케일 밖 친 건반 테두리
 
 # ── 공통 UI 엘리먼트 ─────────────────────────────────────────────
 WHITE        = "#ffffff"

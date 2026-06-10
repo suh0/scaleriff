@@ -4,7 +4,7 @@
 - 건반 fill·border는 상태와 무관하게 항상 동일 (기본색 고정)
 - 상태는 오직 건반 하단 배지(원형 동그라미)만으로 표시 — 당구공처럼
   · 코드톤: 초록 배지 #22c55e  · 스케일음: 회색 배지 #4a4a4a  · 밖: 빨강 배지 #ef4444
-- 친 건반 (§5.3): 배지 없음 + 도수 텍스트 #f5c842 + 상태별 컬러 border
+- 친 건반 (§5.3): 배지 유지 + 상태별 컬러 border 추가 (초록/회색/빨강)
 - 범위: 2옥타브 C4–B5 (MIDI 60–83)
 - 흰 건반 가로:세로 비율 WHITE_RATIO 고정 → 어떤 창에서도 비율 유지(레터박스)
 - 모드 (§5.4): guide=전체 배지 / quiz=숨김→친 건반만 공개
@@ -115,9 +115,7 @@ class PianoWidget(QWidget):
         return "OUT"
 
     def _should_show_badge(self, midi: int) -> bool:
-        """배지를 그려야 하면 True."""
-        if midi in self._pressed:
-            return False          # 친 건반 = 배지 없음(대신 #f5c842 텍스트)
+        """배지를 그려야 하면 True (친 건반 포함 — 배지는 항상 유지)."""
         cst = self._content_state(midi)
         return cst != "DEFAULT"
 
@@ -169,10 +167,8 @@ class PianoWidget(QWidget):
             p.setPen(QPen(QColor(col), lw))
             p.drawRoundedRect(r, 3, 3)
 
-        # 배지 or 친 건반 텍스트
-        if is_pressed:
-            self._draw_pressed_label(p, midi, r, is_black=False)
-        elif cst != "DEFAULT":
+        # 배지 (친 건반 포함 항상 표시)
+        if cst != "DEFAULT":
             bsz = 26
             cx = r.x() + r.width() / 2
             cy = r.y() + r.height() - bsz / 2 - 5
@@ -194,10 +190,8 @@ class PianoWidget(QWidget):
             p.setPen(QPen(QColor(col), lw))
             p.drawRoundedRect(r, 3, 3)
 
-        # 배지 or 친 건반 텍스트
-        if is_pressed:
-            self._draw_pressed_label(p, midi, r, is_black=True)
-        elif cst != "DEFAULT":
+        # 배지 (친 건반 포함 항상 표시)
+        if cst != "DEFAULT":
             bsz = 20
             cx = r.x() + r.width() / 2
             cy = r.y() + r.height() - bsz / 2 - 3
@@ -233,22 +227,6 @@ class PianoWidget(QWidget):
         p.setFont(f)
         p.setPen(fg)
         p.drawText(badge, Qt.AlignmentFlag.AlignCenter, text)
-
-    def _draw_pressed_label(self, p: QPainter, midi: int, r: QRectF, is_black: bool):
-        """친 건반 도수 텍스트 — #f5c842(노랑), 배지 없이."""
-        pc = midi % 12
-        deg = self._degrees.get(pc)
-        if deg is None:
-            return
-        label_h = r.height() * (0.38 if is_black else 0.30)
-        label_y = r.y() + r.height() - label_h - (2 if is_black else 6)
-        label_rect = QRectF(r.x(), label_y, r.width(), label_h)
-        f = QFont(T.FONT_MONO)
-        f.setPixelSize(max(8, int(r.width() * (0.38 if is_black else 0.28))))
-        f.setBold(True)
-        p.setFont(f)
-        p.setPen(QColor(T.KEY_PRESSED_LABEL))
-        p.drawText(label_rect, Qt.AlignmentFlag.AlignCenter, deg)
 
     # ── 마우스 입력 ──────────────────────────────────────────────
     def _midi_at(self, mx: float, my: float) -> int | None:
