@@ -1,11 +1,13 @@
-"""피아노 키보드 위젯 — ScaleRiff (SCALERIFF_DESIGN_SPEC §5 v4).
+"""피아노 키보드 위젯 — ScaleRiff (SCALERIFF_DESIGN_SPEC §5 v5/v6 배지 시스템).
 
-- 범위: 2옥타브(C4–B5, MIDI 60~83).
-- 흰건반 가로:세로 비율(WHITE_RATIO) 고정 → 어떤 창에서도 비율 유지(레터박스).
-- 상태색: 코드톤=초록 테두리, 스케일밖=빨강 테두리, 기본=회색(theme.KW/KB v4).
-- 친 건반: 흰 글로우 링(§5.3) + '●' 라벨.
-- 기능 라벨(도수)은 코드톤·스케일음 위에 표시(§5).
-- 모드(§5.4): guide=전체 표시 / quiz=가림(기본색)→친 건반만 해제, 코드 바뀌면 리셋.
+핵심 원칙 (v5/v6):
+- 건반 fill·border는 상태와 무관하게 항상 동일 (기본색 고정)
+- 상태는 오직 건반 하단 배지(원형 동그라미)만으로 표시 — 당구공처럼
+  · 코드톤: 초록 배지 #22c55e  · 스케일음: 회색 배지 #4a4a4a  · 밖: 빨강 배지 #ef4444
+- 친 건반 (§5.3): 배지 없음 + 도수 텍스트 #f5c842 + 상태별 컬러 border
+- 범위: 2옥타브 C4–B5 (MIDI 60–83)
+- 흰 건반 가로:세로 비율 WHITE_RATIO 고정 → 어떤 창에서도 비율 유지(레터박스)
+- 모드 (§5.4): guide=전체 배지 / quiz=숨김→친 건반만 공개
 """
 from __future__ import annotations
 
@@ -15,13 +17,27 @@ from PyQt6.QtCore import Qt, QRectF, pyqtSignal
 
 from gui import theme as T
 
-MIDI_LOW = 60    # C4
-MIDI_HIGH = 83   # B5 (2옥타브)
+MIDI_LOW  = 60   # C4
+MIDI_HIGH = 83   # B5
 
-WHITE_RATIO = 4.2
+WHITE_RATIO = 4.2   # 흰 건반 가로:세로 고정 비율
 
-WHITE_PCS = [0, 2, 4, 5, 7, 9, 11]
-BLACK_PCS = [1, 3, 6, 8, 10]
+WHITE_PCS = {0, 2, 4, 5, 7, 9, 11}
+BLACK_PCS = {1, 3, 6, 8, 10}
+
+# 친 건반 상태별 border: (색, 두께)
+_PRESSED_BORDER: dict[str, tuple[str, float]] = {
+    "CHORD":   (T.KEY_PRESSED_CHORD, 2.5),
+    "SCALE":   (T.KEY_PRESSED_SCALE, 2.5),
+    "OUT":     (T.KEY_PRESSED_OUT,   2.5),
+    "DEFAULT": (T.BORDER_DEFAULT,    1.5),
+}
+_PRESSED_BORDER_BK: dict[str, tuple[str, float]] = {
+    "CHORD":   (T.KEY_PRESSED_CHORD, 2.0),
+    "SCALE":   (T.KEY_PRESSED_SCALE, 2.0),
+    "OUT":     (T.KEY_PRESSED_OUT,   2.0),
+    "DEFAULT": (T.BORDER_DEFAULT,    1.0),
+}
 
 
 def _is_white(midi: int) -> bool:
@@ -35,7 +51,7 @@ class PianoWidget(QWidget):
         super().__init__(parent)
         self.setMinimumHeight(140)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self._mouse_midi = None
+        self._mouse_midi: int | None = None
         self._note_set: set[int] = set()
         self._chord_tones: set[int] = set()
         self._degrees: dict[int, str] = {}
@@ -50,7 +66,7 @@ class PianoWidget(QWidget):
         self.update()
 
     def set_degrees(self, degrees: dict):
-        self._degrees = dict(degrees or {})
+        self._degrees = {pc: str(v) for pc, v in (degrees or {}).items()}
         self.update()
 
     def set_pressed(self, pressed):
@@ -85,9 +101,8 @@ class PianoWidget(QWidget):
         return white_midis, (w - total_w) / 2.0, (h - kh) / 2.0, kw, kh
 
     # ── 상태 판정 ────────────────────────────────────────────────
-    def _state(self, midi: int) -> str:
-        if midi in self._pressed:
-            return "PRESSED"
+    def _content_state(self, midi: int) -> str:
+        """press 무관 스케일/코드 상태 — 배지·border 색 결정용."""
         if not self._note_set:
             return "DEFAULT"
         if self._mode == "quiz" and midi not in self._revealed:
@@ -99,82 +114,141 @@ class PianoWidget(QWidget):
             return "SCALE"
         return "OUT"
 
+    def _should_show_badge(self, midi: int) -> bool:
+        """배지를 그려야 하면 True."""
+        if midi in self._pressed:
+            return False          # 친 건반 = 배지 없음(대신 #f5c842 텍스트)
+        cst = self._content_state(midi)
+        return cst != "DEFAULT"
+
     # ── 렌더 ─────────────────────────────────────────────────────
     def paintEvent(self, event):
         geo = self._geometry()
         if geo is None:
             return
         white_midis, x0, y0, kw, kh = geo
-        black_w = kw * 0.6
-        black_h = kh * 0.62
-        lh = max(13, kh * 0.13)
-        f = QFont(T.FONT_MONO); f.setPointSize(max(8, int(kw * 0.17))); f.setBold(True)
+        bw = kw * 0.6     # 검은 건반 너비
+        bh = kh * 0.62    # 검은 건반 높이
 
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-        pressed_rects = []   # 글로우는 모든 키 그린 뒤 위에 덧그림
-
-        # 흰건반
+        # 흰 건반
         for i, midi in enumerate(white_midis):
-            x = x0 + i * kw
-            r = QRectF(x + 1, y0, kw - 2, kh - 1)
-            st = self._state(midi)
-            fill, border, txt, bw = T.KW[st]
-            p.fillRect(r, QColor(fill))
-            if border:
-                p.setPen(QPen(QColor(border), bw))
-                p.drawRoundedRect(r, 3, 3)
-            label = "●" if st == "PRESSED" else None
-            self._draw_degree(p, f, midi, txt,
-                              QRectF(x + 1, y0 + kh - lh - 6, kw - 2, lh), label)
-            if st == "PRESSED":
-                pressed_rects.append(r)
+            rx = x0 + i * kw
+            r = QRectF(rx + 1, y0, kw - 2, kh - 1)
+            self._draw_white(p, midi, r)
 
-        # 검은건반
+        # 검은 건반 (흰 건반 위에 덮어 그림)
         for i, wmidi in enumerate(white_midis):
             if (wmidi % 12) + 1 in BLACK_PCS:
                 bmidi = wmidi + 1
                 if bmidi > MIDI_HIGH:
                     continue
-                x = x0 + (i + 1) * kw - black_w / 2
-                r = QRectF(x, y0, black_w, black_h)
-                st = self._state(bmidi)
-                fill, border, txt, bw = T.KB[st]
-                p.fillRect(r, QColor(fill))
-                if border:
-                    p.setPen(QPen(QColor(border), bw))
-                    p.drawRoundedRect(r, 3, 3)
-                label = "●" if st == "PRESSED" else None
-                self._draw_degree(p, f, bmidi, txt,
-                                  QRectF(x, y0 + black_h - lh - 4, black_w, lh), label)
-                if st == "PRESSED":
-                    pressed_rects.append(r)
+                rx = x0 + (i + 1) * kw - bw / 2
+                r = QRectF(rx, y0, bw, bh)
+                self._draw_black(p, bmidi, r)
 
-        # 친 건반 글로우(§5.3): 배경 갭 → 흰 링 → 발광
-        for r in pressed_rects:
+    def _draw_white(self, p: QPainter, midi: int, r: QRectF):
+        is_pressed = midi in self._pressed
+        cst = self._content_state(midi)
+
+        # fill (항상 고정, 친 건반만 미세 변화)
+        p.setBrush(QColor(T.KEY_WP_FILL if is_pressed else T.KEY_W_FILL))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.drawRoundedRect(r, 3, 3)
+
+        # 기본 border
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.setPen(QPen(QColor(T.KEY_W_BORDER), 1.0))
+        p.drawRoundedRect(r, 3, 3)
+
+        # 친 건반 상태 border
+        if is_pressed:
+            col, lw = _PRESSED_BORDER.get(cst, _PRESSED_BORDER["DEFAULT"])
+            p.setPen(QPen(QColor(col), lw))
+            p.drawRoundedRect(r, 3, 3)
+
+        # 배지 or 친 건반 텍스트
+        if is_pressed:
+            self._draw_pressed_label(p, midi, r, is_black=False)
+        elif cst != "DEFAULT":
+            bsz = 26
+            cx = r.x() + r.width() / 2
+            cy = r.y() + r.height() - bsz / 2 - 5
+            self._draw_badge(p, midi, cst, cx, cy, bsz)
+
+    def _draw_black(self, p: QPainter, midi: int, r: QRectF):
+        is_pressed = midi in self._pressed
+        cst = self._content_state(midi)
+
+        # fill
+        p.setBrush(QColor(T.KEY_BP_FILL if is_pressed else T.KEY_B_FILL))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.drawRoundedRect(r, 3, 3)
+
+        # 친 건반 상태 border
+        if is_pressed:
+            col, lw = _PRESSED_BORDER_BK.get(cst, _PRESSED_BORDER_BK["DEFAULT"])
             p.setBrush(Qt.BrushStyle.NoBrush)
-            # 배경색 갭 (2px)
-            p.setPen(QPen(QColor(T.BG_BASE), 4))
-            p.drawRoundedRect(r.adjusted(-1, -1, 1, 1), 4, 4)
-            # 흰 링
-            p.setPen(QPen(QColor(T.GLOW), 2.5))
-            p.drawRoundedRect(r.adjusted(0.5, 0.5, -0.5, -0.5), 3, 3)
-            # 외곽 발광 (반투명)
-            p.setPen(QPen(QColor(255, 255, 255, 60), 6))
-            p.drawRoundedRect(r.adjusted(-2, -2, 2, 2), 5, 5)
+            p.setPen(QPen(QColor(col), lw))
+            p.drawRoundedRect(r, 3, 3)
 
-    def _draw_degree(self, p, f, midi, txt_col, rect, override: str | None = None):
-        """도수 라벨 또는 override 텍스트를 건반 아래에 그린다."""
+        # 배지 or 친 건반 텍스트
+        if is_pressed:
+            self._draw_pressed_label(p, midi, r, is_black=True)
+        elif cst != "DEFAULT":
+            bsz = 20
+            cx = r.x() + r.width() / 2
+            cy = r.y() + r.height() - bsz / 2 - 3
+            self._draw_badge(p, midi, cst, cx, cy, bsz)
+
+    def _draw_badge(self, p: QPainter, midi: int, state: str,
+                    cx: float, cy: float, sz: int):
+        """원형 배지 (색 동그라미 + 도수 텍스트)."""
         pc = midi % 12
-        if txt_col is None:
-            return
-        text = override if override is not None else self._degrees.get(pc)
+        deg = self._degrees.get(pc)
+        text = "×" if state == "OUT" else (deg if deg is not None else None)
         if text is None:
             return
+
+        if state == "CHORD":
+            bg = QColor(T.BADGE_CHORD)
+            fg = QColor(T.BADGE_TEXT)
+        elif state == "SCALE":
+            bg = QColor(T.BADGE_SCALE)
+            fg = QColor(T.BADGE_SCALE_TEXT)
+        else:   # OUT
+            bg = QColor(T.BADGE_OUT)
+            fg = QColor(T.BADGE_TEXT)
+
+        badge = QRectF(cx - sz / 2, cy - sz / 2, sz, sz)
+        p.setBrush(bg)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.drawEllipse(badge)
+
+        f = QFont(T.FONT_MONO)
+        f.setPixelSize(max(7, int(sz * 0.46)))
+        f.setBold(True)
         p.setFont(f)
-        p.setPen(QColor(txt_col))
-        p.drawText(rect, Qt.AlignmentFlag.AlignCenter, text)
+        p.setPen(fg)
+        p.drawText(badge, Qt.AlignmentFlag.AlignCenter, text)
+
+    def _draw_pressed_label(self, p: QPainter, midi: int, r: QRectF, is_black: bool):
+        """친 건반 도수 텍스트 — #f5c842(노랑), 배지 없이."""
+        pc = midi % 12
+        deg = self._degrees.get(pc)
+        if deg is None:
+            return
+        label_h = r.height() * (0.38 if is_black else 0.30)
+        label_y = r.y() + r.height() - label_h - (2 if is_black else 6)
+        label_rect = QRectF(r.x(), label_y, r.width(), label_h)
+        f = QFont(T.FONT_MONO)
+        f.setPixelSize(max(8, int(r.width() * (0.38 if is_black else 0.28))))
+        f.setBold(True)
+        p.setFont(f)
+        p.setPen(QColor(T.KEY_PRESSED_LABEL))
+        p.drawText(label_rect, Qt.AlignmentFlag.AlignCenter, deg)
 
     # ── 마우스 입력 ──────────────────────────────────────────────
     def _midi_at(self, mx: float, my: float) -> int | None:
@@ -182,18 +256,18 @@ class PianoWidget(QWidget):
         if geo is None:
             return None
         white_midis, x0, y0, kw, kh = geo
-        black_w = kw * 0.6
-        black_h = kh * 0.62
+        bw = kw * 0.6
+        bh = kh * 0.62
         if my < y0 or my > y0 + kh:
             return None
-        if my <= y0 + black_h:
+        if my <= y0 + bh:
             for i, wmidi in enumerate(white_midis):
                 if (wmidi % 12) + 1 in BLACK_PCS:
                     bmidi = wmidi + 1
                     if bmidi > MIDI_HIGH:
                         continue
-                    bx = x0 + (i + 1) * kw - black_w / 2
-                    if bx <= mx <= bx + black_w:
+                    bx = x0 + (i + 1) * kw - bw / 2
+                    if bx <= mx <= bx + bw:
                         return bmidi
         idx = int((mx - x0) // kw)
         if 0 <= idx < len(white_midis):
