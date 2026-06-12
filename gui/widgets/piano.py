@@ -1,10 +1,13 @@
-"""피아노 키보드 위젯 — ScaleRiff (SCALERIFF_DESIGN_SPEC §5 v5/v6 배지 시스템).
+"""피아노 키보드 위젯 — ScaleRiff (SCALERIFF_DESIGN_SPEC §5 v8).
 
-핵심 원칙 (v5/v6):
+핵심 원칙 (v8):
 - 건반 fill·border는 상태와 무관하게 항상 동일 (기본색 고정)
 - 상태는 오직 건반 하단 배지(원형 동그라미)만으로 표시 — 당구공처럼
-  · 코드톤: 초록 배지 #22c55e  · 스케일음: 회색 배지 #4a4a4a  · 밖: 빨강 배지 #ef4444
-- 친 건반 (§5.3): 배지 유지 + 상태별 컬러 border 추가 (초록/회색/빨강)
+  · 코드톤: 초록 배지 #22c55e  · 스케일음: 회색 배지 #4a4a4a
+  · 스케일 밖: 배지 없음 (빈 건반) — 쳤을 때만 건반 전체가 빨간색으로 표시
+- 친 건반 (§5.3):
+  · 코드톤/스케일음: 배지 유지 + 상태별 컬러 border
+  · 스케일 밖: 건반 전체 빨간색 fill (border 없음)
 - 범위: 2옥타브 C4–B5 (MIDI 60–83)
 - 흰 건반 가로:세로 비율 WHITE_RATIO 고정 → 어떤 창에서도 비율 유지(레터박스)
 - 모드 (§5.4): guide=전체 배지 / quiz=숨김→친 건반만 공개
@@ -24,20 +27,6 @@ WHITE_RATIO = 4.2   # 흰 건반 가로:세로 고정 비율
 
 WHITE_PCS = {0, 2, 4, 5, 7, 9, 11}
 BLACK_PCS = {1, 3, 6, 8, 10}
-
-# 친 건반 상태별 border: (색, 두께)
-_PRESSED_BORDER: dict[str, tuple[str, float]] = {
-    "CHORD":   (T.KEY_PRESSED_CHORD, 2.5),
-    "SCALE":   (T.KEY_PRESSED_SCALE, 2.5),
-    "OUT":     (T.KEY_PRESSED_OUT,   2.5),
-    "DEFAULT": (T.BORDER_DEFAULT,    1.5),
-}
-_PRESSED_BORDER_BK: dict[str, tuple[str, float]] = {
-    "CHORD":   (T.KEY_PRESSED_CHORD, 2.0),
-    "SCALE":   (T.KEY_PRESSED_SCALE, 2.0),
-    "OUT":     (T.KEY_PRESSED_OUT,   2.0),
-    "DEFAULT": (T.BORDER_DEFAULT,    1.0),
-}
 
 
 def _is_white(midi: int) -> bool:
@@ -102,7 +91,11 @@ class PianoWidget(QWidget):
 
     # ── 상태 판정 ────────────────────────────────────────────────
     def _content_state(self, midi: int) -> str:
-        """press 무관 스케일/코드 상태 — 배지·border 색 결정용."""
+        """press 무관 스케일/코드 상태 — 배지·border 색 결정용.
+
+        OUT은 배지를 표시하지 않으므로 DEFAULT로 반환.
+        스케일 밖 눌림 여부는 _is_out()로 별도 판정.
+        """
         if not self._note_set:
             return "DEFAULT"
         if self._mode == "quiz" and midi not in self._revealed:
@@ -112,12 +105,16 @@ class PianoWidget(QWidget):
             return "CHORD"
         if pc in self._note_set:
             return "SCALE"
-        return "OUT"
+        return "DEFAULT"   # OUT → 배지 없음, 빈 건반으로 표시
 
-    def _should_show_badge(self, midi: int) -> bool:
-        """배지를 그려야 하면 True (친 건반 포함 — 배지는 항상 유지)."""
-        cst = self._content_state(midi)
-        return cst != "DEFAULT"
+    def _is_out(self, midi: int) -> bool:
+        """스케일 밖 음인지 여부 — 눌렸을 때 건반 전체 빨간색 표시용."""
+        if not self._note_set:
+            return False
+        if self._mode == "quiz" and midi not in self._revealed:
+            return False
+        pc = midi % 12
+        return pc not in self._note_set and pc not in self._chord_tones
 
     # ── 렌더 ─────────────────────────────────────────────────────
     def paintEvent(self, event):
@@ -150,25 +147,32 @@ class PianoWidget(QWidget):
     def _draw_white(self, p: QPainter, midi: int, r: QRectF):
         is_pressed = midi in self._pressed
         cst = self._content_state(midi)
+        is_out_pressed = is_pressed and self._is_out(midi)
 
-        # fill (항상 고정, 친 건반만 미세 변화)
-        p.setBrush(QColor(T.KEY_WP_FILL if is_pressed else T.KEY_W_FILL))
+        # fill — 눌렸을 때 상태별 전체 색 채우기
+        if is_pressed:
+            if is_out_pressed:
+                fill = T.KEY_PRESSED_OUT      # 빨간색
+            elif cst == "CHORD":
+                fill = T.KEY_PRESSED_CHORD    # 초록색
+            elif cst == "SCALE":
+                fill = T.BORDER_DEFAULT       # 회색 (#555555)
+            else:
+                fill = T.KEY_WP_FILL          # 기본 미세 변화
+        else:
+            fill = T.KEY_W_FILL
+        p.setBrush(QColor(fill))
         p.setPen(Qt.PenStyle.NoPen)
         p.drawRoundedRect(r, 3, 3)
 
-        # 기본 border
-        p.setBrush(Qt.BrushStyle.NoBrush)
-        p.setPen(QPen(QColor(T.KEY_W_BORDER), 1.0))
-        p.drawRoundedRect(r, 3, 3)
-
-        # 친 건반 상태 border
-        if is_pressed:
-            col, lw = _PRESSED_BORDER.get(cst, _PRESSED_BORDER["DEFAULT"])
-            p.setPen(QPen(QColor(col), lw))
+        # 기본 border — 꽉 찬 색 상태에서는 생략
+        if not is_pressed or cst == "DEFAULT":
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.setPen(QPen(QColor(T.KEY_W_BORDER), 1.0))
             p.drawRoundedRect(r, 3, 3)
 
-        # 배지 (친 건반 포함 항상 표시)
-        if cst != "DEFAULT":
+        # 배지 — 눌렸을 때 꽉 찬 색이면 배지 생략, 안 눌렸을 때만 표시
+        if cst != "DEFAULT" and not is_pressed:
             bsz = 26
             cx = r.x() + r.width() / 2
             cy = r.y() + r.height() - bsz / 2 - 5
@@ -177,21 +181,26 @@ class PianoWidget(QWidget):
     def _draw_black(self, p: QPainter, midi: int, r: QRectF):
         is_pressed = midi in self._pressed
         cst = self._content_state(midi)
+        is_out_pressed = is_pressed and self._is_out(midi)
 
-        # fill
-        p.setBrush(QColor(T.KEY_BP_FILL if is_pressed else T.KEY_B_FILL))
+        # fill — 검은 건반 눌렸을 때 상태별 색
+        if is_pressed:
+            if is_out_pressed:
+                fill = T.KEY_PRESSED_OUT      # 빨간색
+            elif cst == "CHORD":
+                fill = T.KEY_PRESSED_CHORD    # 초록색
+            elif cst == "SCALE":
+                fill = T.BORDER_DEFAULT       # 밝은 회색 (#555555)
+            else:
+                fill = T.KEY_BP_FILL          # 기본 미세 변화
+        else:
+            fill = T.KEY_B_FILL
+        p.setBrush(QColor(fill))
         p.setPen(Qt.PenStyle.NoPen)
         p.drawRoundedRect(r, 3, 3)
 
-        # 친 건반 상태 border
-        if is_pressed:
-            col, lw = _PRESSED_BORDER_BK.get(cst, _PRESSED_BORDER_BK["DEFAULT"])
-            p.setBrush(Qt.BrushStyle.NoBrush)
-            p.setPen(QPen(QColor(col), lw))
-            p.drawRoundedRect(r, 3, 3)
-
-        # 배지 (친 건반 포함 항상 표시)
-        if cst != "DEFAULT":
+        # 배지 — 안 눌렸을 때만 표시
+        if cst != "DEFAULT" and not is_pressed:
             bsz = 20
             cx = r.x() + r.width() / 2
             cy = r.y() + r.height() - bsz / 2 - 3
@@ -199,22 +208,18 @@ class PianoWidget(QWidget):
 
     def _draw_badge(self, p: QPainter, midi: int, state: str,
                     cx: float, cy: float, sz: int):
-        """원형 배지 (색 동그라미 + 도수 텍스트)."""
+        """원형 배지 (색 동그라미 + 도수 텍스트). CHORD/SCALE만 호출됨."""
         pc = midi % 12
         deg = self._degrees.get(pc)
-        text = "×" if state == "OUT" else (deg if deg is not None else None)
-        if text is None:
+        if deg is None:
             return
 
         if state == "CHORD":
             bg = QColor(T.BADGE_CHORD)
             fg = QColor(T.BADGE_TEXT)
-        elif state == "SCALE":
+        else:   # SCALE
             bg = QColor(T.BADGE_SCALE)
             fg = QColor(T.BADGE_SCALE_TEXT)
-        else:   # OUT
-            bg = QColor(T.BADGE_OUT)
-            fg = QColor(T.BADGE_TEXT)
 
         badge = QRectF(cx - sz / 2, cy - sz / 2, sz, sz)
         p.setBrush(bg)
@@ -226,7 +231,7 @@ class PianoWidget(QWidget):
         f.setBold(True)
         p.setFont(f)
         p.setPen(fg)
-        p.drawText(badge, Qt.AlignmentFlag.AlignCenter, text)
+        p.drawText(badge, Qt.AlignmentFlag.AlignCenter, deg)
 
     # ── 마우스 입력 ──────────────────────────────────────────────
     def _midi_at(self, mx: float, my: float) -> int | None:
