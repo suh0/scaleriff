@@ -65,7 +65,7 @@ class AppWindow(QMainWindow):
         # 스케일 종류당 1개 리프 굽기(§8) — 악보 화면에서 미리 보여주기 위해 여기서 1회.
         if not getattr(timeline, "scale_riffs", None):
             bake_examples(timeline, self.main_screen._ml_model)
-        self.score.set_timeline(timeline)
+        self.score.set_timeline(timeline, self.main_screen._ml_model)
         self.stack.setCurrentWidget(self.score)
 
     def _enter_main(self):

@@ -43,9 +43,6 @@ SCALE_INTERVALS = {
     "aeolian":    [0, 2, 3, 5, 7, 8, 10],   # = natural minor
     "minor":      [0, 2, 3, 5, 7, 8, 10],
     "locrian":    [0, 1, 3, 5, 6, 8, 10],
-    # 게이트용 축약 스케일
-    "major_pentatonic": [0, 2, 4, 7, 9],
-    "minor_pentatonic": [0, 3, 5, 7, 10],
 }
 
 # 코드 quality → 구성 음정(코드톤) & 어울리는 코드-스케일(모드 이름)
@@ -68,16 +65,6 @@ CHORD_SPECS = {
     "sus2":  ([0, 2, 7],        "mixolydian"),
 }
 
-# 대표 펜타토닉(난이도 '쉬움' 게이트): quality → 펜타토닉 종류
-PENTATONIC_FOR_QUALITY = {
-    "maj": "major_pentatonic", "maj7": "major_pentatonic", "maj6": "major_pentatonic",
-    "dom7": "major_pentatonic", "7": "major_pentatonic",
-    "sus4": "major_pentatonic", "sus2": "major_pentatonic", "aug": "major_pentatonic",
-    "min": "minor_pentatonic", "m7": "minor_pentatonic", "m6": "minor_pentatonic",
-    "m7b5": "minor_pentatonic", "dim": "minor_pentatonic", "dim7": "minor_pentatonic",
-}
-
-
 @dataclass
 class Chord:
     name: str       # 표시용, 예 "Dm7"
@@ -92,10 +79,6 @@ class Chord:
     def chord_scale(self) -> list[int]:
         """코드-스케일(로컬 디투어용) pc 집합."""
         _, mode = CHORD_SPECS.get(self.quality, CHORD_SPECS["maj"])
-        return scale_pcs(self.root, mode)
-
-    def pentatonic(self) -> list[int]:
-        mode = PENTATONIC_FOR_QUALITY.get(self.quality, "major_pentatonic")
         return scale_pcs(self.root, mode)
 
     def to_dict(self) -> dict:
@@ -191,37 +174,6 @@ def roman_degrees(chords: list[Chord], key_root: int) -> list[str]:
     return out
 
 
-def detect_pattern(chords: list[Chord], key_root: int) -> str | None:
-    """대표 진행 패턴 라벨 (없으면 None)."""
-    degs = [d.lower().rstrip("°") for d in roman_degrees(chords, key_root)]
-    seq = "-".join(degs)
-    patterns = {
-        "ii-v-i": "ii–V–I",
-        "i-vi-ii-v": "I–vi–ii–V",
-        "i-iv-v": "I–IV–V",
-        "i-v-vi-iv": "I–V–vi–IV (팝 4코드)",
-        "vi-iv-i-v": "vi–IV–I–V",
-        "ii-v": "ii–V",
-    }
-    for pat, label in patterns.items():
-        if pat in seq:
-            return label
-    return None
-
-
-# ── 기능 라벨 (근음/3도/9도 등, §9.2 별도 라벨) ─────────────────────
-_DEGREE_LABEL = {
-    0: "근음", 1: "♭9", 2: "9도", 3: "♭3/＃9", 4: "3도", 5: "4도/11",
-    6: "＃11/♭5", 7: "5도", 8: "♭6/＃5", 9: "6도/13", 10: "♭7", 11: "7도",
-}
-
-
-def function_label(pc: int, chord: Chord) -> str:
-    """코드 근음 기준 pc의 기능 이름."""
-    rel = (pc - chord.root) % 12
-    return _DEGREE_LABEL.get(rel, "")
-
-
 # ── 코드별 스케일 이름 산출 (정의서 §3, §5: 다이아토닉=키의 해당 모드) ───
 # 메이저 키 안에서 root 오프셋(반음) → 모드 이름
 _MAJOR_OFFSET_TO_MODE = {
@@ -300,4 +252,4 @@ if __name__ == "__main__":
         print(f"{nm:8} -> root={pc_name(c.root):3} q={c.quality:6} "
               f"tones={[pc_name(p) for p in c.chord_tones()]} bass={c.bass}")
     chs = [parse_chord(x) for x in ["Dm7", "G7", "Cmaj7"]]
-    print("pattern:", detect_pattern(chs, key_root=0))
+    print("degrees:", roman_degrees(chs, key_root=0))

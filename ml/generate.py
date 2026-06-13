@@ -307,6 +307,10 @@ def generate_scale_riff(model, scale_kind: str, n_bars=1) -> list[dict]:
 
     # 2) 톤 역할(코드톤/스케일음 섞기, 스케일음 3연속 금지, 각 ≥2)
     roles = _assign_tone_roles(len(onset_steps), rng)
+    # 마디 첫 박(다운비트 박) 안의 음은 코드톤만(§2). S→C는 S연속만 줄여 안전,
+    # 또한 타일 반복 시 이음새에서 스케일음 3연속도 막는다(§3).
+    roles = ["C" if (st % STEPS_PER_BAR) < STEPS_PER_BEAT else roles[k]
+             for k, st in enumerate(onset_steps)]
 
     # 3) 도수 채우기 + 다음 온셋까지 HOLD(이어지는 라인)
     grid = [REST] * n_steps
@@ -328,49 +332,68 @@ def generate_scale_riff(model, scale_kind: str, n_bars=1) -> list[dict]:
     return decode(grid, [0] * n_steps, prev_midi=60, lo=60, hi=71)
 
 
+def _make_riff(model, kind: str, max_bars: int) -> dict:
+    """스케일 종류 1개의 리프 dict(상대값 + note_set/chord_tones/quality)."""
+    from ml.representation import SCALE_DEGREES, QFAM_CHORD_TONES, quality_family
+    quality = _KIND_QUALITY.get(kind, "maj7")
+    qfam = quality_family(quality)
+    return {
+        "notes": generate_scale_riff(model, kind, n_bars=max_bars),
+        "note_set": sorted(SCALE_DEGREES.get(kind, SCALE_DEGREES["메이저"])),
+        "chord_tones": sorted(QFAM_CHORD_TONES.get(qfam, QFAM_CHORD_TONES["maj"])),
+        "quality": quality,
+        "n_bars": max_bars,
+    }
+
+
+def _tile_segment(timeline, seg) -> None:
+    """구간의 종류 리프를 코드 근음으로 이조 + 구간 길이만큼 반복 타일링 → seg.example.
+
+    같은 코드가 2마디면 1마디 리프가 두 번 반복된다(§3).
+    """
+    bpb = timeline.time_sig_beats()
+    kind = seg.scale.kind if seg.scale else "메이저"
+    data = timeline.scale_riffs[kind]
+    rel = data["notes"]
+    riff_beats = max(1, data["n_bars"]) * bpb
+    shift = seg.chord.root if seg.chord.root <= 6 else seg.chord.root - 12
+    seg_beats = max(1, seg.end_bar - seg.start_bar) * bpb
+    ex, t = [], 0.0
+    while t < seg_beats - 1e-6:
+        for n in rel:
+            if n["beat_pos"] < riff_beats and t + n["beat_pos"] < seg_beats:
+                ex.append({"midi": n["midi"] + shift,
+                           "beat_pos": round(t + n["beat_pos"], 4),
+                           "dur_beats": n["dur_beats"]})
+        t += riff_beats
+    seg.example = ex
+
+
 def bake_examples(timeline, model, max_bars=1):
-    """빌드 1회: **스케일 종류당 1개** 리프(1마디) 생성(상대값) → 각 구간에 코드
-    근음으로 이조 배정(§8). 코드 등장마다가 아니라 종류마다 1개. 코드톤·스케일음을
-    각각 2개 이상 포함(§구성 제약). 결과는 timeline.scale_riffs와 seg.example에 저장.
+    """빌드 1회: **스케일 종류당 1개** 리프(상대값) 생성 → 각 구간에 코드 근음으로
+    이조·타일링 배정(§8). 결과는 timeline.scale_riffs와 seg.example에 저장.
     재생/스크럽 중에는 호출하지 않는다(아키텍처 불변식 §4).
     """
-    from ml.representation import SCALE_DEGREES, QFAM_CHORD_TONES, quality_family
-
-    bpb = timeline.time_sig_beats()
     riffs: dict = {}
     for seg in timeline.segments:
         kind = seg.scale.kind if seg.scale else "메이저"
-        if kind in riffs:
-            continue
-        quality = _KIND_QUALITY.get(kind, "maj7")
-        qfam = quality_family(quality)
-        riffs[kind] = {
-            "notes": generate_scale_riff(model, kind, n_bars=max_bars),
-            "note_set": sorted(SCALE_DEGREES.get(kind, SCALE_DEGREES["메이저"])),
-            "chord_tones": sorted(QFAM_CHORD_TONES.get(qfam, QFAM_CHORD_TONES["maj"])),
-            "quality": quality,
-            "n_bars": max_bars,
-        }
+        if kind not in riffs:
+            riffs[kind] = _make_riff(model, kind, max_bars)
     timeline.scale_riffs = riffs
-
-    # 각 구간: 종류 리프를 코드 근음으로 이조(±6 안쪽) + 구간 길이만큼 **반복 타일링**.
-    #   같은 코드가 2마디면 1마디 리프가 두 번 반복된다(§3).
     for seg in timeline.segments:
-        kind = seg.scale.kind if seg.scale else "메이저"
-        rel = riffs[kind]["notes"]
-        riff_beats = max(1, riffs[kind]["n_bars"]) * bpb
-        shift = seg.chord.root if seg.chord.root <= 6 else seg.chord.root - 12
-        seg_beats = max(1, seg.end_bar - seg.start_bar) * bpb
-        ex = []
-        t = 0.0
-        while t < seg_beats - 1e-6:
-            for n in rel:
-                if n["beat_pos"] < riff_beats and t + n["beat_pos"] < seg_beats:
-                    ex.append({"midi": n["midi"] + shift,
-                               "beat_pos": round(t + n["beat_pos"], 4),
-                               "dur_beats": n["dur_beats"]})
-            t += riff_beats
-        seg.example = ex
+        _tile_segment(timeline, seg)
+    return timeline
+
+
+def bake_segment(timeline, seg, model, max_bars=1):
+    """단일 구간 재굽기 — 악보 화면 수동 코드 수정 후 그 구간 리프만 갱신.
+
+    새 스케일 종류면 timeline.scale_riffs에 추가하고, seg.example을 다시 타일링.
+    """
+    kind = seg.scale.kind if seg.scale else "메이저"
+    if kind not in timeline.scale_riffs:
+        timeline.scale_riffs[kind] = _make_riff(model, kind, max_bars)
+    _tile_segment(timeline, seg)
     return timeline
 
 

@@ -101,6 +101,10 @@ def main():
         # §2 음 길이 다양(서로 다른 dur_beats ≥2종)
         durs = {round(n["dur_beats"], 3) for n in notes}
         assert len(durs) >= 2, f"{kind} 음 길이 단조로움: {durs}"
+        # §2(신규) 마디 첫 박(beat_pos<1)은 코드톤만
+        first_beat = [n for n in notes if n["beat_pos"] < 1.0]
+        assert first_beat and all(n["midi"] % 12 in cts for n in first_beat), \
+            f"{kind} 첫 박에 비코드톤: {[(n['beat_pos'], n['midi']%12) for n in first_beat]}"
 
     # §3 같은 코드 2마디 → 리프 2회 반복(타일링)
     from ml.generate import bake_examples as _bake
@@ -115,6 +119,16 @@ def main():
     one = tl2.scale_riffs["도리안"]["notes"]
     assert len(seg2.example) == 2 * len(one), "2마디인데 리프 2회 반복 아님"
     assert any(n["beat_pos"] >= 4 for n in seg2.example), "둘째 마디에 리프 없음"
+    # §3 타일 이음새 포함 스케일음 3연속 금지(전체 example 기준)
+    #    example은 코드 근음으로 이조됨 → 코드톤도 같은 양만큼 이동해 비교
+    root2 = seg2.chord.root; shift2 = root2 if root2 <= 6 else root2 - 12
+    cts2 = {(c + shift2) % 12 for c in tl2.scale_riffs["도리안"]["chord_tones"]}
+    seq2 = ["C" if n["midi"] % 12 in cts2 else "S"
+            for n in sorted(seg2.example, key=lambda n: n["beat_pos"])]
+    r = 0
+    for c in seq2:
+        r = r + 1 if c == "S" else 0
+        assert r < 3, f"타일 후 스케일음 3연속: {seq2}"
     # §3 가이드는 2마디 반복 구간이어도 늘 1마디만 표시
     from gui.widgets.riff_view import RiffView as _RV
     _rv = _RV(); _rv.set_segment(seg2, tl2.bpm, tl2.time_sig_beats())
@@ -128,10 +142,19 @@ def main():
     assert all(t < mid for t in ms._riff_times[:ms._riff_idx]), "시킹 커서 오류(앞)"
     assert all(t >= mid for t in ms._riff_times[ms._riff_idx:]), "시킹 커서 오류(뒤)"
     ms._toggle_riff()                       # OFF
+
+    # §1 수동 코드 수정: 악보 화면에서 한 마디 코드를 바꾸면 스케일·리프 재계산
+    win.score.set_timeline(tl, ms._ml_model)
+    s0 = tl.segments[0]                      # Dm7 → Fmaj7로 수정
+    win.score._apply_chord(s0, "Fmaj7")
+    assert s0.chord.name == "Fmaj7" and s0.scale_name == "F 리디안", \
+        f"수동 수정 실패: {s0.chord.name}/{s0.scale_name}"
+    assert s0.example, "수정 후 리프 미생성"
+    assert "리디안" in tl.scale_riffs, "새 스케일 종류 리프 미생성"
     print(f"  scale_riffs: {list(tl.scale_riffs)}  riff_events={len(ms._riff_events)}  "
           f"(모델 {'O' if ms._ml_model else 'X'})")
 
-    print("\nSMOKE OK — 스케일/악보+리프표시/리프동기재생/구성제약(연속·단음·3연속) 정상")
+    print("\nSMOKE OK — 스케일/악보+수동수정/리프동기재생/구성제약(첫박·단음·3연속·옥타브) 정상")
 
 
 if __name__ == "__main__":

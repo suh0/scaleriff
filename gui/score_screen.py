@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QPushButton,
-    QScrollArea, QMenu, QFrame
+    QScrollArea, QInputDialog, QFrame
 )
 from PyQt6.QtGui import QCursor
 from PyQt6.QtCore import Qt, pyqtSignal
@@ -17,8 +17,15 @@ from PyQt6.QtCore import Qt, pyqtSignal
 from gui import theme as T
 from gui.widgets.riff_view import RiffView
 from gui.widgets.mini_guide import MiniGuide
+from analyze.theory import (
+    parse_chord, scale_pcs, degree_for, diatonic_option, pc_name,
+)
+from player.timeline import ScaleOption
+from ml.generate import bake_segment
 
 BARS_PER_ROW = 8
+# 수동 코드 수정 선택지(접미사). parse_chord가 인식하는 표기.
+_EDIT_SUFFIXES = ["", "m", "7", "maj7", "m7", "m7b5", "dim", "6", "m6", "sus4"]
 
 
 class ScoreScreen(QWidget):
@@ -28,6 +35,7 @@ class ScoreScreen(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.tl = None
+        self._model = None      # ML 모델(수동 수정 시 리프 재생성용)
         root = QVBoxLayout(self)
         root.setContentsMargins(28, 18, 28, 18)
         root.setSpacing(10)
@@ -50,8 +58,8 @@ class ScoreScreen(QWidget):
         top.addWidget(self.key_lbl)
         root.addLayout(top)
 
-        hint = QLabel("이 곡에 사용된 스케일 종류예요 — 눌러서 생성된 리프를 확인하세요. "
-                      "아래는 마디별 코드·스케일(디버그 뷰).")
+        hint = QLabel("위 칩으로 스케일 리프를 확인하고, 아래 마디 칸을 누르면 코드를 "
+                      "직접 고칠 수 있어요(인식이 틀렸을 때 보정).")
         hint.setStyleSheet(f"color:{T.TEXT_MUTED};font-size:12px;")
         root.addWidget(hint)
 
@@ -111,8 +119,9 @@ class ScoreScreen(QWidget):
         root.addLayout(bottom)
 
     # ── 로드/렌더 ────────────────────────────────────────────────
-    def set_timeline(self, tl):
+    def set_timeline(self, tl, model=None):
         self.tl = tl
+        self._model = model
         self.title.setText(tl.title or "코드 진행")
         self.key_lbl.setText(f"{tl.key}  ·  {tl.bpm:.0f} BPM")
         self._build_riffs()
@@ -191,7 +200,6 @@ class ScoreScreen(QWidget):
         self.grid.setRowStretch(last_row + 1, 1)
 
     def _make_cell(self, bar: int, seg, is_new_chord: bool) -> QWidget:
-        multi = bool(seg and seg.has_options())
         detour = bool(seg and seg.is_detour)   # 비다이아토닉(§3)
         chord_txt = seg.chord.name if (seg and is_new_chord) else "／"
         scale_txt = seg.scale_name if (seg and seg.scale) else ""
@@ -199,8 +207,6 @@ class ScoreScreen(QWidget):
         cell = QFrame()
         if detour:                              # 비다이아토닉 → 빨강 강조
             border, bg = T.BADGE_OUT, T.BG_SURFACE
-        elif multi:
-            border, bg = T.BORDER_ACTIVE, T.BG_SURFACE
         else:
             border, bg = T.BORDER_DEFAULT, T.BG_INSET
         cell.setStyleSheet(
@@ -218,29 +224,41 @@ class ScoreScreen(QWidget):
             f"font-family:'{T.FONT_SANS_EN}';font-size:16px;font-weight:700;border:none;")
         v.addWidget(c)
         s = QLabel(scale_txt)
-        s_color = T.BADGE_OUT if detour else (T.BORDER_ACTIVE if multi else T.TEXT_MUTED)
         s.setStyleSheet(
-            f"color:{s_color};"
+            f"color:{T.BADGE_OUT if detour else T.TEXT_MUTED};"
             f"font-family:'{T.FONT_MONO}';font-size:10px;border:none;")
         v.addWidget(s)
 
-        if multi:
+        if seg is not None:        # 모든 마디 클릭 → 코드 수동 수정(§1)
             cell.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-            cell.mousePressEvent = lambda e, sg=seg: self._choose(sg)
+            cell.mousePressEvent = lambda e, sg=seg: self._edit_chord(sg)
         return cell
 
-    def _choose(self, seg):
-        menu = QMenu(self)
-        menu.setStyleSheet(
-            f"QMenu{{background:{T.BG_SURFACE};color:{T.TEXT_BODY};"
-            f"border:1px solid {T.BORDER_DEFAULT};}}"
-            f"QMenu::item:selected{{background:{T.BORDER_DEFAULT};color:{T.TEXT_PRIMARY};}}")
-        for i, opt in enumerate(seg.candidates):
-            mark = " ✓" if i == seg.active else ""
-            act = menu.addAction(f"{opt.name}  ({len(opt.note_set)}음){mark}")
-            act.triggered.connect(lambda _, idx=i, sg=seg: self._apply_choice(sg, idx))
-        menu.exec(QCursor.pos())
+    # ── 수동 코드 수정 ───────────────────────────────────────────
+    def _edit_chord(self, seg):
+        names = [pc_name(r) + suf for r in range(12) for suf in _EDIT_SUFFIXES]
+        cur = seg.chord.name
+        start = names.index(cur) if cur in names else 0
+        name, ok = QInputDialog.getItem(
+            self, "코드 수정", f"이 마디(현재 {cur})의 코드를 고르세요:",
+            names, start, False)
+        if ok and name and name != cur:
+            self._apply_chord(seg, name)
 
-    def _apply_choice(self, seg, idx: int):
-        seg.active = idx
+    def _apply_chord(self, seg, name: str):
+        """수동 선택 코드로 구간의 코드·스케일·리프를 재계산."""
+        chord = parse_chord(name)
+        key_root = self.tl.key_root
+        key_mode = "minor" if "minor" in (self.tl.key or "").lower() else "major"
+        home = set(scale_pcs(key_root, key_mode))
+        is_detour = not all(pc in home for pc in chord.chord_tones())
+        note_set = (sorted(set(chord.chord_scale()) | set(chord.chord_tones()))
+                    if is_detour else sorted(home))
+        o = diatonic_option(chord, key_root, key_mode, is_detour, note_set)
+        seg.chord = chord
+        seg.candidates = [ScaleOption(o["kind"], o["root"], o["name"], o["note_set"])]
+        seg.degree = degree_for(chord, key_root)
+        seg.is_detour = is_detour
+        bake_segment(self.tl, seg, self._model)   # 새 종류 리프 생성 + example 갱신
+        self._build_riffs()
         self._build_grid()

@@ -207,42 +207,86 @@ def detect_content_span(y, sr, duration: float, downbeat_times=None,
     return (start, end)
 
 
-# ── 코드 템플릿 (매칭용 가중 벡터) ───────────────────────────────────
-# 매칭 어휘: 너무 많으면 노이즈. 트라이어드 + 대표 7th.
-_TEMPLATE_QUALITIES = ["maj", "min", "dom7", "maj7", "m7", "dim", "m7b5"]
-# 7th는 트라이어드보다 낮은 가중(과검출 방지)
-_WEIGHTS = {0: 1.0, "third": 1.0, "fifth": 0.9, "seventh": 0.55, "other": 0.7}
+# ── 코드 추정: 벌점 점수 + 루프 평균 + 비터비 평활 ─────────────────
+# 어휘를 5종으로 한정(dim/m7b5는 다이아토닉 코드와 음 겹쳐 오검출 유발).
+_CHORD_VOCAB = ["maj7", "m7", "dom7", "maj", "min"]
+_PEN_ALPHA = 0.5          # 코드 밖 음 벌점 — 무관한 음(예: G7 마디의 강한 패싱톤) 억제
+_CHORD_P_STAY = 0.80      # 비트→다음비트 같은 코드 유지 확률(루프 미검출 시 폴백 평활)
+_CHORD_EMIS_GAIN = 16.0   # 방출 점수 게인 — 전이 페널티와 균형
+_LOOP_SIM_THR = 0.90      # 반복(루프) 판정 자기유사도 임계
+_LOOP_BEAT_CANDS = [8, 12, 16, 24, 32]  # 후보 루프 길이(비트) — 가장 짧은 것 채택
 
 
-def _build_templates() -> tuple[np.ndarray, list[tuple[int, str]]]:
-    templates = []
-    labels = []
+def _build_pen_templates() -> tuple[np.ndarray, list[tuple[int, str]]]:
+    """코드 밖 음에 벌점을 주는 매칭 행렬(N×12)과 라벨. 내적이 곧 점수."""
+    rows, labels = [], []
     for root in range(12):
-        for q in _TEMPLATE_QUALITIES:
+        for q in _CHORD_VOCAB:
             ivs, _ = CHORD_SPECS[q]
-            vec = np.zeros(12)
-            for k, iv in enumerate(ivs):
-                pc = (root + iv) % 12
-                if iv == 0:
-                    w = _WEIGHTS[0]
-                elif iv in (3, 4):
-                    w = _WEIGHTS["third"]
-                elif iv in (6, 7, 8):
-                    w = _WEIGHTS["fifth"]
-                elif iv in (10, 11, 9):
-                    w = _WEIGHTS["seventh"]
-                else:
-                    w = _WEIGHTS["other"]
-                vec[pc] = max(vec[pc], w)
-            n = np.linalg.norm(vec)
-            if n > 0:
-                vec = vec / n
-            templates.append(vec)
+            tones = {(root + i) % 12 for i in ivs}
+            ni = len(tones); no = 12 - ni
+            rows.append([(1.0 / ni) if p in tones else (-_PEN_ALPHA / no)
+                         for p in range(12)])
             labels.append((root, q))
-    return np.array(templates), labels
+    return np.array(rows), labels
 
 
-_TEMPLATES, _TEMPLATE_LABELS = _build_templates()
+_PEN_A, _PEN_LABELS = _build_pen_templates()
+
+
+def _detect_loop_beats(unit: np.ndarray, bpb: int) -> int:
+    """비트열 크로마(정규화)에서 반복 주기(비트)를 자기유사도로 검출. 없으면 0.
+
+    백킹 트랙은 같은 진행을 수십 번 반복하므로 이 주기로 평균내면 워킹 베이스·
+    패싱톤이 상쇄돼 화성이 또렷해진다.
+    """
+    B = unit.shape[1]
+    for L in _LOOP_BEAT_CANDS:
+        if L >= B or (bpb and L % bpb):
+            continue
+        sims = [float(unit[:, i] @ unit[:, i + L]) for i in range(B - L)]
+        if sims and float(np.mean(sims)) > _LOOP_SIM_THR:
+            return L
+    return 0
+
+
+def _viterbi_chords(emis: np.ndarray, p_stay: float,
+                    gain: float = _CHORD_EMIS_GAIN) -> np.ndarray:
+    """비트별 코드 점수(emis: B×N)를 자기전이 선호로 평활 → 코드 인덱스 경로.
+
+    코드는 보통 여러 비트 지속하므로 같은 코드 유지에 보너스를 준다. gain은
+    방출 점수 차이를 전이 페널티와 비교 가능한 스케일로 키운다(균형 파라미터).
+    """
+    B, N = emis.shape
+    log_e = gain * (emis - emis.max(axis=1, keepdims=True))   # 0 이하 로그 점수
+    l_stay = np.log(p_stay)
+    l_change = np.log((1.0 - p_stay) / max(1, N - 1))
+    dp = log_e[0].copy()
+    bp = np.zeros((B, N), dtype=np.int32)
+    for t in range(1, B):
+        best_prev = int(np.argmax(dp))
+        best_val = dp[best_prev]
+        # 전 시점 최고값 기준 '변경' 후보(자기 자신이면 차선)
+        second = dp.copy(); second[best_prev] = -np.inf
+        second_idx = int(np.argmax(second)); second_val = second[second_idx]
+        new_dp = np.empty(N)
+        for j in range(N):
+            stay = dp[j] + l_stay
+            if best_prev != j:
+                change_val, change_idx = best_val + l_change, best_prev
+            else:
+                change_val, change_idx = second_val + l_change, second_idx
+            if stay >= change_val:
+                new_dp[j] = stay + log_e[t, j]; bp[t, j] = j
+            else:
+                new_dp[j] = change_val + log_e[t, j]; bp[t, j] = change_idx
+        dp = new_dp
+    path = np.zeros(B, dtype=np.int32)
+    path[-1] = int(np.argmax(dp))
+    for t in range(B - 1, 0, -1):
+        path[t - 1] = bp[t, path[t]]
+    return path
+
 
 # Krumhansl–Schmuckler 키 프로파일
 _KS_MAJOR = np.array([6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88])
@@ -287,10 +331,13 @@ class LibrosaBackend(MirBackend):
         cb(52, f"비트 소스: {source} · {bpm:.0f}BPM · {beats_per_bar}/4")
 
         cb(55, "화성(크로마) 분석…")
-        chroma = librosa.feature.chroma_cqt(y=y, sr=sr)
+        y_harm = librosa.effects.harmonic(y, margin=2.0)
+        chroma = librosa.feature.chroma_cqt(y=y_harm, sr=sr)   # 키 추정용
+        # 코드 추정은 CENS(에너지 정규화·평활) — 화성 인식에 더 강건
+        cens = librosa.feature.chroma_cens(y=y, sr=sr)
 
         cb(62, "코드 추정…")
-        chords = self._chords_from_chroma(chroma, sr, beat_times, duration)
+        chords = self._chords_from_chroma(cens, sr, beat_times, beats_per_bar, duration)
 
         cb(66, "화성 온셋·무음 경계…")
         bar_sec = beats_per_bar * (60.0 / bpm if bpm > 0 else 0.5)
@@ -313,49 +360,65 @@ class LibrosaBackend(MirBackend):
                          content_span=content_span)
 
     # ── 코드 추정 ────────────────────────────────────────────────
-    def _chords_from_chroma(self, chroma, sr, beat_times, duration) -> list[ChordSpan]:
+    def _chords_from_chroma(self, cens, sr, beat_times,
+                            beats_per_bar, duration) -> list[ChordSpan]:
+        """루프 평균 + 코드-밖-음 벌점 점수로 안정적인 코드 진행 추정.
+
+        반복(루프)이 검출되면 모든 사이클의 크로마를 같은 위상끼리 평균내
+        워킹 베이스·패싱톤을 상쇄하고, 마디 위상을 자동 정렬해 마디당 코드를
+        고른다(전 구간에 같은 진행 반복). 루프가 없으면 비트별 비터비로 폴백.
+        """
         import librosa
-        beat_frames = librosa.time_to_frames(beat_times, sr=sr)
-        beat_frames = np.clip(beat_frames, 0, chroma.shape[1] - 1)
-        # beat-sync chroma (median)
-        if len(beat_frames) >= 2:
-            sync = librosa.util.sync(chroma, beat_frames, aggregate=np.median)
+        bf = np.clip(librosa.time_to_frames(beat_times, sr=sr), 0, cens.shape[1] - 1)
+        if len(bf) >= 2:
+            sync = librosa.util.sync(cens, bf, aggregate=np.median)
         else:
-            sync = chroma.mean(axis=1, keepdims=True)
+            sync = cens.mean(axis=1, keepdims=True)
+        B = sync.shape[1]
+        bpb = max(1, int(beats_per_bar))
+        unit = sync / (np.linalg.norm(sync, axis=0) + 1e-9)
 
-        # 각 비트 구간 코드 라벨
-        per_beat = []
-        for i in range(sync.shape[1]):
-            vec = sync[:, i]
-            n = np.linalg.norm(vec)
-            if n < 1e-6:
-                per_beat.append(None)
-                continue
-            vec = vec / n
-            scores = _TEMPLATES @ vec
-            best = int(np.argmax(scores))
-            root, q = _TEMPLATE_LABELS[best]
-            per_beat.append(_chord_label(root, q))
+        L = _detect_loop_beats(unit, bpb)
+        if L and 2 * bpb <= L < B:
+            # 1) 사이클 평균(워킹 베이스·패싱톤 상쇄)
+            phase = np.zeros((12, L))
+            for i in range(B):
+                phase[:, i % L] += sync[:, i]
+            # 2) 마디 위상 자동 정렬(코드 점수 신뢰도 최대) → 마디별 코드 인덱스
+            nbars = L // bpb
+            best = None
+            for s in range(L):
+                idxs, conf = [], 0.0
+                for b in range(nbars):
+                    v = sum(phase[:, (s + b * bpb + k) % L] for k in range(bpb))
+                    nv = np.linalg.norm(v)
+                    sc = _PEN_A @ (v / nv) if nv > 1e-6 else np.zeros(len(_PEN_LABELS))
+                    idxs.append(int(np.argmax(sc))); conf += float(np.max(sc))
+                if best is None or conf > best[0]:
+                    best = (conf, s, idxs)
+            _, s, bar_idx = best
+            beat_label = [bar_idx[(((i % L) - s) % L) // bpb] for i in range(B)]
+        else:
+            # 루프 없음 → 비트별 벌점 점수 + 비터비 평활
+            emis = np.zeros((B, len(_PEN_LABELS)))
+            for i in range(B):
+                if np.linalg.norm(sync[:, i]) > 1e-6:
+                    emis[i] = _PEN_A @ unit[:, i]
+            beat_label = list(_viterbi_chords(emis, _CHORD_P_STAY))
 
-        # 비트 경계 시각
         seg_bounds = list(beat_times)
-        if len(seg_bounds) < len(per_beat) + 1:
-            # sync 컬럼 수에 맞춰 끝 경계 보강
+        if len(seg_bounds) < B + 1:
             seg_bounds = seg_bounds + [duration]
-        # 연속 동일 코드 병합 → ChordSpan
         spans: list[ChordSpan] = []
         i = 0
-        nb = len(per_beat)
-        while i < nb:
-            if per_beat[i] is None:
-                i += 1
-                continue
+        while i < B:
             j = i
-            while j + 1 < nb and per_beat[j + 1] == per_beat[i]:
+            while j + 1 < B and beat_label[j + 1] == beat_label[i]:
                 j += 1
+            root, q = _PEN_LABELS[int(beat_label[i])]
             start = seg_bounds[i] if i < len(seg_bounds) else (i * 0.5)
             end = seg_bounds[j + 1] if j + 1 < len(seg_bounds) else duration
-            spans.append(ChordSpan(float(start), float(end), per_beat[i]))
+            spans.append(ChordSpan(float(start), float(end), _chord_label(root, q)))
             i = j + 1
         if not spans:
             spans = [ChordSpan(0.0, duration, "C")]

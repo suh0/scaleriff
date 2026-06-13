@@ -75,13 +75,6 @@ class Segment:
     def has_options(self) -> bool:
         return len(self.candidates) > 1
 
-    def set_active_by_kind(self, kind: str) -> bool:
-        for i, c in enumerate(self.candidates):
-            if c.kind == kind:
-                self.active = i
-                return True
-        return False
-
     def duration(self) -> float:
         return self.end_sec - self.start_sec
 
@@ -173,11 +166,6 @@ class Timeline:
     def content_end(self) -> float:
         cs, ce = self.content_span
         return ce if ce > cs else self.total_sec()
-
-    def apply_kind(self, kind: str):
-        """가능한 모든 구간에 이 종류 스케일을 적용(통일)."""
-        for seg in self.segments:
-            seg.set_active_by_kind(kind)
 
     # ── 직렬화 ───────────────────────────────────────────────────
     def to_dict(self):

@@ -95,14 +95,6 @@ def qss_ghost_btn() -> str:
     )
 
 
-def qss_outline_btn() -> str:
-    return (
-        f"QPushButton{{background:transparent;color:{TEXT_PRIMARY};"
-        f"border:1px solid {BORDER_ACTIVE};border-radius:10px;padding:11px 18px;font-size:14px;}}"
-        f"QPushButton:hover{{background:{HOVER_OVERLAY};}}"
-    )
-
-
 def qss_input() -> str:
     return (
         f"QLineEdit{{background:{BG_SURFACE};color:{TEXT_PRIMARY};"

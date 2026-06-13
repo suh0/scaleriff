@@ -78,9 +78,10 @@ ingest/   audio_source(yt-dlp/파일→WAV)  mir_extract(코드/키/BPM, 교체�
 analyze/  theory(코드파싱/도수)  structure(루프·턴)  harmony(note_set/디투어/전조)
 ml/       representation(화성상대값)  model  generate(콜+우도+난이도게이트)
           real_builder(전체 파이프라인)  timeline_builder(라우터)  train/(오프라인 학습)
-player/   timeline(§4 스키마)  playhead(재생/seek)  cr_engine(콜앤리스폰스 상태)
-          midi_input(mido)  call_synth(콜 음색)  dummy_timeline(데모)
-gui/      app  link/analyzing/main_screen  widgets/(piano turn_box feedback scrub_bar controls)
+player/   timeline(§4 스키마)  playhead(재생/seek)  note_synth(연주/리프 음색)
+          midi_input(mido)  dummy_timeline(데모/테스트)
+gui/      app  link/analyzing/main_screen/score_screen
+          widgets/(piano scrub_bar mini_guide riff_view countin)
 ```
 
 ## ML 모델
