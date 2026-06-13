@@ -7,7 +7,7 @@
 - 친 건반 (§5.3): 배지 유지 + 상태별 컬러 border 추가 (초록/회색/빨강)
 - 범위: 2옥타브 C4–B5 (MIDI 60–83)
 - 흰 건반 가로:세로 비율 WHITE_RATIO 고정 → 어떤 창에서도 비율 유지(레터박스)
-- 모드 (§5.4): guide=전체 배지 / quiz=숨김→친 건반만 공개
+- 배지는 가이드·연습 모드 모두 전체 표시(퀴즈 블러 제거 §10)
 """
 from __future__ import annotations
 
@@ -56,8 +56,6 @@ class PianoWidget(QWidget):
         self._chord_tones: set[int] = set()
         self._degrees: dict[int, str] = {}
         self._pressed: set[int] = set()
-        self._mode = "guide"
-        self._revealed: set[int] = set()
 
     # ── 상태 세터 ────────────────────────────────────────────────
     def set_scale(self, note_set, chord_tones):
@@ -71,18 +69,6 @@ class PianoWidget(QWidget):
 
     def set_pressed(self, pressed):
         self._pressed = set(pressed)
-        self.update()
-
-    def set_mode(self, mode: str):
-        self._mode = "quiz" if mode == "quiz" else "guide"
-        self.update()
-
-    def reveal(self, midi: int):
-        self._revealed.add(midi)
-        self.update()
-
-    def clear_reveal(self):
-        self._revealed.clear()
         self.update()
 
     # ── 기하: 비율 고정 + 가운데 정렬 ───────────────────────────
@@ -104,8 +90,6 @@ class PianoWidget(QWidget):
     def _content_state(self, midi: int) -> str:
         """press 무관 스케일/코드 상태 — 배지·border 색 결정용."""
         if not self._note_set:
-            return "DEFAULT"
-        if self._mode == "quiz" and midi not in self._revealed:
             return "DEFAULT"
         pc = midi % 12
         if pc in self._chord_tones:

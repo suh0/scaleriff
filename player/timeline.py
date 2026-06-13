@@ -43,6 +43,7 @@ class Segment:
     candidates: list[ScaleOption] = field(default_factory=list)
     active: int = 0
     degree: str = ""           # 키 기준 코드 도수(예 "ii") — 악보 표시용
+    is_detour: bool = False     # 비다이아토닉(로컬 코드-스케일) 구간 여부 §3
     example: list = field(default_factory=list)  # ML 생성 예시 [{midi,beat_pos,dur_beats}]
 
     # ── 활성 스케일 헬퍼 ────────────────────────────────────────
@@ -92,6 +93,7 @@ class Segment:
             "chord": self.chord.to_dict(),
             "candidates": [c.to_dict() for c in self.candidates],
             "active": self.active, "degree": self.degree,
+            "is_detour": self.is_detour,
             "example": list(self.example),
         }
 
@@ -104,6 +106,7 @@ class Segment:
             chord=Chord.from_dict(d["chord"]),
             candidates=[ScaleOption.from_dict(c) for c in d.get("candidates", [])],
             active=d.get("active", 0), degree=d.get("degree", ""),
+            is_detour=d.get("is_detour", False),
             example=list(d.get("example", [])),
         )
 
@@ -120,10 +123,20 @@ class Timeline:
     available_scales: list[str] = field(default_factory=list)  # 등장 스케일 '종류'
     title: str = ""
     content_span: tuple[float, float] = (0.0, 0.0)
+    # 스케일 종류당 1개 리프(상대값, 루트0 기준). 코드 근음으로 이조해 재생(§8).
+    # { kind: {notes:[{midi,beat_pos,dur_beats}], note_set:[pc], chord_tones:[pc], n_bars} }
+    scale_riffs: dict = field(default_factory=dict)
 
     # ── 재생 중 룩업 ─────────────────────────────────────────────
     def beat_sec(self) -> float:
         return 60.0 / self.bpm if self.bpm > 0 else 0.5
+
+    def time_sig_beats(self) -> int:
+        """박자표의 분자(마디당 박). 예 '4/4' → 4. 파싱 실패 시 4."""
+        try:
+            return max(1, int(str(self.time_sig).split("/")[0]))
+        except (ValueError, IndexError):
+            return 4
 
     def segment_at(self, t: float) -> Segment | None:
         for seg in self.segments:
@@ -173,6 +186,7 @@ class Timeline:
             "key": self.key, "key_root": self.key_root, "loop_len": self.loop_len,
             "title": self.title, "content_span": list(self.content_span),
             "available_scales": list(self.available_scales),
+            "scale_riffs": self.scale_riffs,
             "segments": [s.to_dict() for s in self.segments],
         }
 
@@ -184,6 +198,7 @@ class Timeline:
             title=d.get("title", ""),
             content_span=tuple(d.get("content_span", [0.0, 0.0])),
             available_scales=list(d.get("available_scales", [])),
+            scale_riffs=d.get("scale_riffs", {}),
         )
         tl.segments = [Segment.from_dict(s) for s in d["segments"]]
         return tl

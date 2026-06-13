@@ -1,11 +1,11 @@
 """더미 타임라인 — 오디오 없이 플레이어·악보 UI를 둘러보는 데모(§6 [0]).
 
-C major ii–V–I 루프(Dm7–G7–Cmaj7) ×2 = 6마디. 각 구간에 후보 스케일:
-모드(D 도리안 / G 믹솔리디안 / C 아이오니안) + 펜타토닉. 오디오 없음.
+C major ii–V–I 루프(Dm7–G7–Cmaj7) ×2 = 6마디. 코드별 단일 다이아토닉 스케일
+(D 도리안 / G 믹솔리디안 / C 아이오니안). 한 코드=한 스케일이라 선택 불가(§3). 오디오 없음.
 """
 from __future__ import annotations
 
-from analyze.theory import parse_chord, scale_options, degree_for
+from analyze.theory import parse_chord, diatonic_option, degree_for, scale_pcs
 from player.timeline import Timeline, Segment, ScaleOption
 
 
@@ -13,6 +13,7 @@ def build_dummy_timeline() -> Timeline:
     bpm = 100.0
     bar = (60.0 / bpm) * 4
     key_root = 0
+    home_set = scale_pcs(key_root, "major")   # C 메이저 7음 — 전 구간 다이아토닉
 
     chord_names = ["Dm7", "G7", "Cmaj7"]
     loop_len = len(chord_names)
@@ -23,11 +24,10 @@ def build_dummy_timeline() -> Timeline:
     for _rep in range(2):
         for cname in chord_names:
             chord = parse_chord(cname)
-            opts = scale_options(chord)
-            cands = [ScaleOption(o["kind"], o["root"], o["name"], o["note_set"]) for o in opts]
-            for o in opts:
-                if o["kind"] not in available:
-                    available.append(o["kind"])
+            o = diatonic_option(chord, key_root, "major", False, home_set)
+            cands = [ScaleOption(o["kind"], o["root"], o["name"], o["note_set"])]
+            if o["kind"] not in available:
+                available.append(o["kind"])
             segments.append(Segment(
                 idx=b, start_sec=round(b * bar, 3), end_sec=round((b + 1) * bar, 3),
                 start_bar=b, end_bar=b + 1, chord=chord,

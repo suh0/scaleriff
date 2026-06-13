@@ -14,6 +14,7 @@ from gui.analyzing_screen import AnalyzingScreen
 from gui.score_screen import ScoreScreen
 from gui.main_screen import MainScreen
 from ml.timeline_builder import build_timeline
+from ml.generate import bake_examples
 
 
 class AppWindow(QMainWindow):
@@ -61,6 +62,9 @@ class AppWindow(QMainWindow):
 
     def _on_timeline_ready(self, timeline):
         self._timeline = timeline
+        # 스케일 종류당 1개 리프 굽기(§8) — 악보 화면에서 미리 보여주기 위해 여기서 1회.
+        if not getattr(timeline, "scale_riffs", None):
+            bake_examples(timeline, self.main_screen._ml_model)
         self.score.set_timeline(timeline)
         self.stack.setCurrentWidget(self.score)
 

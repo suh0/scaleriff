@@ -261,37 +261,20 @@ def scale_name_for(chord: Chord, home_root: int, home_mode: str,
     return f"{pc_name(chord.root)} {scale_kind_for(chord, home_root, home_mode, is_detour)}"
 
 
-# 연습 가능 스케일을 메이저/마이너/도리안 3종으로 한정(요청). root는 코드 근음.
-# 코드 품질 → 어울리는 후보(kind, 스케일 mode) 목록.
-_RESTRICTED_OPTIONS = {
-    "min":  [("마이너", "minor"), ("도리안", "dorian")],
-    "m7":   [("마이너", "minor"), ("도리안", "dorian")],
-    "m6":   [("도리안", "dorian"), ("마이너", "minor")],
-    "m7b5": [("마이너", "minor")],
-    "dim":  [("마이너", "minor")],
-    "dim7": [("마이너", "minor")],
-    "maj":  [("메이저", "major")],
-    "maj7": [("메이저", "major")],
-    "maj6": [("메이저", "major")],
-    "dom7": [("메이저", "major")],
-    "7":    [("메이저", "major")],
-    "sus4": [("메이저", "major")],
-    "sus2": [("메이저", "major")],
-    "aug":  [("메이저", "major")],
-}
+def diatonic_option(chord: Chord, home_root: int, home_mode: str,
+                    is_detour: bool, note_set: list[int]) -> dict:
+    """코드에 배정되는 **단일** 다이아토닉 스케일 후보(§3).
 
-
-def scale_options(chord: Chord) -> list[dict]:
-    """코드에 어울리는 후보 스케일 — 메이저/마이너/도리안만(요청 한정).
-
-    마이너 계열 코드는 마이너↔도리안 둘 다 가능(악보에서 선택), 그 외엔 메이저.
+    7다이아토닉 모드 중 코드의 키-도수가 결정하는 정확히 하나(시작음=코드 근음).
+    음악적으로 한 코드엔 한 스케일이므로 후보는 항상 1개 — 선택 여지 없음.
     각 항목: {kind, root, name, note_set}. root는 코드 근음(도수 계산용).
     """
-    specs = _RESTRICTED_OPTIONS.get(chord.quality, [("메이저", "major")])
-    return [{"kind": kind, "root": chord.root,
-             "name": f"{pc_name(chord.root)} {kind}",
-             "note_set": sorted(set(scale_pcs(chord.root, mode)))}
-            for kind, mode in specs]
+    return {
+        "kind": scale_kind_for(chord, home_root, home_mode, is_detour),
+        "root": chord.root,
+        "name": scale_name_for(chord, home_root, home_mode, is_detour),
+        "note_set": sorted(set(note_set)),
+    }
 
 
 def degree_for(chord: Chord, key_root: int) -> str:

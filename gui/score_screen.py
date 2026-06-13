@@ -15,6 +15,8 @@ from PyQt6.QtGui import QCursor
 from PyQt6.QtCore import Qt, pyqtSignal
 
 from gui import theme as T
+from gui.widgets.riff_view import RiffView
+from gui.widgets.mini_guide import MiniGuide
 
 BARS_PER_ROW = 8
 
@@ -48,16 +50,43 @@ class ScoreScreen(QWidget):
         top.addWidget(self.key_lbl)
         root.addLayout(top)
 
-        hint = QLabel("강조된 마디는 여러 스케일이 가능해요 — 눌러서 고르세요. "
-                      "위 칩으로 한 종류로 통일할 수도 있어요.")
+        hint = QLabel("이 곡에 사용된 스케일 종류예요 — 눌러서 생성된 리프를 확인하세요. "
+                      "아래는 마디별 코드·스케일(디버그 뷰).")
         hint.setStyleSheet(f"color:{T.TEXT_MUTED};font-size:12px;")
         root.addWidget(hint)
 
-        self.chips_row = QHBoxLayout()
-        self.chips_row.setSpacing(6)
-        chips_wrap = QWidget()
-        chips_wrap.setLayout(self.chips_row)
-        root.addWidget(chips_wrap)
+        # ── 사용된 스케일 종류(가로 칩) ──
+        self.riffs_title = QLabel("사용된 스케일")
+        self.riffs_title.setStyleSheet(
+            f"color:{T.TEXT_PRIMARY};font-family:'{T.FONT_MONO}';"
+            "font-size:13px;font-weight:700;")
+        root.addWidget(self.riffs_title)
+        self.kinds_row = QHBoxLayout()
+        self.kinds_row.setSpacing(8)
+        kinds_wrap = QWidget()
+        kinds_wrap.setLayout(self.kinds_row)
+        root.addWidget(kinds_wrap)
+
+        # ── 선택한 스케일: (왼쪽) C 기준 스케일 가이드 / (오른쪽) 생성된 리프 ──
+        #   두 위젯 모두 비율을 유지(MiniGuide=레터박스, RiffView=박자 격자).
+        sel_row = QHBoxLayout(); sel_row.setSpacing(16)
+        left = QVBoxLayout(); left.setSpacing(4)
+        self.guide_lbl = QLabel("C 기준 스케일 가이드")
+        self.guide_lbl.setStyleSheet(f"color:{T.TEXT_MUTED};font-size:11px;")
+        left.addWidget(self.guide_lbl)
+        self.sel_guide = MiniGuide()
+        self.sel_guide.setFixedHeight(130)
+        left.addWidget(self.sel_guide)
+        sel_row.addLayout(left, 4)
+        right = QVBoxLayout(); right.setSpacing(4)
+        self.riff_lbl = QLabel("생성된 리프")
+        self.riff_lbl.setStyleSheet(f"color:{T.TEXT_MUTED};font-size:11px;")
+        right.addWidget(self.riff_lbl)
+        self.sel_riff = RiffView()
+        self.sel_riff.setFixedHeight(130)
+        right.addWidget(self.sel_riff)
+        sel_row.addLayout(right, 6)
+        root.addLayout(sel_row)
 
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
@@ -86,31 +115,60 @@ class ScoreScreen(QWidget):
         self.tl = tl
         self.title.setText(tl.title or "코드 진행")
         self.key_lbl.setText(f"{tl.key}  ·  {tl.bpm:.0f} BPM")
-        self._build_chips()
+        self._build_riffs()
         self._build_grid()
 
-    def _build_chips(self):
-        while self.chips_row.count():
-            it = self.chips_row.takeAt(0)
+    @staticmethod
+    def _chip_qss(selected: bool) -> str:
+        if selected:
+            return (f"QPushButton{{background:{T.WHITE};color:{T.BG_BASE};border:none;"
+                    f"border-radius:14px;padding:6px 14px;font-size:12px;font-weight:700;}}")
+        return (f"QPushButton{{background:{T.BG_SURFACE_ALT};color:{T.TEXT_BODY};"
+                f"border:1px solid {T.BORDER_DEFAULT};border-radius:14px;"
+                f"padding:6px 14px;font-size:12px;}}"
+                f"QPushButton:hover{{border:1px solid {T.BORDER_ACTIVE};color:{T.TEXT_PRIMARY};}}")
+
+    def _build_riffs(self):
+        while self.kinds_row.count():
+            it = self.kinds_row.takeAt(0)
             if it.widget():
                 it.widget().deleteLater()
-        lab = QLabel("종류 통일:")
-        lab.setStyleSheet(f"color:{T.TEXT_MUTED};font-size:12px;")
-        self.chips_row.addWidget(lab)
-        for kind in self.tl.available_scales:
-            chip = QPushButton(kind)
-            chip.setStyleSheet(
-                f"QPushButton{{background:{T.BG_SURFACE_ALT};color:{T.TEXT_BODY};"
-                f"border:1px solid {T.BORDER_DEFAULT};border-radius:14px;"
-                f"padding:5px 12px;font-size:12px;}}"
-                f"QPushButton:hover{{border:1px solid {T.BORDER_ACTIVE};color:{T.TEXT_PRIMARY};}}")
-            chip.clicked.connect(lambda _, k=kind: self._apply_kind(k))
-            self.chips_row.addWidget(chip)
-        self.chips_row.addStretch(1)
+        self._kind_btns = {}
+        self._sel_kind = None
+        riffs = getattr(self.tl, "scale_riffs", None) or {}
+        widgets = (self.riffs_title, self.guide_lbl, self.sel_guide,
+                   self.riff_lbl, self.sel_riff)
+        if not riffs:
+            for wdg in widgets:
+                wdg.hide()
+            return
+        for wdg in widgets:
+            wdg.show()
+        for kind, data in riffs.items():
+            quality = data.get("quality", "")
+            chip = QPushButton(f"{quality} ({kind})" if quality else kind)
+            chip.setStyleSheet(self._chip_qss(False))
+            chip.clicked.connect(lambda _, k=kind: self._show_riff(k))
+            self.kinds_row.addWidget(chip)
+            self._kind_btns[kind] = chip
+        self.kinds_row.addStretch(1)
+        self._show_riff(next(iter(riffs)))   # 첫 스케일 기본 선택
 
-    def _apply_kind(self, kind: str):
-        self.tl.apply_kind(kind)
-        self._build_grid()
+    def _show_riff(self, kind: str):
+        riffs = getattr(self.tl, "scale_riffs", None) or {}
+        data = riffs.get(kind)
+        if not data:
+            return
+        for k, btn in self._kind_btns.items():
+            btn.setStyleSheet(self._chip_qss(k == kind))
+        self._sel_kind = kind
+        note_set = data.get("note_set", [])
+        chord_tones = data.get("chord_tones", [])
+        # C(루트0) 기준 스케일 가이드
+        self.sel_guide.set_scale(note_set, chord_tones, 0)
+        self.sel_riff.set_riff(
+            data.get("notes", []), 0, note_set, chord_tones,
+            self.tl.time_sig_beats(), data.get("n_bars", 1))
 
     def _build_grid(self):
         while self.grid.count():
@@ -134,19 +192,25 @@ class ScoreScreen(QWidget):
 
     def _make_cell(self, bar: int, seg, is_new_chord: bool) -> QWidget:
         multi = bool(seg and seg.has_options())
+        detour = bool(seg and seg.is_detour)   # 비다이아토닉(§3)
         chord_txt = seg.chord.name if (seg and is_new_chord) else "／"
         scale_txt = seg.scale_name if (seg and seg.scale) else ""
 
         cell = QFrame()
-        border = T.BORDER_ACTIVE if multi else T.BORDER_DEFAULT
-        bg = T.BG_SURFACE if multi else T.BG_INSET
+        if detour:                              # 비다이아토닉 → 빨강 강조
+            border, bg = T.BADGE_OUT, T.BG_SURFACE
+        elif multi:
+            border, bg = T.BORDER_ACTIVE, T.BG_SURFACE
+        else:
+            border, bg = T.BORDER_DEFAULT, T.BG_INSET
         cell.setStyleSheet(
             f"QFrame{{background:{bg};border:2px solid {border};border-radius:8px;}}")
         cell.setFixedHeight(60)
         v = QVBoxLayout(cell); v.setContentsMargins(8, 5, 8, 5); v.setSpacing(1)
-        bar_lbl = QLabel(f"{bar + 1}")
+        bar_lbl = QLabel(f"{bar + 1}" + ("  ⚠ 비다이아토닉" if (detour and is_new_chord) else ""))
         bar_lbl.setStyleSheet(
-            f"color:{T.TEXT_DIM};font-family:'{T.FONT_MONO}';font-size:9px;border:none;")
+            f"color:{T.BADGE_OUT if detour else T.TEXT_DIM};"
+            f"font-family:'{T.FONT_MONO}';font-size:9px;border:none;")
         v.addWidget(bar_lbl)
         c = QLabel(chord_txt)
         c.setStyleSheet(
@@ -154,8 +218,9 @@ class ScoreScreen(QWidget):
             f"font-family:'{T.FONT_SANS_EN}';font-size:16px;font-weight:700;border:none;")
         v.addWidget(c)
         s = QLabel(scale_txt)
+        s_color = T.BADGE_OUT if detour else (T.BORDER_ACTIVE if multi else T.TEXT_MUTED)
         s.setStyleSheet(
-            f"color:{T.BORDER_ACTIVE if multi else T.TEXT_MUTED};"
+            f"color:{s_color};"
             f"font-family:'{T.FONT_MONO}';font-size:10px;border:none;")
         v.addWidget(s)
 

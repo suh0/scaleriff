@@ -74,10 +74,16 @@ class ScrubBar(QWidget):
 
         segs = self._timeline.segments
 
-        # 코드 변경 눈금(§6.1: text/dim)
+        # 코드 변경 눈금(§6.1) — 비다이아토닉 구간은 빨강 강조(§3)
         for seg in segs:
-            if seg.start_bar != 0:
-                x = self._sec_to_x(seg.start_sec)
+            detour = getattr(seg, "is_detour", False)
+            if seg.start_bar == 0 and not detour:
+                continue
+            x = self._sec_to_x(seg.start_sec)
+            if detour:
+                p.setPen(QPen(QColor(T.KEY_PRESSED_OUT), 2))
+                p.drawLine(int(x), track_y - 6, int(x), track_y + track_h + 6)
+            else:
                 p.setPen(QPen(QColor(T.TEXT_DIM), 1))
                 p.drawLine(int(x), track_y - 3, int(x), track_y + track_h + 3)
 

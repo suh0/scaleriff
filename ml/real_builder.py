@@ -14,7 +14,7 @@ from ingest.audio_source import resolve_audio
 from ingest.mir_extract import get_backend
 from analyze.structure import analyze_structure
 from analyze.harmony import analyze_harmony
-from analyze.theory import scale_options, degree_for
+from analyze.theory import diatonic_option, degree_for
 from player.timeline import Timeline, Segment, ScaleOption
 
 
@@ -41,21 +41,21 @@ def build_real_timeline(source: str, progress_cb=None) -> Timeline:
     harm = analyze_harmony(st.segments, key_root,
                            mir.key_mode or "major", st.loop_len)
 
-    # 5) Segment 생성 — 후보 스케일(모드+펜타토닉)/도수 부여, 등장 종류 집계
-    cb(92, "스케일 후보 배정/집계…")
+    # 5) Segment 생성 — 코드별 단일 다이아토닉 스케일/도수 부여, 등장 종류 집계
+    #    7다이아토닉 모드에서 한 코드 = 한 스케일 → 후보 1개(선택 불가, §3)
+    cb(92, "스케일 배정/집계…")
     segments: list[Segment] = []
     available: list[str] = []
     for i, h in enumerate(harm):
-        opts = scale_options(h.chord)
-        cands = [ScaleOption(o["kind"], o["root"], o["name"], o["note_set"]) for o in opts]
-        for o in opts:
-            if o["kind"] not in available:
-                available.append(o["kind"])
+        o = diatonic_option(h.chord, h.home_root, h.home_mode, h.is_detour, h.note_set)
+        cands = [ScaleOption(o["kind"], o["root"], o["name"], o["note_set"])]
+        if o["kind"] not in available:
+            available.append(o["kind"])
         segments.append(Segment(
             idx=i, start_sec=h.raw.start_sec, end_sec=h.raw.end_sec,
             start_bar=h.raw.start_bar, end_bar=h.raw.end_bar,
             chord=h.chord, candidates=cands, active=0,
-            degree=degree_for(h.chord, key_root),
+            degree=degree_for(h.chord, key_root), is_detour=h.is_detour,
         ))
 
     cb(99, "세션 타임라인 굽기…")

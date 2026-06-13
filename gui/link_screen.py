@@ -27,7 +27,7 @@ _LOGO = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ONBOARD_CARDS = [
     ("🔗  링크 넣기", "좋아하는 곡의 링크나 오디오 파일을 넣으면\n앱이 코드·키·박자를 분석해요."),
     ("🎼  스케일 가이드", "코드마다 어떤 스케일이 통하는지\n건반 색으로 알려줘요 — 코드톤·스케일음·밖."),
-    ("🎹  직접 쳐보기", "곡 위에서 자유롭게 즉흥을 쳐봐요. 틀린 음은 없어요.\n퀴즈 모드로 스스로 점검할 수도 있어요."),
+    ("🎹  직접 쳐보기", "곡 위에서 자유롭게 즉흥을 쳐봐요. 틀린 음은 없어요.\n연습 모드에선 AI 리프가 곡에 맞춰 흘러 따라 칠 수 있어요."),
 ]
 
 
@@ -158,11 +158,6 @@ class LinkScreen(QWidget):
             f"QPushButton:hover{{background:{T.TEXT_BODY};}}")
         self.go_btn.clicked.connect(self._submit)
         lay.addWidget(self.go_btn)
-
-        self.demo_btn = QPushButton("오디오 없이 데모로 둘러보기")
-        self.demo_btn.setStyleSheet(f"color:{T.TEXT_MUTED};border:none;font-size:12px;")
-        self.demo_btn.clicked.connect(lambda: self.buildRequested.emit(""))
-        lay.addWidget(self.demo_btn)
         lay.addStretch(2)
         return w
 
