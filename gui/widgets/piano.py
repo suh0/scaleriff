@@ -95,8 +95,6 @@ class PianoWidget(QWidget):
         """스케일 밖 음인지 여부 — 눌렸을 때 건반 전체 빨간색 표시용."""
         if not self._note_set:
             return False
-        if self._mode == "quiz" and midi not in self._revealed:
-            return False
         pc = midi % 12
         return pc not in self._note_set and pc not in self._chord_tones
 
