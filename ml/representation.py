@@ -83,11 +83,13 @@ def encode(notes, chord_roots, n_steps=PHRASE_STEPS) -> list[int]:
     """notes: [(start_step, dur_steps, midi)], chord_roots: 칸별 코드 근음 pc."""
     grid = [REST] * n_steps
     for s, d, m in notes:
+        s = int(s)
         if not (0 <= s < n_steps):
             continue
         root = chord_roots[s] if s < len(chord_roots) else 0
-        grid[s] = onset_token((m - root) % 12)
-        for j in range(s + 1, min(n_steps, s + max(1, d))):
+        # pitch/root가 float(예: WJazzD)이어도 토큰은 항상 정수로.
+        grid[s] = onset_token(int(round(m - root)) % 12)
+        for j in range(s + 1, min(n_steps, s + max(1, int(d)))):
             if grid[j] == REST:
                 grid[j] = HOLD
     return grid

@@ -11,7 +11,7 @@ import os
 import random
 
 from ml.representation import PHRASE_STEPS, STEPS_PER_BAR, SCALE_DEGREES
-from ml.generate import rule_based_grid, _enforce_min_tones
+from ml.generate import rule_based_grid
 from ml.model import MarkovModel
 
 # 스케일 종류별로 함께 등장할 법한 코드군 (7다이아토닉 모드 전체)
@@ -43,8 +43,6 @@ def build_examples(per_context=400, seed=0):
         for _ in range(per_context):
             qfams = _random_plan(qfam_choices, rng)
             grid = rule_based_grid(qfams, scale_kind, PHRASE_STEPS, rng)
-            # 학습 데이터에도 코드톤·스케일음 ≥2씩 제약 반영(§구성)
-            grid = _enforce_min_tones(grid, qfams, scale_kind, rng)
             examples.append({"grid": grid, "qfam": qfams,
                              "scale": [scale_kind] * PHRASE_STEPS})
     return examples

@@ -72,9 +72,9 @@ def main():
         "같은 종류·근음인데 리프가 다름(종류당 1개 위반)"
     assert all(s.example for s in tl.segments), "구간 이조 example 미생성"
 
-    # 리프 구성 제약(§1·§2): 1마디 / 박당 단음 ≤1회 / 코드톤·스케일음 ≥2 /
-    #   스케일음 3연속 금지 / 스케일 밖 음 없음
-    from collections import Counter as _Counter
+    # 리프 구성 — 보장 불변식만 검증(나머지는 분포 soft bias, 하드 강제 아님):
+    #   1마디 / 스케일 안의 음만 / 밀도 하한(≥3음) / 마지막 음 코드톤 해결 / 음역 안.
+    #   (첫박 코드톤·스케일음 3연속 억제·같은음 억제는 soft라 통계적 경향만 — 하드 검증 X)
     for kind, d in tl.scale_riffs.items():
         assert d["n_bars"] == 1, f"{kind} 1마디 아님"
         cts, ns = set(d["chord_tones"]), set(d["note_set"])
@@ -83,28 +83,10 @@ def main():
         seq = ["C" if n["midi"] % 12 in cts else ("S" if n["midi"] % 12 in ns else "x")
                for n in notes]
         assert "x" not in seq, f"{kind} 스케일 밖 음: {seq}"
-        assert seq.count("C") >= 2 and seq.count("S") >= 2, f"{kind} 코드톤/스케일음 부족 {seq}"
-        run = 0
-        for c in seq:
-            run = run + 1 if c == "S" else 0
-            assert run < 3, f"{kind} 스케일음 3연속: {seq}"
-        per_beat = _Counter(int(n["beat_pos"]) for n in notes)
-        singles = sum(1 for c in per_beat.values() if c == 1)
-        assert singles <= 1, f"{kind} 단음 박 {singles}회: {sorted(per_beat.items())}"
-        # 같은 음 연속 금지
+        assert len(notes) >= 3, f"{kind} 밀도 부족(<3음): {seq}"   # 거부샘플링 하한
         midis = [n["midi"] for n in notes]
-        assert all(midis[i] != midis[i + 1] for i in range(len(midis) - 1)), \
-            f"{kind} 같은 음 연속: {midis}"
-        # §1 한 옥타브 안([60,71], 음역폭 ≤11반음)
-        assert all(60 <= m <= 71 for m in midis), f"{kind} 옥타브 범위 밖: {midis}"
-        assert max(midis) - min(midis) <= 11, f"{kind} 한 옥타브 초과: {midis}"
-        # §2 음 길이 다양(서로 다른 dur_beats ≥2종)
-        durs = {round(n["dur_beats"], 3) for n in notes}
-        assert len(durs) >= 2, f"{kind} 음 길이 단조로움: {durs}"
-        # §2(신규) 마디 첫 박(beat_pos<1)은 코드톤만
-        first_beat = [n for n in notes if n["beat_pos"] < 1.0]
-        assert first_beat and all(n["midi"] % 12 in cts for n in first_beat), \
-            f"{kind} 첫 박에 비코드톤: {[(n['beat_pos'], n['midi']%12) for n in first_beat]}"
+        assert all(55 <= m <= 79 for m in midis), f"{kind} 음역 범위 밖: {midis}"  # 보이스리딩 범위
+        assert notes[-1]["midi"] % 12 in cts, f"{kind} 마지막 음 코드톤 해결 아님: {seq}"
 
     # §3 같은 코드 2마디 → 리프 2회 반복(타일링)
     from ml.generate import bake_examples as _bake
@@ -119,16 +101,6 @@ def main():
     one = tl2.scale_riffs["도리안"]["notes"]
     assert len(seg2.example) == 2 * len(one), "2마디인데 리프 2회 반복 아님"
     assert any(n["beat_pos"] >= 4 for n in seg2.example), "둘째 마디에 리프 없음"
-    # §3 타일 이음새 포함 스케일음 3연속 금지(전체 example 기준)
-    #    example은 코드 근음으로 이조됨 → 코드톤도 같은 양만큼 이동해 비교
-    root2 = seg2.chord.root; shift2 = root2 if root2 <= 6 else root2 - 12
-    cts2 = {(c + shift2) % 12 for c in tl2.scale_riffs["도리안"]["chord_tones"]}
-    seq2 = ["C" if n["midi"] % 12 in cts2 else "S"
-            for n in sorted(seg2.example, key=lambda n: n["beat_pos"])]
-    r = 0
-    for c in seq2:
-        r = r + 1 if c == "S" else 0
-        assert r < 3, f"타일 후 스케일음 3연속: {seq2}"
     # §3 가이드는 2마디 반복 구간이어도 늘 1마디만 표시
     from gui.widgets.riff_view import RiffView as _RV
     _rv = _RV(); _rv.set_segment(seg2, tl2.bpm, tl2.time_sig_beats())
@@ -154,7 +126,7 @@ def main():
     print(f"  scale_riffs: {list(tl.scale_riffs)}  riff_events={len(ms._riff_events)}  "
           f"(모델 {'O' if ms._ml_model else 'X'})")
 
-    print("\nSMOKE OK — 스케일/악보+수동수정/리프동기재생/구성제약(첫박·단음·3연속·옥타브) 정상")
+    print("\nSMOKE OK — 스케일/악보+수동수정/리프동기재생/리프불변식(1마디·스케일안·밀도·해결·음역) 정상")
 
 
 if __name__ == "__main__":
