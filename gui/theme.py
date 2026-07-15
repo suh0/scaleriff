@@ -78,11 +78,18 @@ def load_fonts():
                 QFontDatabase.addApplicationFont(os.path.join(d, fn))
 
 
+# ── 공통 레이아웃 규칙 ───────────────────────────────────────────
+# 모든 화면(새 화면 포함)의 기본 여백. root.setContentsMargins(PAD_H, PAD_V, PAD_H, PAD_V)
+PAD_H = 40
+PAD_V = 28
+# 버튼 규칙: 텍스트보다 넓게 늘이지 말 것 — 내용 크기 + 좌우 stretch로 가운데 정렬.
+
+
 # ── 공통 QSS 스니펫 ──────────────────────────────────────────────
 def qss_primary_btn() -> str:
     return (
         f"QPushButton{{background:{WHITE};color:{BG_BASE};border:none;border-radius:10px;"
-        f"padding:12px 28px;font-size:15px;font-weight:bold;}}"
+        f"padding:12px 32px;font-size:15px;font-weight:bold;}}"
         f"QPushButton:hover{{background:{TEXT_BODY};}}"
     )
 

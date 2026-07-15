@@ -119,6 +119,18 @@ class Timeline:
     # 스케일 종류당 1개 리프(상대값, 루트0 기준). 코드 근음으로 이조해 재생(§8).
     # { kind: {notes:[{midi,beat_pos,dur_beats}], note_set:[pc], chord_tones:[pc], n_bars} }
     scale_riffs: dict = field(default_factory=dict)
+    # ── 채점(§7.5)·보정(§3.5) ────────────────────────────────────
+    bar_times: list[float] = field(default_factory=list)  # 마디 시작 시각(+끝) — 채점 그리드
+    loop_phase: int = 0        # 감지 루프 시작 마디 오프셋
+    loop_override: int = 0     # 사용자 루프 주기 보정(마디 수, 0=감지값 사용)
+    split_point: int = 48      # 왼손/오른손 존 분할 MIDI(C3 고정)
+    # 사용자 정의 루프 — 코드배열표에서 마디 2개 선택으로 생성(§6).
+    # [{"name": str, "start_bar": int, "end_bar": int(포함), "on": bool}, …]
+    loops: list = field(default_factory=list)
+    # ── MIR 원자료(마디선 보정 §3.5 2차 — 재격자화 재료, MIR 재실행 없음) ──
+    beat_times: list[float] = field(default_factory=list)   # 비트 시각
+    chord_spans: list = field(default_factory=list)         # [[start,end,name], …]
+    wav_ref: str = ""          # 분석용 모노 WAV 경로(파형 표시용, 캐시)
 
     # ── 재생 중 룩업 ─────────────────────────────────────────────
     def beat_sec(self) -> float:
@@ -175,6 +187,14 @@ class Timeline:
             "title": self.title, "content_span": list(self.content_span),
             "available_scales": list(self.available_scales),
             "scale_riffs": self.scale_riffs,
+            "bar_times": list(self.bar_times),
+            "loop_phase": self.loop_phase,
+            "loop_override": self.loop_override,
+            "split_point": self.split_point,
+            "loops": [dict(l) for l in self.loops],
+            "beat_times": list(self.beat_times),
+            "chord_spans": [list(c) for c in self.chord_spans],
+            "wav_ref": self.wav_ref,
             "segments": [s.to_dict() for s in self.segments],
         }
 
@@ -187,6 +207,14 @@ class Timeline:
             content_span=tuple(d.get("content_span", [0.0, 0.0])),
             available_scales=list(d.get("available_scales", [])),
             scale_riffs=d.get("scale_riffs", {}),
+            bar_times=list(d.get("bar_times", [])),
+            loop_phase=d.get("loop_phase", 0),
+            loop_override=d.get("loop_override", 0),
+            split_point=d.get("split_point", 48),
+            loops=[dict(l) for l in d.get("loops", [])],
+            beat_times=list(d.get("beat_times", [])),
+            chord_spans=[list(c) for c in d.get("chord_spans", [])],
+            wav_ref=d.get("wav_ref", ""),
         )
         tl.segments = [Segment.from_dict(s) for s in d["segments"]]
         return tl

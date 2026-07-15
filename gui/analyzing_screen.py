@@ -41,7 +41,7 @@ class AnalyzingScreen(QWidget):
         super().__init__(parent)
         self._worker = None
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(60, 0, 60, 0)
+        lay.setContentsMargins(80, 0, 80, 0)
         lay.addStretch(1)
 
         self.title = QLabel("분석 중…")

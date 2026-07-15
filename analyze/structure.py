@@ -157,13 +157,22 @@ def analyze_structure(mir: MirResult, time_sig: str = "4/4") -> StructureResult:
     beats_per_bar = mir.beats_per_bar if getattr(mir, "beats_per_bar", 0) else (
         int(time_sig.split("/")[0]) if "/" in time_sig else 4)
     bar_times = _build_bar_grid(mir, beats_per_bar)
+    return structure_from_grid(bar_times, mir.chords, mir.duration, beats_per_bar)
+
+
+def structure_from_grid(bar_times: list[float], chords, duration: float,
+                        beats_per_bar: int) -> StructureResult:
+    """주어진 마디 격자로 구조 분석 — 마디선 보정(§3.5 2차) 재격자화에서 재사용.
+
+    chords: .start_sec/.end_sec/.name을 갖는 코드 스팬 목록(MIR 산출 그대로).
+    """
     n_bars = max(1, len(bar_times) - 1)
 
     per_bar_chord = []
     for b in range(n_bars):
         start = bar_times[b]
-        end = bar_times[b + 1] if b + 1 < len(bar_times) else mir.duration
-        per_bar_chord.append(_chord_for_bar(start, end, mir.chords))
+        end = bar_times[b + 1] if b + 1 < len(bar_times) else duration
+        per_bar_chord.append(_chord_for_bar(start, end, chords))
 
     # 코드 지속 구간 병합
     segments: list[RawSegment] = []
@@ -175,7 +184,7 @@ def analyze_structure(mir: MirResult, time_sig: str = "4/4") -> StructureResult:
         segments.append(RawSegment(
             start_bar=b, end_bar=j + 1,
             start_sec=bar_times[b],
-            end_sec=bar_times[j + 1] if j + 1 < len(bar_times) else mir.duration,
+            end_sec=bar_times[j + 1] if j + 1 < len(bar_times) else duration,
             chord_name=per_bar_chord[b],
         ))
         b = j + 1

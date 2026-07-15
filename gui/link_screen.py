@@ -76,7 +76,7 @@ class _Onboarding(QWidget):
         self.next_btn = QPushButton("다음")
         self.next_btn.setStyleSheet(T.qss_primary_btn())
         self.next_btn.clicked.connect(self._next)
-        row.addStretch(1); row.addWidget(self.next_btn)
+        row.addStretch(1); row.addWidget(self.next_btn); row.addStretch(1)
         lay.addLayout(row)
         lay.addStretch(1)
         self._render()
@@ -113,58 +113,100 @@ class LinkScreen(QWidget):
     def _build_input(self):
         w = QWidget()
         lay = QVBoxLayout(w)
-        lay.setContentsMargins(60, 0, 60, 0)
+        lay.setContentsMargins(80, 0, 80, 0)
+        lay.setSpacing(6)
         lay.addStretch(1)
 
         logo_row = QHBoxLayout()
         logo_row.addStretch(1)
-        logo_row.addWidget(_logo_widget(76))
+        logo_row.addWidget(_logo_widget(56))
         logo_row.addStretch(1)
         lay.addLayout(logo_row)
-        lay.addSpacing(10)
 
         title = QLabel("ScaleRiff")
         title.setStyleSheet(
             f"color:{T.TEXT_PRIMARY};font-family:'{T.FONT_SANS_EN}';"
-            "font-size:38px;font-weight:900;")
+            "font-size:30px;font-weight:900;")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lay.addWidget(title)
         sub = QLabel("좋아하는 곡 위에서 배우는 즉흥 연주")
-        sub.setStyleSheet(f"color:{T.TEXT_MUTED};font-size:14px;")
+        sub.setStyleSheet(f"color:{T.TEXT_MUTED};font-size:13px;")
         sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lay.addWidget(sub)
-        lay.addSpacing(28)
+        lay.addSpacing(12)
 
+        side_btn_qss = (
+            f"QPushButton{{background:{T.BG_SURFACE_ALT};color:{T.TEXT_BODY};"
+            f"border:1px solid {T.BORDER_DEFAULT};border-radius:10px;padding:10px 14px;}}"
+            f"QPushButton:hover{{border:1px solid {T.BORDER_ACTIVE};}}")
+        # 입력란들은 화면폭과 무관하게 고정폭 + 가운데 정렬(컴팩트)
         row = QHBoxLayout()
         self.url_edit = QLineEdit()
-        self.url_edit.setPlaceholderText("유튜브 링크 또는 오디오 파일 경로를 붙여넣기")
+        self.url_edit.setPlaceholderText(
+            "유튜브 링크, 오디오 파일, 또는 저장된 세션(.json) 경로를 붙여넣기")
         self.url_edit.setStyleSheet(T.qss_input())
         self.url_edit.returnPressed.connect(self._submit)
         row.addWidget(self.url_edit, 1)
-        browse = QPushButton("파일…")
-        browse.setStyleSheet(
-            f"QPushButton{{background:{T.BG_SURFACE_ALT};color:{T.TEXT_BODY};"
-            f"border:1px solid {T.BORDER_DEFAULT};border-radius:10px;padding:12px 16px;}}"
-            f"QPushButton:hover{{border:1px solid {T.BORDER_ACTIVE};}}")
+        browse = QPushButton("파일선택")
+        browse.setStyleSheet(side_btn_qss)
         browse.clicked.connect(self._browse)
         row.addWidget(browse)
-        lay.addLayout(row)
+        row_wrap = QWidget()
+        row_wrap.setFixedWidth(520)
+        row_wrap.setLayout(row)
+        lay.addWidget(row_wrap, alignment=Qt.AlignmentFlag.AlignHCenter)
 
-        lay.addSpacing(20)
+        # 분석 후 세션(.json) 저장 폴더
+        save_row = QHBoxLayout()
+        save_lbl = QLabel("분석 후 저장경로")
+        save_lbl.setStyleSheet(f"color:{T.TEXT_MUTED};font-size:12px;")
+        save_row.addWidget(save_lbl)
+        self.save_edit = QLineEdit()
+        self.save_edit.setStyleSheet(
+            f"QLineEdit{{background:{T.BG_SURFACE_ALT};color:{T.TEXT_BODY};"
+            f"border:1px solid {T.BORDER_DEFAULT};border-radius:8px;"
+            "padding:6px 10px;font-size:12px;}")
+        save_row.addWidget(self.save_edit, 1)
+        save_btn = QPushButton("폴더선택")
+        save_btn.setStyleSheet(side_btn_qss)
+        save_btn.clicked.connect(self._browse_save_dir)
+        save_row.addWidget(save_btn)
+        save_wrap = QWidget()
+        save_wrap.setFixedWidth(520)
+        save_wrap.setLayout(save_row)
+        lay.addWidget(save_wrap, alignment=Qt.AlignmentFlag.AlignHCenter)
+
+        lay.addSpacing(10)
+        # 버튼은 내용 크기 + 가운데 정렬(가로로 안 늘임)
+        go_row = QHBoxLayout()
+        go_row.addStretch(1)
         self.go_btn = QPushButton("분석 시작")
-        self.go_btn.setStyleSheet(
-            f"QPushButton{{background:{T.WHITE};color:{T.BG_BASE};border:none;border-radius:10px;"
-            f"padding:14px;font-size:16px;font-weight:700;}}"
-            f"QPushButton:hover{{background:{T.TEXT_BODY};}}")
+        self.go_btn.setStyleSheet(T.qss_primary_btn())
         self.go_btn.clicked.connect(self._submit)
-        lay.addWidget(self.go_btn)
+        go_row.addWidget(self.go_btn)
+        go_row.addStretch(1)
+        lay.addLayout(go_row)
         lay.addStretch(2)
         return w
 
+    # ── 저장 폴더 ────────────────────────────────────────────────
+    def save_dir(self) -> str:
+        return self.save_edit.text().strip()
+
+    def set_save_dir(self, d: str):
+        self.save_edit.setText(d or "")
+
+    def _browse_save_dir(self):
+        d = QFileDialog.getExistingDirectory(self, "분석 후 저장 폴더 선택",
+                                             self.save_dir() or "")
+        if d:
+            self.save_edit.setText(d)
+
     def _browse(self):
         path, _ = QFileDialog.getOpenFileName(
-            self, "오디오 파일 선택", "",
-            "오디오 (*.mp3 *.wav *.m4a *.flac *.ogg);;모든 파일 (*.*)")
+            self, "오디오/세션 파일 선택", "",
+            "오디오/세션 (*.mp3 *.wav *.m4a *.flac *.ogg *.json);;"
+            "저장된 세션 (*.json);;모든 파일 (*.*)")
         if path:
             self.url_edit.setText(path)
 
