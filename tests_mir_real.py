@@ -32,7 +32,7 @@ def _root(name):
 def measure(name, url, key, expected):
     print(f"\n{'='*64}\n[{name}] expected {expected}  key={key}")
     wav, original, title = resolve_audio(url)
-    res = get_backend("librosa").analyze(wav)
+    res = get_backend().analyze(wav)   # auto: madmom 설치 시 학습 모델, 없으면 librosa
     print(f"  title={title!r}  BPM={res.bpm:.0f}  key={res.key}  "
           f"bars/loop≈{len(expected)}  chords={len(res.chords)}")
     # 원시 구조 관찰: 검출된 코드 스팬(처음 16개)

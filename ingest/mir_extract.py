@@ -1,32 +1,27 @@
 """MIR 추출 — 코드 진행 + 키 + BPM (브리프 §5.1).
 
-한 파이프라인에서 코드/키/BPM을 뽑는다. 외부 API로 교체 가능하도록
-MirBackend 인터페이스로 분리(§2). 기본 구현은 librosa 백엔드.
-
-librosa는 코드 인식을 기본 제공하지 않으므로:
-  - beat-sync chroma(chroma_cqt) → 코드 템플릿 매칭으로 코드 추정
-  - beat_track → BPM/비트
-  - Krumhansl–Schmuckler 키 프로파일 → 키 (실패 시 코드 다이아토닉 적합도 폴백)
+한 파이프라인에서 코드/키/BPM·비트·다운비트·무음경계를 뽑는다.
+  - 코드: madmom 학습 모델(CNN 특징 + CRF 디코딩). 미설치 시 librosa 크로마
+    + maj/min 템플릿 argmax 폴백(무타악기 합성음 등 madmom이 약한 입력용).
+  - 비트·다운비트: madmom RNN/DBN(있으면) → librosa beat_track 폴백.
+  - 키: Krumhansl–Schmuckler 프로파일(실패 시 코드 다이아토닉 적합도 폴백).
 """
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 
 import numpy as np
 
-from analyze.theory import (
-    CHORD_SPECS, SCALE_INTERVALS, pc_name, scale_pcs,
-)
+from analyze.theory import CHORD_SPECS, pc_name, scale_pcs
 
-# 다운비트 트래킹: madmom 우선(요청), 미설치/빌드툴 부재 시 librosa 폴백.
-# madmom은 C 확장 컴파일에 MSVC Build Tools가 필요 → 설치 시 코드 변경 없이 자동 사용.
-try:
-    from madmom.features.downbeats import (
-        RNNDownBeatProcessor, DBNDownBeatTrackingProcessor)
-    _HAS_MADMOM = True
-except Exception:
-    _HAS_MADMOM = False
+# madmom: 비트·다운비트 + 코드 인식(학습 모델). 설치 시 자동 사용, 없으면 librosa 폴백.
+# _madmom_compat가 numpy/collections 옛 별칭을 복원한 뒤 madmom을 import한다(반드시 먼저).
+from ingest._madmom_compat import (
+    HAS_MADMOM as _HAS_MADMOM, Signal as _Signal,
+    RNNDownBeatProcessor, DBNDownBeatTrackingProcessor,
+    CNNChordFeatureProcessor, CRFChordRecognitionProcessor)
+
+_MADMOM_SR = 44100   # madmom 모델 학습 SR(검증된 경로). 입력은 이 SR로 리샘플.
 
 DOWNBEAT_METERS = [3, 4]          # 다운비트 트래킹 박자 후보
 BPM_MIN, BPM_MAX = 70.0, 185.0    # BPM 옥타브 sanity 목표 범위
@@ -82,14 +77,27 @@ def track_beats_downbeats(wav_path: str, y, sr):
     """
     if _HAS_MADMOM:
         try:
-            return _madmom_track(wav_path)
+            return _madmom_track(y, sr)
         except Exception:
             pass  # 실패 시 librosa 폴백
     return _librosa_track(y, sr)
 
 
-def _madmom_track(wav_path: str):
-    act = RNNDownBeatProcessor()(wav_path)
+def _madmom_signal(y, sr):
+    """librosa 샘플(float)을 madmom Signal(int16, _MADMOM_SR)로 변환.
+
+    madmom의 오디오 로더는 시스템 ffmpeg를 찾는데 이 앱은 번들 ffmpeg(다른 이름)를
+    쓰므로 파일 경로 대신 메모리 샘플을 직접 Signal로 넘긴다(로딩 의존성 우회).
+    """
+    import librosa
+    if int(sr) != _MADMOM_SR:
+        y = librosa.resample(y, orig_sr=sr, target_sr=_MADMOM_SR)
+    return _Signal((np.clip(y, -1.0, 1.0) * 32767.0).astype(np.int16),
+                   sample_rate=_MADMOM_SR)
+
+
+def _madmom_track(y, sr):
+    act = RNNDownBeatProcessor()(_madmom_signal(y, sr))
     proc = DBNDownBeatTrackingProcessor(beats_per_bar=DOWNBEAT_METERS, fps=100)
     out = np.atleast_2d(proc(act))          # Nx2: [time, beat_in_bar(1..N)]
     if out.size == 0:
@@ -207,85 +215,58 @@ def detect_content_span(y, sr, duration: float, downbeat_times=None,
     return (start, end)
 
 
-# ── 코드 추정: 벌점 점수 + 루프 평균 + 비터비 평활 ─────────────────
-# 어휘를 5종으로 한정(dim/m7b5는 다이아토닉 코드와 음 겹쳐 오검출 유발).
-_CHORD_VOCAB = ["maj7", "m7", "dom7", "maj", "min"]
-_PEN_ALPHA = 0.5          # 코드 밖 음 벌점 — 무관한 음(예: G7 마디의 강한 패싱톤) 억제
-_CHORD_P_STAY = 0.80      # 비트→다음비트 같은 코드 유지 확률(루프 미검출 시 폴백 평활)
-_CHORD_EMIS_GAIN = 16.0   # 방출 점수 게인 — 전이 페널티와 균형
-_LOOP_SIM_THR = 0.90      # 반복(루프) 판정 자기유사도 임계
-_LOOP_BEAT_CANDS = [8, 12, 16, 24, 32]  # 후보 루프 길이(비트) — 가장 짧은 것 채택
-
-
-def _build_pen_templates() -> tuple[np.ndarray, list[tuple[int, str]]]:
-    """코드 밖 음에 벌점을 주는 매칭 행렬(N×12)과 라벨. 내적이 곧 점수."""
+# ── 코드 추정 폴백(madmom 미설치 시): maj/min 트라이어드 템플릿 argmax ──
+# madmom CRF도 maj/min만 출력하므로 어휘를 맞춰 앱 전체 코드 표기를 일관화한다.
+def _build_triad_templates() -> tuple[np.ndarray, list[tuple[int, str]]]:
+    """12 root × {maj, min} 트라이어드 이진 템플릿(24×12)과 라벨. 내적이 곧 점수."""
     rows, labels = [], []
     for root in range(12):
-        for q in _CHORD_VOCAB:
+        for q in ("maj", "min"):
             ivs, _ = CHORD_SPECS[q]
             tones = {(root + i) % 12 for i in ivs}
-            ni = len(tones); no = 12 - ni
-            rows.append([(1.0 / ni) if p in tones else (-_PEN_ALPHA / no)
-                         for p in range(12)])
+            rows.append([1.0 if p in tones else 0.0 for p in range(12)])
             labels.append((root, q))
     return np.array(rows), labels
 
 
-_PEN_A, _PEN_LABELS = _build_pen_templates()
+_TRIAD_A, _TRIAD_LABELS = _build_triad_templates()
 
 
-def _detect_loop_beats(unit: np.ndarray, bpb: int) -> int:
-    """비트열 크로마(정규화)에서 반복 주기(비트)를 자기유사도로 검출. 없으면 0.
+def _librosa_chords(y, sr, beat_times, beats_per_bar, duration) -> list[ChordSpan]:
+    """madmom 미설치/폴백 코드 인식 — beat-sync CENS 크로마 + maj/min 템플릿 argmax.
 
-    백킹 트랙은 같은 진행을 수십 번 반복하므로 이 주기로 평균내면 워킹 베이스·
-    패싱톤이 상쇄돼 화성이 또렷해진다.
+    비트마다 크로마를 트라이어드 템플릿과 내적해 최고 점수 코드를 고르고(무에너지
+    비트는 직전 라벨 유지), 연속 동일 라벨을 ChordSpan으로 병합한다. 합성음·무타악기
+    트랙처럼 madmom 모델이 약한 입력의 단순·강건한 대안.
     """
-    B = unit.shape[1]
-    for L in _LOOP_BEAT_CANDS:
-        if L >= B or (bpb and L % bpb):
-            continue
-        sims = [float(unit[:, i] @ unit[:, i + L]) for i in range(B - L)]
-        if sims and float(np.mean(sims)) > _LOOP_SIM_THR:
-            return L
-    return 0
+    import librosa
+    cens = librosa.feature.chroma_cens(y=y, sr=sr)
+    bf = np.clip(librosa.time_to_frames(beat_times, sr=sr), 0, cens.shape[1] - 1)
+    sync = (librosa.util.sync(cens, bf, aggregate=np.median)
+            if len(bf) >= 2 else cens.mean(axis=1, keepdims=True))
+    B = sync.shape[1]
+    unit = sync / (np.linalg.norm(sync, axis=0) + 1e-9)
 
+    labels: list[int] = []
+    for i in range(B):
+        if np.linalg.norm(sync[:, i]) > 1e-6:
+            labels.append(int(np.argmax(_TRIAD_A @ unit[:, i])))
+        else:
+            labels.append(labels[-1] if labels else 0)
 
-def _viterbi_chords(emis: np.ndarray, p_stay: float,
-                    gain: float = _CHORD_EMIS_GAIN) -> np.ndarray:
-    """비트별 코드 점수(emis: B×N)를 자기전이 선호로 평활 → 코드 인덱스 경로.
-
-    코드는 보통 여러 비트 지속하므로 같은 코드 유지에 보너스를 준다. gain은
-    방출 점수 차이를 전이 페널티와 비교 가능한 스케일로 키운다(균형 파라미터).
-    """
-    B, N = emis.shape
-    log_e = gain * (emis - emis.max(axis=1, keepdims=True))   # 0 이하 로그 점수
-    l_stay = np.log(p_stay)
-    l_change = np.log((1.0 - p_stay) / max(1, N - 1))
-    dp = log_e[0].copy()
-    bp = np.zeros((B, N), dtype=np.int32)
-    for t in range(1, B):
-        best_prev = int(np.argmax(dp))
-        best_val = dp[best_prev]
-        # 전 시점 최고값 기준 '변경' 후보(자기 자신이면 차선)
-        second = dp.copy(); second[best_prev] = -np.inf
-        second_idx = int(np.argmax(second)); second_val = second[second_idx]
-        new_dp = np.empty(N)
-        for j in range(N):
-            stay = dp[j] + l_stay
-            if best_prev != j:
-                change_val, change_idx = best_val + l_change, best_prev
-            else:
-                change_val, change_idx = second_val + l_change, second_idx
-            if stay >= change_val:
-                new_dp[j] = stay + log_e[t, j]; bp[t, j] = j
-            else:
-                new_dp[j] = change_val + log_e[t, j]; bp[t, j] = change_idx
-        dp = new_dp
-    path = np.zeros(B, dtype=np.int32)
-    path[-1] = int(np.argmax(dp))
-    for t in range(B - 1, 0, -1):
-        path[t - 1] = bp[t, path[t]]
-    return path
+    seg = list(beat_times) + [duration]
+    spans: list[ChordSpan] = []
+    i = 0
+    while i < B:
+        j = i
+        while j + 1 < B and labels[j + 1] == labels[i]:
+            j += 1
+        root, q = _TRIAD_LABELS[labels[i]]
+        name = pc_name(root) + ("m" if q == "min" else "")
+        end = seg[j + 1] if j + 1 < len(seg) else duration
+        spans.append(ChordSpan(float(seg[i]), float(end), name))
+        i = j + 1
+    return spans or [ChordSpan(0.0, duration, "C")]
 
 
 # Krumhansl–Schmuckler 키 프로파일
@@ -293,22 +274,16 @@ _KS_MAJOR = np.array([6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66
 _KS_MINOR = np.array([6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17])
 
 
-def _chord_label(root: int, quality: str) -> str:
-    suffix = {
-        "maj": "", "min": "m", "dom7": "7", "maj7": "maj7",
-        "m7": "m7", "dim": "dim", "m7b5": "m7b5",
-    }[quality]
-    return f"{pc_name(root)}{suffix}"
+class MirBackend:
+    """코드/키/BPM·비트·다운비트·무음경계를 한 번에 추출(§5.1).
 
+    코드 인식은 madmom 학습 모델(설치 시) → 없으면 librosa 크로마 폴백.
+    use_madmom=False면 madmom이 있어도 폴백을 강제한다(무타악기 합성음 테스트용).
+    """
 
-class MirBackend(ABC):
-    @abstractmethod
-    def analyze(self, wav_path: str) -> MirResult: ...
-
-
-class LibrosaBackend(MirBackend):
-    def __init__(self, min_chord_beats: int = 1):
-        self.min_chord_beats = min_chord_beats
+    def __init__(self, use_madmom: bool | None = None):
+        # None → 자동(madmom 있으면 사용). 명시 False면 폴백 강제.
+        self.use_madmom = _HAS_MADMOM if use_madmom is None else (use_madmom and _HAS_MADMOM)
 
     def analyze(self, wav_path: str, progress_cb=None) -> MirResult:
         import librosa
@@ -333,11 +308,13 @@ class LibrosaBackend(MirBackend):
         cb(55, "화성(크로마) 분석…")
         y_harm = librosa.effects.harmonic(y, margin=2.0)
         chroma = librosa.feature.chroma_cqt(y=y_harm, sr=sr)   # 키 추정용
-        # 코드 추정은 CENS(에너지 정규화·평활) — 화성 인식에 더 강건
-        cens = librosa.feature.chroma_cens(y=y, sr=sr)
 
-        cb(62, "코드 추정…")
-        chords = self._chords_from_chroma(cens, sr, beat_times, beats_per_bar, duration)
+        if self.use_madmom:
+            cb(62, "코드 인식(madmom 학습 모델)… 잠시 걸려요")
+            chords = _madmom_chords(y, sr, beat_times, beats_per_bar, duration)
+        else:
+            cb(62, "코드 추정(librosa 폴백)…")
+            chords = _librosa_chords(y, sr, beat_times, beats_per_bar, duration)
 
         cb(66, "화성 온셋·무음 경계…")
         bar_sec = beats_per_bar * (60.0 / bpm if bpm > 0 else 0.5)
@@ -358,71 +335,6 @@ class LibrosaBackend(MirBackend):
                          downbeat_times=downbeat_times,
                          beats_per_bar=beats_per_bar, beat_source=source,
                          content_span=content_span)
-
-    # ── 코드 추정 ────────────────────────────────────────────────
-    def _chords_from_chroma(self, cens, sr, beat_times,
-                            beats_per_bar, duration) -> list[ChordSpan]:
-        """루프 평균 + 코드-밖-음 벌점 점수로 안정적인 코드 진행 추정.
-
-        반복(루프)이 검출되면 모든 사이클의 크로마를 같은 위상끼리 평균내
-        워킹 베이스·패싱톤을 상쇄하고, 마디 위상을 자동 정렬해 마디당 코드를
-        고른다(전 구간에 같은 진행 반복). 루프가 없으면 비트별 비터비로 폴백.
-        """
-        import librosa
-        bf = np.clip(librosa.time_to_frames(beat_times, sr=sr), 0, cens.shape[1] - 1)
-        if len(bf) >= 2:
-            sync = librosa.util.sync(cens, bf, aggregate=np.median)
-        else:
-            sync = cens.mean(axis=1, keepdims=True)
-        B = sync.shape[1]
-        bpb = max(1, int(beats_per_bar))
-        unit = sync / (np.linalg.norm(sync, axis=0) + 1e-9)
-
-        L = _detect_loop_beats(unit, bpb)
-        if L and 2 * bpb <= L < B:
-            # 1) 사이클 평균(워킹 베이스·패싱톤 상쇄)
-            phase = np.zeros((12, L))
-            for i in range(B):
-                phase[:, i % L] += sync[:, i]
-            # 2) 마디 위상 자동 정렬(코드 점수 신뢰도 최대) → 마디별 코드 인덱스
-            nbars = L // bpb
-            best = None
-            for s in range(L):
-                idxs, conf = [], 0.0
-                for b in range(nbars):
-                    v = sum(phase[:, (s + b * bpb + k) % L] for k in range(bpb))
-                    nv = np.linalg.norm(v)
-                    sc = _PEN_A @ (v / nv) if nv > 1e-6 else np.zeros(len(_PEN_LABELS))
-                    idxs.append(int(np.argmax(sc))); conf += float(np.max(sc))
-                if best is None or conf > best[0]:
-                    best = (conf, s, idxs)
-            _, s, bar_idx = best
-            beat_label = [bar_idx[(((i % L) - s) % L) // bpb] for i in range(B)]
-        else:
-            # 루프 없음 → 비트별 벌점 점수 + 비터비 평활
-            emis = np.zeros((B, len(_PEN_LABELS)))
-            for i in range(B):
-                if np.linalg.norm(sync[:, i]) > 1e-6:
-                    emis[i] = _PEN_A @ unit[:, i]
-            beat_label = list(_viterbi_chords(emis, _CHORD_P_STAY))
-
-        seg_bounds = list(beat_times)
-        if len(seg_bounds) < B + 1:
-            seg_bounds = seg_bounds + [duration]
-        spans: list[ChordSpan] = []
-        i = 0
-        while i < B:
-            j = i
-            while j + 1 < B and beat_label[j + 1] == beat_label[i]:
-                j += 1
-            root, q = _PEN_LABELS[int(beat_label[i])]
-            start = seg_bounds[i] if i < len(seg_bounds) else (i * 0.5)
-            end = seg_bounds[j + 1] if j + 1 < len(seg_bounds) else duration
-            spans.append(ChordSpan(float(start), float(end), _chord_label(root, q)))
-            i = j + 1
-        if not spans:
-            spans = [ChordSpan(0.0, duration, "C")]
-        return spans
 
     # ── 키 추정 ──────────────────────────────────────────────────
     def _estimate_key(self, chroma, chords):
@@ -455,11 +367,83 @@ class LibrosaBackend(MirBackend):
         return best
 
 
-def get_backend(name: str = "librosa") -> MirBackend:
-    """MIR 백엔드 팩토리 (§2: 교체 가능 인터페이스).
+# ── madmom 코드 인식(학습 모델) ───────────────────────────────────
+def _madmom_label_to_name(lab: str) -> str | None:
+    """madmom 코드 라벨('C:maj','A#:min','N')을 앱 코드명('C','A#m')으로.
 
-    향후 'madmom' / 'external_api' 등을 추가할 수 있다.
+    madmom CRF는 maj/min 트라이어드만 출력(7th 없음). 근음 표기는 샵으로
+    pc_name과 동일하므로 parse_chord가 그대로 해석한다. 'N'(무코드)은 None.
     """
+    if not lab or lab.startswith("N"):
+        return None
+    root, _, qual = lab.partition(":")
+    return f"{root}m" if qual.strip().lower().startswith("min") else root
+
+
+def _madmom_chords(y, sr, beat_times, beats_per_bar, duration) -> list[ChordSpan]:
+    """madmom CNN 특징 + CRF 디코딩으로 코드 진행 추정 후 비트 격자에 정렬.
+
+    프레임 단위 예측을 비트 중앙값으로 샘플 → 무코드('N')는 이웃 코드로 채워
+    연속성을 유지 → 같은 라벨끼리 병합해 ChordSpan으로 만든다.
+    """
+    sig = _madmom_signal(y, sr)
+    raw = CRFChordRecognitionProcessor()(CNNChordFeatureProcessor()(sig))
+    spans_raw = [(float(s), float(e), str(lab)) for s, e, lab in raw]
+
+    def label_at(t: float) -> str:
+        for s, e, lab in spans_raw:
+            if s <= t < e:
+                return lab
+        return "N"
+
+    B = len(beat_times)
+    if B < 2:   # 비트 격자 없음 → 원시 스팬 직접 사용
+        spans = [ChordSpan(s, e, _madmom_label_to_name(l))
+                 for s, e, l in spans_raw if _madmom_label_to_name(l)]
+        return spans or [ChordSpan(0.0, duration, "C")]
+
+    seg_bounds = list(beat_times) + [duration]
+    beat_lab = [label_at((seg_bounds[i] + seg_bounds[i + 1]) / 2) for i in range(B)]
+
+    # 'N' 채우기(앞으로 채운 뒤 선행 N은 뒤로) — 마디 연속성 유지
+    real = [i for i, l in enumerate(beat_lab) if l != "N"]
+    if not real:
+        beat_lab = ["C:maj"] * B
+    else:
+        last = beat_lab[real[0]]
+        for i in range(B):
+            if beat_lab[i] == "N":
+                beat_lab[i] = last
+            else:
+                last = beat_lab[i]
+        for i in range(real[0]):
+            beat_lab[i] = beat_lab[real[0]]
+
+    spans: list[ChordSpan] = []
+    i = 0
+    while i < B:
+        j = i
+        while j + 1 < B and beat_lab[j + 1] == beat_lab[i]:
+            j += 1
+        name = _madmom_label_to_name(beat_lab[i]) or "C"
+        spans.append(ChordSpan(float(seg_bounds[i]), float(seg_bounds[j + 1]), name))
+        i = j + 1
+    return spans or [ChordSpan(0.0, duration, "C")]
+
+
+def get_backend(name: str = "auto") -> MirBackend:
+    """MIR 백엔드 팩토리.
+
+    'auto'(기본): madmom 설치 시 학습 모델로 코드 인식, 없으면 librosa 폴백.
+    'librosa': madmom이 있어도 librosa 폴백 강제(무타악기 합성음 테스트용).
+    'madmom': madmom 강제(미설치 시 에러).
+    """
+    if name == "auto":
+        return MirBackend()
+    if name == "madmom":
+        if not _HAS_MADMOM:
+            raise RuntimeError("madmom 미설치 — pip install madmom (setuptools<81)")
+        return MirBackend(use_madmom=True)
     if name == "librosa":
-        return LibrosaBackend()
+        return MirBackend(use_madmom=False)
     raise ValueError(f"알 수 없는 MIR 백엔드: {name}")

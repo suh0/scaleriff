@@ -26,8 +26,8 @@ def build_real_timeline(source: str, progress_cb=None) -> Timeline:
     # 1) 오디오 확보 (§2)
     wav, playback_path, title = resolve_audio(source, cb)
 
-    # 2) MIR — 코드/키/BPM/비트·다운비트/무음경계
-    backend = get_backend("librosa")
+    # 2) MIR — 코드/키/BPM/비트·다운비트/무음경계 (madmom 설치 시 학습 모델 자동 사용)
+    backend = get_backend()
     mir = backend.analyze(wav, progress_cb=cb)
 
     # 3) 구조 분석 — 다운비트 마디격자/루프 감지
