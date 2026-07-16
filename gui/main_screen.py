@@ -11,7 +11,9 @@ import bisect
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QFrame, QComboBox
 )
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import (
+    Qt, pyqtSignal, QPropertyAnimation, QEasingCurve, QPoint
+)
 
 from player.timeline import Timeline
 from player.playhead import Playhead
@@ -22,6 +24,7 @@ from ml.model import load_model
 from ml.generate import bake_examples
 
 from gui import theme as T
+from gui.anim import stagger
 from gui.widgets.piano import PianoWidget
 from gui.widgets.scrub_bar import ScrubBar
 from gui.widgets.mini_guide import MiniGuide
@@ -31,6 +34,38 @@ from gui.widgets.pass_card import PassCard
 
 # 코드/가이드를 재생 위치보다 앞당겨 표시하는 보정값(초). 0 = 보정 없음.
 SYNC_LOOKAHEAD_SEC = 0.0
+
+
+class SlideGuide(QWidget):
+    """다음 스케일 미리보기(1옥타브) — 내용이 바뀌는 박에 위에서 내려오며 교체.
+
+    자식(MiniGuide)은 부모 사각형에 클리핑되므로 위(-h)에서 0으로 미끄러져
+    들어오는 동안 바깥으로 새지 않는다.
+    """
+
+    def __init__(self, w: int = 200, h: int = 58, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(w, h)
+        self.guide = MiniGuide(self)
+        self.guide.setGeometry(0, 0, w, h)
+        self._anim = QPropertyAnimation(self.guide, b"pos", self)
+        self._anim.setDuration(280)
+        self._anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+
+    def set_scale(self, note_set, chord_tones, root: int):
+        self.guide.set_scale(note_set, chord_tones, root)
+        if self.isVisible():
+            self._anim.stop()
+            self._anim.setStartValue(QPoint(0, -self.height()))
+            self._anim.setEndValue(QPoint(0, 0))
+            self._anim.start()
+        else:
+            self.guide.move(0, 0)
+
+    def clear(self):
+        self._anim.stop()
+        self.guide.move(0, 0)
+        self.guide.clear()
 
 
 class MainScreen(QWidget):
@@ -78,7 +113,31 @@ class MainScreen(QWidget):
         top.addWidget(self.bpm_lbl)
         root.addLayout(top)
 
-        # ── 코드 HUD: 좌=현재 / 우=다음(텍스트+미니 가이드+카운트인) ──
+        # ── 다음 진행 미리보기: 건반(현재 스케일) 바로 위 — 좌=왼손 / 우=오른손 ──
+        #    바뀌는 박(구간 경계)에 위에서 내려오며 교체(SlideGuide).
+        #    배치는 아래 피아노 직전에서 root에 추가.
+        cap_qss = f"color:{T.TEXT_MUTED};font-size:11px;"
+        prev_row = QHBoxLayout()
+        lcol = QVBoxLayout(); lcol.setSpacing(2)
+        lcap = QLabel("다음 ▸ 왼손(코드톤)")
+        lcap.setStyleSheet(cap_qss)
+        lcol.addWidget(lcap)
+        self.next_l = SlideGuide()
+        lcol.addWidget(self.next_l)
+        prev_row.addLayout(lcol)
+        prev_row.addStretch(1)
+        rcol = QVBoxLayout(); rcol.setSpacing(2)
+        rcap = QLabel("다음 ▸ 오른손(스케일)")
+        rcap.setStyleSheet(cap_qss)
+        rcap.setAlignment(Qt.AlignmentFlag.AlignRight)
+        rcol.addWidget(rcap)
+        self.next_r = SlideGuide()
+        rcol.addWidget(self.next_r, alignment=Qt.AlignmentFlag.AlignRight)
+        prev_row.addLayout(rcol)
+        self._prev_wrap = QWidget()
+        self._prev_wrap.setLayout(prev_row)
+
+        # ── 코드 HUD: 좌=현재 / 우=다음(텍스트+카운트인) — 재생바 바로 위 배치 ──
         hud = QFrame()
         hud.setStyleSheet(
             f"QFrame{{background:{T.BG_INSET};border:1px solid {T.BORDER_SUBTLE};"
@@ -116,17 +175,13 @@ class MainScreen(QWidget):
             f"color:{T.TEXT_MUTED};font-family:'{T.FONT_MONO}';font-size:12px;border:none;")
         self.next_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         nxt.addWidget(self.next_lbl)
-        # 다음 진행 스케일 미리보기 — 1옥타브 건반 이미지(§6)
-        self.next_guide = MiniGuide()
-        self.next_guide.setFixedSize(250, 68)
-        nxt.addWidget(self.next_guide)
         self.countin = CountIn()
         self.countin.setFixedWidth(250)
         nxt.addWidget(self.countin)
         hl.addLayout(nxt)
-        root.addWidget(hud)
+        self._hud = hud          # 배치는 아래 스크럽 직전에서 root에 추가
 
-        # ── 리프연습 토글 + 난이도/루프 (HUD 아래, ON/OFF 버튼형) ──
+        # ── 리프연습 토글 + 난이도/루프 — 제일 위(상단바 바로 아래) ──
         rrow = QHBoxLayout()
         self.riff_btn = QPushButton("리프연습")
         self.riff_btn.setCheckable(True)
@@ -162,12 +217,17 @@ class MainScreen(QWidget):
         root.addLayout(rrow)
         self._style_riff_btn()
 
+        # ── 다음 미리보기 → 피아노(현재 스케일) 순서로 쌓기 ──
+        root.addWidget(self._prev_wrap)
         # ── 피아노 (리프연습과 무관하게 가만히 — 가이드 그대로) ──
         self.piano = PianoWidget()
         # 화면 건반은 항상 오른손(솔로) 존으로 채점(§7.5)
         self.piano.notePlayed.connect(
             lambda midi, on: self.on_midi_note(midi, on, screen=True))
         root.addWidget(self.piano, 1)
+
+        # ── 코드박스(HUD) — 재생바 바로 위 ──
+        root.addWidget(hud)
 
         # ── 스크럽 ──
         self.scrub = ScrubBar()
@@ -208,6 +268,10 @@ class MainScreen(QWidget):
         self.loop_rows.setSpacing(4)
         pv.addLayout(self.loop_rows)
         pv.addStretch(1)
+
+    def showEvent(self, e):
+        super().showEvent(e)
+        stagger([self._prev_wrap, self.piano, self._hud, self.scrub, self.play_btn])
 
     # ── 리프연습 토글 버튼 스타일 ────────────────────────────────
     def _style_riff_btn(self):
@@ -454,10 +518,14 @@ class MainScreen(QWidget):
         nxt = self.tl.next_segment(seg)
         if nxt:
             self.next_lbl.setText(f"다음 ▸  {nxt.chord.name}   {nxt.scale_name}")
-            self.next_guide.set_scale(nxt.note_set, nxt.chord_tones(), nxt.scale_root)
+            # 왼손 = 다음 코드의 코드톤만 / 오른손 = 다음 스케일 전체
+            ct = nxt.chord_tones()
+            self.next_l.set_scale(ct, ct, nxt.chord.root)
+            self.next_r.set_scale(nxt.note_set, ct, nxt.scale_root)
         else:
             self.next_lbl.setText("")
-            self.next_guide.clear()
+            self.next_l.clear()
+            self.next_r.clear()
 
     # ── 매 틱 라이브 갱신: 카운트인 + 리프 헤드 ──────────────────
     def _update_live(self, sec: float):

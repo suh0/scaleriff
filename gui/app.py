@@ -60,7 +60,8 @@ class AppWindow(QMainWindow):
         self.beat.proceedRequested.connect(self._enter_score)
         self.beat.backToLinkRequested.connect(self._go_link)
         self.score.practiceRequested.connect(self._enter_main)
-        self.score.backToLinkRequested.connect(self._go_link)
+        self.score.backToBeatRequested.connect(
+            lambda: self.stack.setCurrentWidget(self.beat))
         self.main_screen.backToLinkRequested.connect(self._go_link)
         self.main_screen.backToScoreRequested.connect(self._go_score)
 

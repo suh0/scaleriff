@@ -14,6 +14,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, pyqtSignal, QSize
 
 from gui import theme as T
+from gui.anim import stagger
 
 try:
     from PyQt6.QtSvgWidgets import QSvgWidget
@@ -109,6 +110,18 @@ class LinkScreen(QWidget):
         self.stack.addWidget(self._onboard)   # 0
         self.stack.addWidget(self._input)     # 1
         self.stack.setCurrentIndex(0 if show_onboarding else 1)
+        self.stack.currentChanged.connect(lambda _: self._animate_page())
+
+    # ── 입장 애니메이션: 로고 → 제목 → 입력란 순 ────────────────
+    def showEvent(self, e):
+        super().showEvent(e)
+        self._animate_page()
+
+    def _animate_page(self):
+        if self.stack.currentIndex() == 0:
+            stagger([self._onboard.card, self._onboard.next_btn])
+        else:
+            stagger(self._input_items)
 
     def _build_input(self):
         w = QWidget()
@@ -119,7 +132,8 @@ class LinkScreen(QWidget):
 
         logo_row = QHBoxLayout()
         logo_row.addStretch(1)
-        logo_row.addWidget(_logo_widget(56))
+        logo = _logo_widget(56)
+        logo_row.addWidget(logo)
         logo_row.addStretch(1)
         lay.addLayout(logo_row)
 
@@ -187,6 +201,8 @@ class LinkScreen(QWidget):
         go_row.addStretch(1)
         lay.addLayout(go_row)
         lay.addStretch(2)
+        # 입장 애니메이션 순서(위 → 아래)
+        self._input_items = [logo, title, sub, row_wrap, save_wrap, self.go_btn]
         return w
 
     # ── 저장 폴더 ────────────────────────────────────────────────

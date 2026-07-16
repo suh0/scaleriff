@@ -16,7 +16,7 @@ def main():
     app = QApplication(sys.argv)
     app.setApplicationName("즉흥연주 트레이너")
     win = AppWindow()
-    win.show()
+    win.showMaximized()   # 시작 시 전체화면(최대화)
     sys.exit(app.exec())
 
 

@@ -42,13 +42,15 @@ def main():
     assert os.path.exists(win._session_path(tl)), "세션 자동 저장 안 됨"
     assert win.stack.currentWidget() is win.beat
     assert win.beat.grid.count() > 0, "박자 화면에 코드 목록 없음"
-    win.beat._on_confirm()      # 확정 = 멈춤+적용+편집 잠금, 화면 유지
+    assert not win.beat.holder.isEnabled(), "확정 전 코드표 잠김 아님"
+    win.beat._on_confirm()      # 확정 = 멈춤+적용+편집 잠금 / 코드표 열림
     assert win.stack.currentWidget() is win.beat
     assert win.beat._locked and win.beat.confirm_btn.text() == "수정"
     assert not win.beat.zoom_l.isEnabled() and not win.beat.bpm_edit.isEnabled()
-    win.beat._on_confirm()      # 수정 = 잠금 해제
+    assert win.beat.holder.isEnabled() and win.beat._loop_wrap.isEnabled()
+    win.beat._on_confirm()      # 수정 = 잠금 해제 / 코드표 다시 잠김
     assert not win.beat._locked and win.beat.confirm_btn.text() == "확정"
-    assert win.beat.zoom_l.isEnabled()
+    assert win.beat.zoom_l.isEnabled() and not win.beat.holder.isEnabled()
     win.beat._on_done()         # 조정 완료 → 악보 화면
     assert win.stack.currentWidget() is win.score
     # 악보 화면: 사용된 스케일 칩이 종류 수만큼 생성 + 첫 스케일이 기본 선택됐는지
@@ -56,6 +58,20 @@ def main():
     assert win.score._sel_kind in tl.scale_riffs, "기본 선택 스케일 없음"
     win.score._show_riff(list(tl.scale_riffs)[-1])     # 다른 스케일 선택 → 리프 갱신
     assert win.score._sel_kind == list(tl.scale_riffs)[-1]
+    # 리프 재생성: 변주 시드 증가 + 그 종류 구간 재타일링
+    k0 = win.score._sel_kind
+    win.score._regen_riff()
+    assert tl.scale_riffs[k0].get("variant") == 1, "재생성 변주 안 됨"
+    assert all(s.example for s in tl.segments if s.scale and s.scale.kind == k0)
+    # 리프 미리듣기: 노트 수만큼 재생 예약 + 중단
+    win.score._play_riff()
+    assert len(win.score._riff_timers) == len(tl.scale_riffs[k0]["notes"])
+    win.score._stop_riff()
+    assert not win.score._riff_timers
+    # ← 박자 조정 버튼 = 조정 화면으로
+    win.score.backToBeatRequested.emit()
+    assert win.stack.currentWidget() is win.beat
+    win._enter_score()
     win.score.practiceRequested.emit()
     assert win.stack.currentWidget() is win.main_screen
 
@@ -65,6 +81,10 @@ def main():
     ms._render_at(tl.segments[1].start_sec + 0.1)
     ms.on_midi_note(64, True)
     ms.on_midi_note(64, False)
+    # 다음 진행 미리보기(왼쪽 위=코드톤 / 오른쪽 위=스케일) 갱신
+    nseg = tl.next_segment(tl.segments[1])
+    assert ms.next_r.guide._note_set == set(nseg.note_set), "오른손 미리보기 미갱신"
+    assert ms.next_l.guide._note_set == set(nseg.chord_tones()), "왼손 미리보기 미갱신"
 
     # 리프연습 ON/OFF 토글 + 리프 뷰 표시 연동
     ms._toggle_riff(); assert ms._mode == "practice" and not ms.riff.isHidden()
@@ -164,11 +184,9 @@ def main():
     ms._toggle_riff()
 
     # §3.5 분석 보정: 루프 override → 연습 재진입 시 채점에 반영(스플릿은 C3 고정)
-    sc = win.score
-    sc.loop_box.setCurrentIndex(sc.loop_box.findData(4))
-    assert tl.loop_override == 4 and tl.split_point == 48, \
-        (tl.loop_override, tl.split_point)
-    sc.practiceRequested.emit()                  # → 메인 재진입 = 엔진 재생성
+    tl.loop_override = 4                         # (UI 콤보 제거 — 값 경로만 검증)
+    assert tl.split_point == 48
+    win.score.practiceRequested.emit()           # → 메인 재진입 = 엔진 재생성
     assert win.stack.currentWidget() is win.main_screen
     eng2 = ms.scorer
     assert eng2 is not eng, "재진입 시 엔진 미재생성"
@@ -268,15 +286,26 @@ def main():
         "getText": staticmethod(lambda *a, **k: ("인트로", True))})
     bs._toggle_loop_sel()
     assert bs._loop_sel == -1
+    bs._on_cell_hover(1)                      # 시작 전 호버 → 그 마디만 표시
+    assert bs._highlight_bars() == {1}
     bs._on_cell(2, tl3.segments[1])           # 시작 3마디
     assert bs._loop_sel == 2
+    bs._on_cell_hover(0)                      # 시작 후 호버 → 범위 미리보기
+    assert bs._highlight_bars() == {0, 1, 2}
+    assert bs._cells[1].styleSheet() == bs._cells[1]._hl_qss
     bs._on_cell(0, tl3.segments[0])           # 끝 1마디(역순 입력 → 정렬)
+    assert bs._loop_sel is None                # press 처리 즉시 모드 종료
+    app.processEvents()                        # 이름 입력은 press 이벤트 후(지연 모달)
     _bsm.QInputDialog = _qid
     assert tl3.loops == [{"name": "인트로", "start_bar": 0, "end_bar": 2, "on": True}]
-    assert bs._loop_sel is None and bs.loops_row.count() == 1
+    assert bs.loops_row.count() == 1
     bs._del_loop(0)
     assert tl3.loops == [] and bs.loops_row.count() == 0
     tl3.loops.append({"name": "인트로", "start_bar": 0, "end_bar": 2, "on": True})
+
+    # 코드 선택 리스트의 다이아토닉 강조 판정(C장조)
+    assert bs._is_diatonic_name("Dm7") and bs._is_diatonic_name("G7")
+    assert not bs._is_diatonic_name("Eb") and not bs._is_diatonic_name("Cm")
 
     # 확정 후 코드 수정 → 조정 완료가 잠금 상태면 재격자화 생략(수정 보존)
     bs._apply_chord(tl3.segments[0], "Am")
@@ -339,7 +368,11 @@ def main():
     assert win._timeline.chord_spans == tl3.chord_spans   # 원자료도 복원 → 재보정 가능
     _os.remove(sess)
 
-    print("\nSMOKE OK — 스케일/악보+수동수정/리프동기재생/리프불변식(1마디·스케일안·밀도·해결·음역)/채점UI/보정/난이도/리프일치/마디선+확정잠금/루프정의·사이드바/건반간격/파형·세션 정상")
+    # 입장 애니메이션 헬퍼 — 헤드리스에서 예외 없이 동작
+    from gui.anim import stagger as _stagger
+    _stagger([ms.play_btn, ms.scrub])
+
+    print("\nSMOKE OK — 스케일/악보+수동수정/리프동기재생/리프불변식(1마디·스케일안·밀도·해결·음역)/채점UI/보정/난이도/리프일치/마디선+확정잠금/루프정의·사이드바/건반간격/파형·세션/애니메이션 정상")
 
 
 if __name__ == "__main__":

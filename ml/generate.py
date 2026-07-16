@@ -218,7 +218,7 @@ def _kind_seed(kind: str) -> int:
     return sum((i + 1) * ord(c) for i, c in enumerate(kind))
 
 
-def generate_scale_riff(model, scale_kind: str, n_bars=1) -> list[dict]:
+def generate_scale_riff(model, scale_kind: str, n_bars=1, variant=0) -> list[dict]:
     """스케일 종류당 1개 리프(루트 0 상대값).
 
     초기 음악적 파이프라인(generate_phrase)에 위임 — 학습 분포(있으면) 기반
@@ -228,7 +228,7 @@ def generate_scale_riff(model, scale_kind: str, n_bars=1) -> list[dict]:
     """
     quality = _KIND_QUALITY.get(scale_kind, "maj7")
     events = [(0, 0, quality)]                       # 루트 0 기준 대표 코드
-    base = _kind_seed(scale_kind)
+    base = _kind_seed(scale_kind) + variant * 1000   # variant = 재생성 변주(§8)
     # 밀도 하한 거부샘플링: 분포는 그대로 두되 너무 빈(<3음/마디) 추출만 기각.
     # 결정적(같은 종류=같은 결과). 끝까지 못 채우면 가장 음 많은 후보 채택.
     min_notes = 3 * max(1, n_bars)
@@ -243,17 +243,18 @@ def generate_scale_riff(model, scale_kind: str, n_bars=1) -> list[dict]:
     return best
 
 
-def _make_riff(model, kind: str, max_bars: int) -> dict:
+def _make_riff(model, kind: str, max_bars: int, variant: int = 0) -> dict:
     """스케일 종류 1개의 리프 dict(상대값 + note_set/chord_tones/quality)."""
     from ml.representation import SCALE_DEGREES, QFAM_CHORD_TONES, quality_family
     quality = _KIND_QUALITY.get(kind, "maj7")
     qfam = quality_family(quality)
     return {
-        "notes": generate_scale_riff(model, kind, n_bars=max_bars),
+        "notes": generate_scale_riff(model, kind, n_bars=max_bars, variant=variant),
         "note_set": sorted(SCALE_DEGREES.get(kind, SCALE_DEGREES["메이저"])),
         "chord_tones": sorted(QFAM_CHORD_TONES.get(qfam, QFAM_CHORD_TONES["maj"])),
         "quality": quality,
         "n_bars": max_bars,
+        "variant": variant,
     }
 
 
@@ -294,6 +295,16 @@ def bake_examples(timeline, model, max_bars=1):
     for seg in timeline.segments:
         _tile_segment(timeline, seg)
     return timeline
+
+
+def rebake_kind(timeline, model, kind: str, max_bars=1) -> dict:
+    """리프 재생성 — 같은 종류의 다른 변주(시드 변경) + 그 종류 구간 전부 재타일링."""
+    v = (timeline.scale_riffs.get(kind) or {}).get("variant", 0) + 1
+    timeline.scale_riffs[kind] = _make_riff(model, kind, max_bars, variant=v)
+    for seg in timeline.segments:
+        if seg.scale and seg.scale.kind == kind:
+            _tile_segment(timeline, seg)
+    return timeline.scale_riffs[kind]
 
 
 def bake_segment(timeline, seg, model, max_bars=1):

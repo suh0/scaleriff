@@ -10,6 +10,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 
 from gui import theme as T
+from gui.anim import stagger
 
 
 class BuildWorker(QThread):
@@ -83,6 +84,10 @@ class AnalyzingScreen(QWidget):
         self.err_btn.hide()
         lay.addWidget(self.err_btn)
         lay.addStretch(2)
+
+    def showEvent(self, e):
+        super().showEvent(e)
+        stagger([self.title, self.msg, self.bar, self.log])
 
     def start(self, build_fn, source):
         self.bar.setValue(0)
