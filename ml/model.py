@@ -57,14 +57,7 @@ class MarkovModel:
             self.meta["phrases"] += 1
         return self
 
-    # ── 추론: 백오프로 카운트 분포 ──────────────────────────────
-    def counts(self, qfam, scale, metric, prev) -> dict[int, int]:
-        for k in self._backoff_keys(qfam, scale, metric, prev):
-            d = self.table.get(k)
-            if d:
-                return {int(t): c for t, c in d.items()}
-        return {}
-
+    # ── 추론 ─────────────────────────────────────────────────────
     def blended(self, qfam, scale, metric, prev, decay=0.5) -> dict[int, float]:
         """백오프 '첫 히트만' 절벽 대신 보간 — 단계별 정규화 분포를 감쇠 혼합.
 

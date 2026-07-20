@@ -5,7 +5,8 @@
   그대로 반복(AA') — 외워서 다른 데 써먹기 좋은 리프 구조.
 - 멜로디 층: 컨투어(아치/상행/하행/웨이브) 목표선 + 스텝모션 + 정박 코드톤
   앵커 + 비코드톤 3연속 금지 + 마지막 음 코드톤 해결.
-- 모델 개입: MarkovModel.blended(보간 백오프) 분포를 도수 가중에 곱함.
+- 모델 개입(있으면): blended(보간 백오프) 분포를 도수 가중에 곱하고,
+  학습된 칸별 온셋 확률(_onset_probs)로 리듬 셀 가중치를 보정.
 출력은 항상 **배정 스케일 안의 음만**(게이트), 그리드 토큰을
 ml.representation.decode 로 example_phrase({midi, beat_pos, dur_beats})로 변환.
 """
@@ -14,7 +15,7 @@ import math
 import random
 
 from ml.representation import (
-    BOS, REST, HOLD, VOCAB, onset_token, is_onset, token_degree, decode,
+    BOS, REST, HOLD, ONSET0, VOCAB, onset_token, is_onset, token_degree, decode,
     SCALE_DEGREES, QFAM_CHORD_TONES,
     STEPS_PER_BAR, quality_family,
 )
@@ -66,6 +67,7 @@ def _nearest_chord_tone(deg, cts):
 
 
 # ── 리듬 층: 박 단위 셀(16분 4칸 안의 온셋 오프셋) — 정박 위주 ──
+# 손 가중치 = 리프 구조의 하한(prior). 모델이 있으면 학습 온셋 통계를 곱한다.
 _CELLS: list[tuple[tuple[int, ...], float]] = [
     ((0,), 3.0),            # ♩ 한 음
     ((0, 2), 5.0),          # ♪♪ — 기본 밀도
@@ -78,8 +80,33 @@ _CELLS: list[tuple[tuple[int, ...], float]] = [
 ]
 
 
-def _pick_cell(rng: random.Random, must_start=False, no_empty=False):
-    pool = [(c, w) for c, w in _CELLS
+def _onset_probs(model) -> "list[float] | None":
+    """마디 내 16칸별 P(onset) — 일반 컨텍스트('*|*|metric')의 온셋 질량.
+
+    학습 데이터의 리듬(어느 칸에서 음이 시작되는가) 통계를 리듬 셀 선택에
+    반영하기 위한 것. 컨텍스트가 하나라도 비면 None(손 가중치만 사용)."""
+    probs = []
+    for metric in range(STEPS_PER_BAR):
+        d = model.table.get(model._key("*", "*", metric, ()))
+        if not d:
+            return None
+        tot = sum(d.values())
+        probs.append(sum(c for t, c in d.items() if int(t) >= ONSET0) / tot)
+    return probs
+
+
+def _cell_likelihood(cell, p4) -> float:
+    """셀의 학습 우도 = 칸별 온셋 확률의 곱(온셋 칸=p, 빈 칸=1-p)."""
+    w = 1.0
+    for off in range(4):
+        p = min(0.95, max(0.05, p4[off]))      # 극단 확률 클램프
+        w *= p if off in cell else (1.0 - p)
+    return w
+
+
+def _pick_cell(rng: random.Random, must_start=False, no_empty=False, p4=None):
+    pool = [(c, w * (_cell_likelihood(c, p4) if p4 else 1.0))
+            for c, w in _CELLS
             if (not must_start or (c and c[0] == 0))
             and (not no_empty or c)]
     r = rng.random() * sum(w for _, w in pool)
@@ -91,13 +118,17 @@ def _pick_cell(rng: random.Random, must_start=False, no_empty=False):
     return pool[-1][0]
 
 
-def _bar_cells(rng: random.Random, beats: int):
-    """마디 리듬 = 앞 절반 모티프를 뒤 절반에 그대로 반복(AA')."""
+def _bar_cells(rng: random.Random, beats: int, onset_probs=None):
+    """마디 리듬 = 앞 절반 모티프를 뒤 절반에 그대로 반복(AA').
+
+    onset_probs(있으면): 학습된 칸별 온셋 확률로 셀 가중치 보정."""
     half = max(1, beats // 2)
     motif = []
     for b in range(half):
         prev_empty = bool(motif) and not motif[-1]
-        motif.append(_pick_cell(rng, must_start=(b == 0), no_empty=prev_empty))
+        p4 = onset_probs[b * 4:(b + 1) * 4] if onset_probs else None
+        motif.append(_pick_cell(rng, must_start=(b == 0),
+                                no_empty=prev_empty, p4=p4))
     return (motif + motif)[:beats]
 
 
@@ -116,7 +147,8 @@ def _contour_target(shape: str, f: float) -> float:
 
 
 # 학습 테이블에 없는 스케일 라벨 → 근접 라벨 질의(백오프 L4 직행 방지).
-# 실데이터(markov.json) 라벨: {메이저, 마이너, 도리안, 믹솔리디안, 로크리안}.
+# 실데이터(markov.json) 라벨: {메이저, 마이너, 도리안, 프리지안, 리디안,
+# 믹솔리디안, 로크리안} — 아이오니안/에올리안만 별칭 폴백, 나머지는 안전망.
 _SCALE_QUERY_FALLBACK = {
     "아이오니안": "메이저", "리디안": "메이저", "믹솔리디안": "메이저",
     "에올리안": "마이너", "프리지안": "마이너", "로크리안": "마이너",
@@ -139,7 +171,9 @@ def melodic_grid(model, qfams, scale_kind, n_steps, rng):
     npool = len(deg_pool)
     beats = STEPS_PER_BAR // 4                 # 16분 4칸 = 1박
     n_bars = max(1, n_steps // STEPS_PER_BAR)
-    cells = _bar_cells(rng, beats)             # 리듬은 모든 마디 공유(반복 학습)
+    trained = is_trained(model)
+    probs = _onset_probs(model) if trained else None
+    cells = _bar_cells(rng, beats, probs)      # 리듬은 모든 마디 공유(반복 학습)
     onsets: list[int] = []
     empty_zones: set[int] = set()
     for bar in range(n_bars):
@@ -164,7 +198,6 @@ def melodic_grid(model, qfams, scale_kind, n_steps, rng):
             hold[t] = HOLD
 
     shape = rng.choice(("arch", "asc", "desc", "wave"))
-    trained = is_trained(model)
     q_scale = _query_scale(model, scale_kind) if trained else scale_kind
     prev_k = 0                                  # 근음 인덱스에서 출발
     run_nonchord = 0
@@ -188,7 +221,8 @@ def melodic_grid(model, qfams, scale_kind, n_steps, rng):
         force_chord = run_nonchord >= 2 and cts
         weights = []
         for k, d in enumerate(deg_pool):
-            w = 0.1 + prior.get(d, 0.0)                    # 재정규화 prior + floor
+            w = 0.03 + prior.get(d, 0.0)                   # 재정규화 prior + floor
+            # floor 0.03: 모델 prior가 구조 가중치 대비 실질 발언권을 갖는 수준.
             dist = min(abs(k - prev_k), npool - abs(k - prev_k))
             w *= 1.0 / (1 + dist) ** 2                     # 스텝모션(도약 억제)
             if dist == 0:
@@ -322,10 +356,10 @@ def generate_scale_riff(model, scale_kind: str, n_bars=1, variant=0,
                         density_penalty=0.0) -> list[dict]:
     """스케일 종류당 1개 리프(루트 0 상대값).
 
-    초기 음악적 파이프라인(generate_phrase)에 위임 — 학습 분포(있으면) 기반
-    리듬·라인 + 쉼표 호흡 + 보이스리딩 + 코드톤 해결. 제약은 model_grid/
-    rule_based_grid 안에서 soft bias로 적용(첫박 코드톤·스케일음 3연속 금지·
-    같은 음 반복 억제). 종류명 시드로 결정적(같은 종류=같은 리프).
+    음악적 파이프라인(generate_phrase)에 위임 — 학습 분포(있으면) 기반
+    리듬·라인 + 쉼표 호흡 + 보이스리딩 + 코드톤 해결. 제약은 melodic_grid
+    안에서 soft bias로 적용(첫박 코드톤·스케일음 3연속 금지·같은 음 반복
+    억제). 종류명 시드로 결정적(같은 종류=같은 리프).
     """
     quality = _KIND_QUALITY.get(scale_kind, "maj7")
     events = [(0, 0, quality)]                       # 루트 0 기준 대표 코드
@@ -347,7 +381,6 @@ def generate_scale_riff(model, scale_kind: str, n_bars=1, variant=0,
 def _make_riff(model, kind: str, max_bars: int, variant: int = 0,
                density_penalty: float = 0.0) -> dict:
     """스케일 종류 1개의 리프 dict(상대값 + note_set/chord_tones/quality)."""
-    from ml.representation import SCALE_DEGREES, QFAM_CHORD_TONES, quality_family
     quality = _KIND_QUALITY.get(kind, "maj7")
     qfam = quality_family(quality)
     return {
