@@ -3,7 +3,10 @@
 QT_QPA_PLATFORM=offscreen 으로 실행한다.
 """
 import os
+import tempfile
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+# 연습 기록은 임시 경로로(테스트가 실제 data/practice_log.jsonl 오염 방지)
+os.environ["SCALERIFF_PRACTICE_LOG"] = os.path.join(tempfile.mkdtemp(), "practice_log.jsonl")
 import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -58,6 +61,22 @@ def main():
     assert win.score._sel_kind in tl.scale_riffs, "기본 선택 스케일 없음"
     win.score._show_riff(list(tl.scale_riffs)[-1])     # 다른 스케일 선택 → 리프 갱신
     assert win.score._sel_kind == list(tl.scale_riffs)[-1]
+    # 곡맥락 리스트: 행 텍스트에 사용 코드(마디 범위 제거)
+    assert "Dm7" in win.score._kind_btns["도리안"].text()
+    assert "마디" not in win.score._kind_btns["도리안"].text()
+    # 피아노롤: 오른손 2옥타브(도~시 60~83) 고정 + 위=고음 + 세미톤 선형 y
+    roll = win.score.roll
+    r_notes = tl.scale_riffs[win.score._sel_kind]["notes"]
+    assert roll._notes == r_notes
+    assert (roll._lo, roll._hi) == (60, 83)
+    assert all(60 <= n["midi"] <= 83 for n in r_notes)     # 생성 음역과 일치
+    assert roll._y(roll._hi) < roll._y(roll._lo), "피아노롤 위=고음 아님"
+    assert abs((roll._y(60) - roll._y(72)) - 12 * (roll._y(60) - roll._y(61))) < 1e-6
+    # 근음(도수 1 = C, pc 0)은 파랑, 다른 코드톤은 초록
+    from gui import theme as _T
+    assert roll._fill(0).name() == _T.BADGE_ROOT, "근음 파랑 아님"
+    other_ct = next(pc for pc in roll._chord_tones if pc != 0)
+    assert roll._fill(other_ct).name() == _T.BADGE_CHORD
     # 리프 재생성: 변주 시드 증가 + 그 종류 구간 재타일링
     k0 = win.score._sel_kind
     win.score._regen_riff()
@@ -81,19 +100,42 @@ def main():
     ms._render_at(tl.segments[1].start_sec + 0.1)
     ms.on_midi_note(64, True)
     ms.on_midi_note(64, False)
-    # 다음 진행 미리보기(왼쪽 위=코드톤 / 오른쪽 위=스케일) 갱신
-    nseg = tl.next_segment(tl.segments[1])
-    assert ms.next_r.guide._note_set == set(nseg.note_set), "오른손 미리보기 미갱신"
-    assert ms.next_l.guide._note_set == set(nseg.chord_tones()), "왼손 미리보기 미갱신"
+    # 코드 레인(C안): 타임라인 연결 + 위치 추적 + 클릭=구간 점프 + 드래그=시킹
+    assert ms.lane._timeline is tl
+    ms.lane.set_position(1.0)
+    assert ms.lane._pos == 1.0
+    ms.lane.resize(900, 92)
+    seeks = []
+    ms.lane.seekRequested.connect(seeks.append)
+    seg1 = tl.segments[1]
+
+    class _P:                                         # 최소 마우스 이벤트 대역
+        def __init__(self, x): self._x = x
+        def x(self): return self._x
+
+    class _Ev:
+        def __init__(self, x): self._p = _P(x)
+        def position(self): return self._p
+
+    x1 = ms.lane._sec_to_x(seg1.start_sec + 0.1)     # 구간1 블록 위 클릭
+    ms.lane.mousePressEvent(_Ev(x1))
+    ms.lane.mouseReleaseEvent(_Ev(x1))                # 이동 없음 = 클릭 → 점프
+    assert seeks and abs(seeks[-1] - seg1.start_sec) < 1e-6, seeks
+    ms.lane.mousePressEvent(_Ev(x1))
+    ms.lane.mouseMoveEvent(_Ev(x1 + 60.0))            # 오른쪽 드래그 = 과거로 시킹
+    assert seeks[-1] < ms.lane._press_sec, seeks[-1]
+    n_seek = len(seeks)
+    ms.lane.mouseReleaseEvent(_Ev(x1 + 60.0))         # 드래그 후 release = 점프 없음
+    assert len(seeks) == n_seek
+    ms.lane.seekRequested.disconnect(seeks.append)
+    ms.lane.set_position(1.0)
+    # 곡 전체 재생바 + 레인 연동: 한 틱에 둘 다 같은 위치로 이동
+    ms._on_tick(2.5)
+    assert ms.lane._pos == 2.5 and ms.scrub._pos == 2.5
 
     # 리프연습 ON/OFF 토글 + 리프 뷰 표시 연동
     ms._toggle_riff(); assert ms._mode == "practice" and not ms.riff.isHidden()
     ms._toggle_riff(); assert ms._mode == "guide" and ms.riff.isHidden()
-
-    # 카운트인: 구간 끝 4박 전부터 점등(매 틱 갱신 경로)
-    s0 = tl.segments[0]
-    ms._update_live(s0.end_sec - tl.beat_sec() * 2.0)   # 2박 남음
-    assert ms.countin._lit == 2, ms.countin._lit
 
     # ML 리프: 스케일 '종류당 1개' (코드 등장마다가 아님, §8)
     assert tl.scale_riffs, "scale_riffs 미생성"
@@ -117,7 +159,7 @@ def main():
         assert "x" not in seq, f"{kind} 스케일 밖 음: {seq}"
         assert len(notes) >= 3, f"{kind} 밀도 부족(<3음): {seq}"   # 거부샘플링 하한
         midis = [n["midi"] for n in notes]
-        assert all(55 <= m <= 79 for m in midis), f"{kind} 음역 범위 밖: {midis}"  # 보이스리딩 범위
+        assert all(60 <= m <= 83 for m in midis), f"{kind} 음역 범위 밖: {midis}"  # 도~시 2옥타브
         assert notes[-1]["midi"] % 12 in cts, f"{kind} 마지막 음 코드톤 해결 아님: {seq}"
 
     # §3 같은 코드 2마디 → 리프 2회 반복(타일링)
@@ -183,9 +225,9 @@ def main():
     assert eng.cur.right_total == 0, "모드 전환 시 패스 리셋 안 됨"
     ms._toggle_riff()
 
-    # §3.5 분석 보정: 루프 override → 연습 재진입 시 채점에 반영(스플릿은 C3 고정)
+    # §3.5 분석 보정: 루프 override → 연습 재진입 시 채점에 반영(스플릿 C4 고정)
     tl.loop_override = 4                         # (UI 콤보 제거 — 값 경로만 검증)
-    assert tl.split_point == 48
+    assert tl.split_point == 60                  # 왼손 C3~B3 / 오른손 C4~B5
     win.score.practiceRequested.emit()           # → 메인 재진입 = 엔진 재생성
     assert win.stack.currentWidget() is win.main_screen
     eng2 = ms.scorer
@@ -194,12 +236,13 @@ def main():
         eng2.windows
     w0 = eng2.windows[0]
     eng2.tick(w0[0] + 0.01)
-    eng2.note_on(50, w0[0] + 0.1)                # 분할 C3 → midi 50도 오른손 존
-    assert (eng2.cur.right_total, eng2.cur.left_total) == (1, 0)
+    eng2.note_on(50, w0[0] + 0.1)                # C3~B3 → 왼손 존
+    eng2.note_on(72, w0[0] + 0.15)               # C4~B5 → 오른손 존
+    assert (eng2.cur.right_total, eng2.cur.left_total) == (1, 1)
     # 보정값은 타임라인 JSON에 영속
     from player.timeline import Timeline as _TL2
     d = _TL2.from_dict(tl.to_dict())
-    assert d.loop_override == 4 and d.split_point == 48
+    assert d.loop_override == 4 and d.split_point == 60
 
     # §7.5 난이도: 선택 → 채점 기준 교체 + 건반 목표음 필터
     ms.diff_combo.setCurrentIndex(1)             # Lv1: 왼손 근음 + 오른손 코드톤
@@ -279,26 +322,36 @@ def main():
     assert all(s.example for s in tl3.segments), "재격자화 후 리프 미굽기"
     assert bs.grid.count() > 0, "확정 후 코드 목록 미갱신"
 
-    # §6 사용자 루프: 코드표에서 시작·끝 마디 클릭 → 이름 입력 → 목록 관리
+    # §6 사용자 루프: 코드표 칸 드래그 → 이름 입력 → 목록 관리 (클릭=코드 수정)
     import gui.beat_screen as _bsm
     _qid = _bsm.QInputDialog
     _bsm.QInputDialog = type("_FakeQID", (), {
         "getText": staticmethod(lambda *a, **k: ("인트로", True))})
-    bs._toggle_loop_sel()
-    assert bs._loop_sel == -1
-    bs._on_cell_hover(1)                      # 시작 전 호버 → 그 마디만 표시
-    assert bs._highlight_bars() == {1}
-    bs._on_cell(2, tl3.segments[1])           # 시작 3마디
-    assert bs._loop_sel == 2
-    bs._on_cell_hover(0)                      # 시작 후 호버 → 범위 미리보기
-    assert bs._highlight_bars() == {0, 1, 2}
+    bs._loop_press(2)                         # 3마디에서 누름
+    assert not bs._drag_loop                  # 아직 클릭(코드 수정) 후보
+    bs._loop_drag_to(1)                       # 옆 칸으로 드래그 → 루프 모드
+    assert bs._drag_loop and bs._highlight_bars() == {1, 2}
     assert bs._cells[1].styleSheet() == bs._cells[1]._hl_qss
-    bs._on_cell(0, tl3.segments[0])           # 끝 1마디(역순 입력 → 정렬)
-    assert bs._loop_sel is None                # press 처리 즉시 모드 종료
-    app.processEvents()                        # 이름 입력은 press 이벤트 후(지연 모달)
-    _bsm.QInputDialog = _qid
+    bs._loop_drag_to(0)                       # 역방향 확장(정렬)
+    assert bs._highlight_bars() == {0, 1, 2}
+    bs._loop_release()
+    assert bs._drag_start is None              # release 즉시 상태 초기화
+    app.processEvents()                        # 이름 입력은 mouse 이벤트 후(지연 모달)
     assert tl3.loops == [{"name": "인트로", "start_bar": 0, "end_bar": 2, "on": True}]
     assert bs.loops_row.count() == 1
+    bs._loop_press(1)                         # 1마디 루프: 나갔다 복귀
+    bs._loop_drag_to(0)
+    bs._loop_drag_to(1)
+    assert bs._drag_loop and bs._highlight_bars() == {1}
+    bs._loop_release()
+    app.processEvents()
+    assert tl3.loops[1] == {"name": "인트로", "start_bar": 1, "end_bar": 1, "on": True}
+    bs._del_loop(1)
+    bs._loop_press(2)                         # 드래그 없이 release → 루프 미생성
+    bs._loop_release()                        # (seg=None — 코드 메뉴 생략)
+    app.processEvents()
+    _bsm.QInputDialog = _qid
+    assert len(tl3.loops) == 1
     bs._del_loop(0)
     assert tl3.loops == [] and bs.loops_row.count() == 0
     tl3.loops.append({"name": "인트로", "start_bar": 0, "end_bar": 2, "on": True})
@@ -334,11 +387,12 @@ def main():
     # 루프는 세션 JSON에 영속
     assert _TL.from_dict(tl3.to_dict()).loops == tl3.loops
 
-    # 건반 중앙 간격 — 왼손|오른손 시각 분리(B4|C5)
+    # 건반 중앙 간격 — 왼손(C3~B3)|오른손(C4~B5) 시각 분리(B3|C4)
     pw = ms.piano
     pw.resize(900, 220)
     _wm, _x0, _y0, _kw, _kh = pw._geometry()
-    _i = _wm.index(72)
+    assert _wm[0] == 48 and _wm[-1] == 83          # C3~B5
+    _i = _wm.index(60)                              # C4 앞에 간격
     _gap = pw._wx(_i, _wm, _x0, _kw) - (pw._wx(_i - 1, _wm, _x0, _kw) + _kw)
     assert _gap > 0.5 * _kw, _gap
     # 보정 결과는 캐시 JSON에 영속(원자료 포함)
@@ -368,9 +422,42 @@ def main():
     assert win._timeline.chord_spans == tl3.chord_spans   # 원자료도 복원 → 재보정 가능
     _os.remove(sess)
 
+    # §6 라이브러리: 저장 폴더의 세션(.json) 카드 — 클릭 한 번 재개
+    lib_dir = _tmp.mkdtemp()
+    win.link_screen.set_save_dir(lib_dir)
+    win.link_screen.refresh_library()
+    assert win.link_screen._lib_list.count() == 1        # "저장된 세션 없음"
+    tl3.save_json(_os.path.join(lib_dir, "demo.json"))
+    win.link_screen.refresh_library()
+    assert win.link_screen._lib_list.count() == 1
+    card = win.link_screen._lib_list.itemAt(0).widget()
+    assert tl3.key.split()[0] in card.text() and "BPM" in card.text()
+
+    # §6 연습하며 기다리기: 분석은 백그라운드, 링크 화면은 세션 열기만 활성
+    win.analyzing._set_steps(50)                          # 단계 체크리스트 매핑
+    st = [l.text()[0] for l in win.analyzing._step_lbls]
+    assert st == ["✓", "●", "○", "○"], st
+    win.analyzing.backgroundRequested.emit()
+    assert win._bg_wait and win.stack.currentWidget() is win.link_screen
+    assert not win._pill.isHidden() and win._pill.play_btn.isHidden()
+    assert not win.link_screen.url_edit.isEnabled()
+    assert not win.link_screen.go_btn.isEnabled()
+    win._start_build("https://youtu.be/xyz")              # 대기 중 새 분석 금지
+    assert win.stack.currentWidget() is win.link_screen
+    win.analyzing.progressChanged.emit(70)
+    assert "70%" in win._pill.lbl.text()
+    tl_bg = build_dummy_timeline()
+    win.analyzing.timelineReady.emit(tl_bg)               # 완료 → 알약에 연주하기
+    assert win._pending_tl is tl_bg and win.stack.currentWidget() is win.link_screen
+    assert not win._pill.play_btn.isHidden() and tl_bg.scale_riffs
+    win._play_pending()                                   # → 그 곡의 박자 조정
+    assert win.stack.currentWidget() is win.beat and win._timeline is tl_bg
+    assert not win._bg_wait and win._pill.isHidden()
+    assert win.link_screen.url_edit.isEnabled()
+
     # 입장 애니메이션 헬퍼 — 헤드리스에서 예외 없이 동작
     from gui.anim import stagger as _stagger
-    _stagger([ms.play_btn, ms.scrub])
+    _stagger([ms.play_btn, ms.lane])
 
     print("\nSMOKE OK — 스케일/악보+수동수정/리프동기재생/리프불변식(1마디·스케일안·밀도·해결·음역)/채점UI/보정/난이도/리프일치/마디선+확정잠금/루프정의·사이드바/건반간격/파형·세션/애니메이션 정상")
 

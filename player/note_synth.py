@@ -44,6 +44,16 @@ os.makedirs(_CACHE, exist_ok=True)
 NOTE_DUR = 1.1   # 한 음 길이(초) — 피아노 감쇠
 
 
+def _render_silence_wav() -> str:
+    """예열용 진짜 무음 WAV — 볼륨 트릭 없이 장치만 연다."""
+    path = os.path.join(_CACHE, "silence.wav")
+    if not os.path.exists(path):
+        import soundfile as sf
+        sf.write(path, np.zeros(int(SR * 0.12), dtype=np.int16), SR,
+                 subtype="PCM_16")
+    return path
+
+
 def _render_note_wav(midi: int) -> str:
     path = os.path.join(_CACHE, f"piano_{midi}.wav")
     if os.path.exists(path):
@@ -57,12 +67,20 @@ def _render_note_wav(midi: int) -> str:
 
 
 class NotePlayer(QObject):
-    def __init__(self, parent=None, prewarm=range(60, 72)):
+    # 상시 보유 이펙트는 화면 건반 전 음역(C3~B5 = 48~83)만 미리 로드한다.
+    # 건반 클릭·MIDI·리프 재생 모두 이 안 → lazy 생성(비동기 로드) 무음 방지.
+    # 이 정도(36개)는 백엔드 보이스 한도 안. 범위 밖은 preload()로 대비.
+    def __init__(self, parent=None, prewarm=range(48, 84)):
         super().__init__(parent)
         self._fx: dict[int, object] = {}
         if _HAS_SE:
-            for m in prewarm:     # 표시 범위(C4~B5) 미리 준비
+            for m in prewarm:
                 self._effect(m)
+
+    def preload(self, midis):
+        """재생 예정 음들의 이펙트를 미리 생성(비동기 로드 시작)만 해 둔다."""
+        for m in midis:
+            self._effect(m)
 
     def _effect(self, midi: int):
         if midi in self._fx:
@@ -72,10 +90,46 @@ class NotePlayer(QObject):
         eff = QSoundEffect(self)
         eff.setSource(QUrl.fromLocalFile(_render_note_wav(midi)))
         eff.setVolume(0.7)
+        eff.statusChanged.connect(
+            lambda e=eff, m=midi: e.status() == QSoundEffect.Status.Error
+            and print(f"[note_synth] 로드 실패 midi={m}: {e.source().toString()}"))
         self._fx[midi] = eff
         return eff
 
+    def warmup(self):
+        """오디오 장치 무음 예열 — 첫 재생의 장치 오픈 지연으로
+        초반 음들이 몰려(빨라져) 들리는 것을 방지.
+
+        내용 자체가 무음인 WAV를 재생 — setVolume(0) 트릭은 백엔드에
+        비동기 적용이라 첫 버퍼가 새어나와(어택 블립) 폐기했다.
+        """
+        if not _HAS_SE:
+            return
+        eff = self._fx.get(-1)
+        if eff is None:
+            eff = QSoundEffect(self)
+            eff.setSource(QUrl.fromLocalFile(_render_silence_wav()))
+            self._fx[-1] = eff
+        eff.play()
+
     def play_note(self, midi: int):
         eff = self._effect(midi)
-        if eff is not None:
-            eff.play()
+        if eff is None:
+            return
+        if eff.status() == QSoundEffect.Status.Error:   # 로드 실패 → 1회 재시도
+            self._fx.pop(midi, None)
+            eff = self._effect(midi)
+            if eff is None:
+                return
+        eff.play()
+
+
+_shared: NotePlayer | None = None
+
+
+def shared_player() -> NotePlayer:
+    """앱 전역 공유 NotePlayer — 화면마다 만들면 이펙트가 배로 늘어난다."""
+    global _shared
+    if _shared is None:
+        _shared = NotePlayer()
+    return _shared

@@ -8,7 +8,7 @@
 - 친 건반 (§5.3):
   · 코드톤/스케일음: 배지 유지 + 상태별 컬러 border
   · 스케일 밖: 건반 전체 빨간색 fill (border 없음)
-- 범위: 4옥타브 C3–B6 (MIDI 48–95)
+- 범위: 3옥타브 C3–B5 (MIDI 48–83) — 왼손 C3~B3 / 오른손 C4~B5
 - 흰 건반 가로:세로 비율 WHITE_RATIO 고정 → 어떤 창에서도 비율 유지(레터박스)
 - 배지는 가이드·연습 모드 모두 전체 표시(퀴즈 블러 제거 §10)
 """
@@ -21,12 +21,11 @@ from PyQt6.QtCore import Qt, QRectF, pyqtSignal
 from gui import theme as T
 
 MIDI_LOW  = 48   # C3
-MIDI_HIGH = 95   # B6
+MIDI_HIGH = 83   # B5
 
 WHITE_RATIO = 4.2   # 흰 건반 가로:세로 고정 비율
-# 왼손(아래 2옥타브)/오른손(위 2옥타브) 사이 시각 간격 — 채점 스플릿(C3)은
-# 화면 최좌단이라, 화면상 두 손 구분은 건반 중앙(B4|C5)에 둔다.
-GAP_MIDI  = 72       # 이 음 앞에 간격
+# 왼손(C3~B3)/오른손(C4~B5) 사이 시각 간격 = 채점 스플릿(C4)과 일치.
+GAP_MIDI  = 60       # 이 음(C4) 앞에 간격
 GAP_UNITS = 0.8      # 간격 폭(흰 건반 폭 배수)
 
 WHITE_PCS = {0, 2, 4, 5, 7, 9, 11}
@@ -227,7 +226,7 @@ class PianoWidget(QWidget):
             p.setOpacity(0.25)
 
         if state == "CHORD":
-            bg = QColor(T.BADGE_CHORD)
+            bg = QColor(T.BADGE_ROOT if deg == "1" else T.BADGE_CHORD)  # 근음=파랑
             fg = QColor(T.BADGE_TEXT)
         else:   # SCALE
             bg = QColor(T.BADGE_SCALE)

@@ -24,11 +24,14 @@ from ml.representation import (
 
 
 def _scale_for(qfam: str, region_degs) -> str:
-    """코드군→스케일 종류. 마이너는 6도(♮=9 vs ♭=8) 사용빈도로 도리안/마이너 판별."""
-    if qfam in ("maj", "dom"):
+    """코드군→스케일 종류. dom/dim은 모드 정합 라벨(믹솔리디안/로크리안),
+    마이너는 6도(♮=9 vs ♭=8) 사용빈도로 도리안/마이너 판별."""
+    if qfam == "maj":
         return "메이저"
+    if qfam == "dom":
+        return "믹솔리디안"
     if qfam == "dim":
-        return "마이너"
+        return "로크리안"
     nat6 = sum(1 for d in region_degs if d == 9)
     flat6 = sum(1 for d in region_degs if d == 8)
     return "도리안" if nat6 > flat6 else "마이너"

@@ -2,6 +2,11 @@
 
 실행: python tests_scoring.py
 """
+import os
+import tempfile
+# 연습 기록은 임시 경로로(실제 data/practice_log.jsonl 오염 방지)
+os.environ["SCALERIFF_PRACTICE_LOG"] = os.path.join(tempfile.mkdtemp(), "practice_log.jsonl")
+
 from analyze.theory import parse_chord
 from player.timeline import Timeline, Segment, ScaleOption
 from player.scoring import ScoreEngine
@@ -28,14 +33,14 @@ def test_serialization():
     tl.loops = [{"name": "인트로", "start_bar": 0, "end_bar": 1, "on": True}]
     d = Timeline.from_dict(tl.to_dict())
     assert d.bar_times == [0.0, 2.0, 4.0, 6.0, 8.0]
-    assert d.loop_phase == 0 and d.loop_override == 8 and d.split_point == 48
+    assert d.loop_phase == 0 and d.loop_override == 8 and d.split_point == 60
     assert d.loops == tl.loops and d.loops is not tl.loops
     # 구 JSON(새 키 없음) → 기본값
     old = tl.to_dict()
     for k in ("bar_times", "loop_phase", "loop_override", "split_point", "loops"):
         del old[k]
     d2 = Timeline.from_dict(old)
-    assert d2.bar_times == [] and d2.split_point == 48 and d2.loop_override == 0
+    assert d2.bar_times == [] and d2.split_point == 60 and d2.loop_override == 0
     assert d2.loops == []
     print("직렬화 OK")
 
@@ -44,14 +49,14 @@ def test_zones_and_out():
     eng = ScoreEngine(make_tl())
     assert [w[:2] for w in eng.windows] == [(0.0, 4.0), (4.0, 8.0)]
     eng.tick(0.01)                       # 패스 0 진입(유효)
-    eng.note_on(36, 0.5)                 # C2 왼손(<C3 고정 분할), pc0 ∈ C코드톤 → 적중
+    eng.note_on(36, 0.5)                 # C2 왼손(<C4 분할), pc0 ∈ C코드톤 → 적중
     eng.note_on(72, 0.6)                 # C5 오른손, pc0 ∈ 스케일 → 적중
     eng.note_on(38, 0.7, screen=True)    # 화면건반은 낮아도 오른손 존
     eng.note_on(61, 0.8)                 # C#4 오른손, 스케일 밖
-    eng.note_on(48, 0.9)                 # C3 = 분할점 자체는 오른손 존
+    eng.note_on(48, 0.9)                 # C3 = C4 분할 아래 → 왼손 존
     s = eng.cur
-    assert (s.left_hits, s.left_total) == (1, 1)
-    assert (s.right_hits, s.right_total) == (3, 4)
+    assert (s.left_hits, s.left_total) == (2, 2)
+    assert (s.right_hits, s.right_total) == (2, 3)
     assert s.out_counts == {1: 1} and s.top_out_pc() == 1
     print("존 판정/스케일 밖 OK")
 
@@ -155,6 +160,32 @@ def test_riff_match():
     print("리프 일치도 OK")
 
 
+def test_practice_log():
+    from ml import practice_log as PL
+    from ml.generate import generate_scale_riff
+    from ml.model import load_model
+    # 패스 완료 → 임시 로그에 kind 포함 기록(엔진 경유). 앞 테스트들도 기록하므로 줄 수로 확인.
+    def n_lines():
+        p = os.environ["SCALERIFF_PRACTICE_LOG"]
+        return sum(1 for _ in open(p, encoding="utf-8")) if os.path.exists(p) else 0
+    before = n_lines()
+    eng = ScoreEngine(make_tl())
+    eng.tick(0.01)
+    eng.note_on(72, 0.5)
+    assert eng.tick(4.01) is not None
+    assert n_lines() == before + 1, "패스 기록 안 됨"
+    assert PL.recent_right_pct("이오니안") is not None
+    # 부진 이력(<60) → rebake 경로의 밀도 페널티가 더 성긴 리프를 선택
+    for _ in range(5):
+        PL.append({"kind": "도리안", "right_pct": 40})
+    assert PL.recent_right_pct("도리안") == 40
+    m = load_model()
+    normal = generate_scale_riff(m, "도리안", n_bars=1, variant=7)
+    sparse = generate_scale_riff(m, "도리안", n_bars=1, variant=7, density_penalty=0.15)
+    assert len(sparse) <= len(normal) and len(sparse) >= 3, (len(sparse), len(normal))
+    print(f"연습기록/밀도페널티 OK (음수 {len(normal)}→{len(sparse)})")
+
+
 def main():
     test_serialization()
     test_zones_and_out()
@@ -164,6 +195,7 @@ def main():
     test_override_rebuild()
     test_levels()
     test_riff_match()
+    test_practice_log()
     print("전체 통과")
 
 

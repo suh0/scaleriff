@@ -1,11 +1,10 @@
 """[2a] 박자 조정 화면 (§3.5 2차) — 분석 직후 마디선/BPM 확정.
 
-- 위: 처음 10초 확대바(시작박) / 아래: 마지막 10초 확대바(끝박)
-  두 창 모두 마디선 드래그 = 격자 평행이동(BPM 불변) — 끝박을 움직이면
-  그만큼 시작박이 밀리거나 당겨진다. 두 창은 같은 격자를 공유(반응형).
-- 드래그를 놓으면 그 마디선 위치부터 바로 재생돼 귀로 확인할 수 있다.
-- BPM(간격)은 직접 입력으로만 수정.
-- 확정 시에만 재격자화(regrid) 후 코드·스케일·루프 화면으로 진행
+마스터-디테일: 좌측(고정) = 격자 편집(확대바 2개·박자·BPM·확정·조정완료),
+우측(스크롤) = 마디별 코드표.
+- 두 확대바 모두 마디선 드래그 = 격자 평행이동(BPM 불변), 놓으면 그 위치부터
+  재생. BPM(간격)은 직접 입력으로만 수정. 확정 시에만 재격자화(regrid).
+- 코드표 직접 조작: 칸 클릭 = 코드 수정, 칸 드래그 = 루프 지정(놓으면 이름 입력).
 """
 from __future__ import annotations
 
@@ -18,7 +17,7 @@ from PyQt6.QtWidgets import (
     QGraphicsOpacityEffect, QMenu
 )
 from PyQt6.QtGui import QPainter, QColor, QPen, QFont, QCursor
-from PyQt6.QtCore import Qt, QRectF, pyqtSignal, QTimer, QEvent
+from PyQt6.QtCore import Qt, QRectF, pyqtSignal, QTimer
 
 from gui import theme as T
 from gui.anim import stagger
@@ -33,8 +32,7 @@ from ml.generate import bake_segment
 ZOOM_SEC = 10.0      # 확대 창 길이
 WAVE_BUCKETS = 300   # 확대 창 파형 해상도(컬럼 수)
 BARS_PER_ROW = 8
-CELL_W = 86          # 마디 칸 폭 — 화면 콘텐츠 공통 폭의 기준
-CONTENT_W = BARS_PER_ROW * CELL_W + (BARS_PER_ROW - 1) * 8   # 마디표 전체 폭
+CELL_W = 86          # 마디 칸 폭
 # 수동 코드 수정 선택지(접미사). parse_chord가 인식하는 표기.
 _EDIT_SUFFIXES = ["", "m", "7", "maj7", "m7", "m7b5", "dim", "6", "m6", "sus4"]
 
@@ -176,29 +174,16 @@ class BeatScreen(QWidget):
         self._dur = ZOOM_SEC
         self._applied = None     # 마지막 적용 격자(중복 재격자화 방지)
         self._locked = False     # 확정 후 편집 잠금(확정 ↔ 수정 토글)
-        self._loop_sel: int | None = None   # 루프 지정: None=꺼짐 / -1=시작 대기 / ≥0=시작 마디
-        self._hover_bar: int | None = None  # 루프 지정 중 호버 마디(범위 미리보기)
         self._cells: dict[int, QFrame] = {} # bar → 칸(하이라이트용)
-        self._pan_y: float | None = None    # 루프 지정 중 빈 공간 드래그 패닝
+        self._drag_start: int | None = None # 칸 드래그 시작 마디
+        self._drag_cur: int | None = None   # 드래그 현재 마디
+        self._drag_loop = False             # 시작 칸을 벗어나면 루프 모드
 
-        # 화면 전체가 한 스크롤(마디표 안쪽 스크롤 없음). 조정 완료 버튼은
-        # 스크롤과 무관하게 하단 중앙에 플로팅.
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 0)
-        self.page_scroll = QScrollArea()
-        self.page_scroll.setWidgetResizable(True)
-        self.page_scroll.setStyleSheet(
-            "QScrollArea{border:none;background:transparent;}"
-            "QScrollArea > QWidget > QWidget{background:transparent;}")
-        page = QWidget()
-        page.setStyleSheet("background:transparent;")
-        self.page_scroll.setWidget(page)
-        outer.addWidget(self.page_scroll)
-        # 루프 지정 중 빈 공간 좌클릭 드래그 = 패닝(QScroller는 모달·재grab과
-        # 충돌해 네이티브 크래시 — 자체 구현으로 대체)
-        self.page_scroll.viewport().installEventFilter(self)
-        root = QVBoxLayout(page)
-        root.setContentsMargins(T.PAD_H, T.PAD_V, T.PAD_H, T.PAD_V)
+        # 마스터-디테일: 좌(격자 편집·고정) / 우(마디별 코드표·스크롤)
+        outer = QHBoxLayout(self)
+        outer.setContentsMargins(T.PAD_H, T.PAD_V, T.PAD_H, T.PAD_V)
+        outer.setSpacing(24)
+        root = QVBoxLayout()      # 좌측 마스터 패널
         root.setSpacing(10)
 
         top = QHBoxLayout()
@@ -217,12 +202,11 @@ class BeatScreen(QWidget):
 
         self.hint_lbl = QLabel(
             "마디선을 드래그하면 격자 전체가 함께 이동하고(BPM 불변), 놓으면 "
-            "그 위치부터 재생됩니다. 확정을 누르면 아래 코드 목록이 새 격자로 "
-            "갱신되며 열립니다 — 마디 칸을 눌러 코드를 고치고 루프를 지정하세요.")
+            "그 위치부터 재생됩니다. 확정하면 오른쪽 코드표가 새 격자로 "
+            "갱신되며 열립니다 — 칸 클릭=코드 수정, 칸 드래그=루프 지정.")
         self.hint_lbl.setStyleSheet(f"color:{T.TEXT_MUTED};font-size:12px;")
         self.hint_lbl.setWordWrap(True)
-        self.hint_lbl.setFixedWidth(CONTENT_W)   # 마디표와 같은 폭으로 정렬
-        root.addWidget(self.hint_lbl, alignment=Qt.AlignmentFlag.AlignHCenter)
+        root.addWidget(self.hint_lbl)
 
         # 확대바 두 개를 위아래로 쌓음(처음 10초 아래 마지막 10초)
         edit_col = QVBoxLayout()
@@ -283,33 +267,45 @@ class BeatScreen(QWidget):
         ctrl.addWidget(self.confirm_btn)
         edit_col.addSpacing(4)
         edit_col.addLayout(ctrl)
-        # 편집부 전체를 마디표와 같은 폭으로 가운데 정렬
-        edit_wrap = QWidget()
-        edit_wrap.setFixedWidth(CONTENT_W)
-        edit_wrap.setLayout(edit_col)
-        root.addWidget(edit_wrap, alignment=Qt.AlignmentFlag.AlignHCenter)
+        root.addLayout(edit_col)
+        root.addStretch(1)
 
-        # ── 코드배열표 상단: 루프 지정 + 루프 리스트 관리(§6) ──
+        # ── 조정 완료 → 다음 화면 — 좌측 패널 하단 고정 ──
+        done_row = QHBoxLayout()
+        done_row.addStretch(1)
+        self.done_btn = QPushButton("조정 완료 → 코드·스케일 ▶")
+        self.done_btn.setStyleSheet(T.qss_primary_btn())
+        self.done_btn.clicked.connect(self._on_done)
+        done_row.addWidget(self.done_btn)
+        done_row.addStretch(1)
+        root.addLayout(done_row)
+
+        left_wrap = QWidget()
+        left_wrap.setFixedWidth(420)
+        left_wrap.setLayout(root)
+        outer.addWidget(left_wrap)
+
+        # ── 우측 디테일: 루프 리스트 + 마디별 코드표(스크롤) ──
+        right = QVBoxLayout()
+        right.setSpacing(10)
         loop_row = QHBoxLayout()
-        grid_lbl = QLabel("마디별 코드 (칸 클릭 = 코드 수정)")
+        grid_lbl = QLabel("마디별 코드 (클릭=코드 수정 · 드래그=루프 지정)")
         grid_lbl.setStyleSheet(f"color:{T.TEXT_MUTED};font-size:12px;")
         loop_row.addWidget(grid_lbl)
-        loop_row.addSpacing(12)
-        self.loop_add_btn = QPushButton("루프 지정")
-        self.loop_add_btn.setStyleSheet(T.qss_ghost_btn())
-        self.loop_add_btn.clicked.connect(self._toggle_loop_sel)
-        loop_row.addWidget(self.loop_add_btn)
         self.loops_row = QHBoxLayout()
         self.loops_row.setSpacing(6)
-        loop_row.addSpacing(8)
+        loop_row.addSpacing(12)
         loop_row.addLayout(self.loops_row)
         loop_row.addStretch(1)
         self._loop_wrap = QWidget()
-        self._loop_wrap.setFixedWidth(CONTENT_W)    # 마디표와 같은 폭
         self._loop_wrap.setLayout(loop_row)
-        root.addWidget(self._loop_wrap, alignment=Qt.AlignmentFlag.AlignHCenter)
+        right.addWidget(self._loop_wrap)
 
-        # ── 마디별 코드 목록(수정 가능) — 안쪽 스크롤 없이 페이지에 그대로 ──
+        self.grid_scroll = QScrollArea()
+        self.grid_scroll.setWidgetResizable(True)
+        self.grid_scroll.setStyleSheet(
+            "QScrollArea{border:none;background:transparent;}"
+            "QScrollArea > QWidget > QWidget{background:transparent;}")
         self.holder = QWidget()
         self.holder.setStyleSheet("background:transparent;")
         hwrap = QHBoxLayout(self.holder)      # 표 전체 가운데 정렬
@@ -322,29 +318,12 @@ class BeatScreen(QWidget):
         hwrap.addStretch(1)
         hwrap.addWidget(grid_host)
         hwrap.addStretch(1)
-        root.addWidget(self.holder)
-        root.addStretch(1)
-        root.addSpacing(64)      # 플로팅 버튼에 가리지 않게 바닥 여유
-
-        # ── 조정 완료 → 다음 화면 — 하단 중앙 플로팅(스크롤과 무관) ──
-        self.done_btn = QPushButton("조정 완료 → 코드·스케일 ▶", self)
-        self.done_btn.setStyleSheet(T.qss_primary_btn())
-        self.done_btn.clicked.connect(self._on_done)
-        self.done_btn.raise_()
-
-    def _place_done(self):
-        self.done_btn.adjustSize()
-        self.done_btn.move((self.width() - self.done_btn.width()) // 2,
-                           self.height() - self.done_btn.height() - 14)
-
-    def resizeEvent(self, e):
-        super().resizeEvent(e)
-        self._place_done()
+        self.grid_scroll.setWidget(self.holder)
+        right.addWidget(self.grid_scroll, 1)
+        outer.addLayout(right, 1)
 
     def showEvent(self, e):
         super().showEvent(e)
-        self._place_done()
-        self.done_btn.raise_()
         # 잠금(불투명) 효과가 걸린 쪽은 페이드인 생략(효과 보존)
         zooms = [] if self._locked else [self.zoom_l, self.zoom_r]
         grids = [self.holder] if self._locked else []
@@ -386,7 +365,7 @@ class BeatScreen(QWidget):
         self.playhead.positionChanged.connect(self._on_tick)
         self._applied = self._grid_state()   # 현재 격자 = 적용된 상태(무변경 시 재격자화 생략)
         self._set_locked(False)
-        self._reset_loop_sel()
+        self._reset_drag()
         self._refresh()
         self._build_grid()
         self._build_loops()
@@ -470,7 +449,7 @@ class BeatScreen(QWidget):
             self._dim(w, not locked)
         self.confirm_btn.setText("수정" if locked else "확정")
         if not locked:
-            self._reset_loop_sel()   # 박자 재편집 → 루프 지정 중단
+            self._reset_drag()       # 박자 재편집 → 루프 드래그 중단
 
     def _on_confirm(self):
         if self._locked:                # 수정 — 잠금 해제(재확정 전까지 편집 가능)
@@ -543,11 +522,12 @@ class BeatScreen(QWidget):
             f"font-family:'{T.FONT_MONO}';font-size:10px;border:none;")
         v.addWidget(s)
 
-        if seg is not None:        # 클릭 → 코드 수정 / 루프 지정 중엔 마디 선택
+        if seg is not None:        # 클릭=코드 수정 / 드래그=루프 지정
             cell.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-            cell.mousePressEvent = lambda e, sg=seg, b=bar: self._on_cell(b, sg)
-            cell.enterEvent = lambda e, b=bar: self._on_cell_hover(b)
-            cell.leaveEvent = lambda e: self._on_cell_hover(None)
+            cell.mousePressEvent = lambda e, b=bar: self._loop_press(b)
+            cell.mouseMoveEvent = lambda e: self._loop_drag_to(
+                self._bar_at_global(e.globalPosition().toPoint()))
+            cell.mouseReleaseEvent = lambda e, sg=seg: self._loop_release(sg)
         self._cells[bar] = cell
         return cell
 
@@ -606,22 +586,48 @@ class BeatScreen(QWidget):
         bake_segment(self.tl, seg, self._model)   # 새 종류 리프 생성 + example 갱신
         self._build_grid()
 
-    # ── 사용자 루프(§6): 표에서 시작·끝 마디 클릭으로 정의 ──────
-    def _on_cell_hover(self, bar: int | None):
-        """루프 지정 중 호버 — 시작 전엔 그 마디, 시작 후엔 범위를 미리 표시."""
-        self._hover_bar = bar
-        if self._loop_sel is not None:
+    # ── 사용자 루프(§6): 칸 클릭=코드 수정 · 칸 드래그=루프 지정 ──
+    def _bar_at_global(self, gp) -> int | None:
+        """글로벌 좌표 아래의 마디 칸 — 드래그가 어느 칸 위인지 판정."""
+        for b, c in self._cells.items():
+            try:
+                if c.rect().contains(c.mapFromGlobal(gp)):
+                    return b
+            except RuntimeError:      # 재격자화로 이미 삭제된 칸
+                pass
+        return None
+
+    def _loop_press(self, bar: int):
+        self._drag_start = bar
+        self._drag_cur = bar
+        self._drag_loop = False
+
+    def _loop_drag_to(self, bar: int | None):
+        if self._drag_start is None or bar is None:
+            return
+        if bar != self._drag_start or self._drag_loop:
+            self._drag_loop = True    # 시작 칸을 벗어나면 루프 모드(복귀=1마디)
+            self._drag_cur = bar
             self._update_loop_highlight()
 
+    def _loop_release(self, seg=None):
+        start, cur, was_loop = self._drag_start, self._drag_cur, self._drag_loop
+        self._reset_drag()
+        if start is None:
+            return
+        if was_loop:                                # 드래그 → 루프 이름 입력
+            s, e = sorted((start, cur))
+            # 모달을 mouse 이벤트 안에서 바로 열면 재진입 크래시 —
+            # 이벤트가 끝난 뒤에 연다.
+            QTimer.singleShot(0, lambda: self._ask_loop_name(s, e))
+        elif seg is not None:                       # 제자리 클릭 → 코드 수정
+            self._edit_chord(seg)
+
     def _highlight_bars(self) -> set[int]:
-        if self._loop_sel is None:
+        if not self._drag_loop or self._drag_start is None:
             return set()
-        if self._loop_sel < 0:                      # 시작 대기 → 호버 마디만
-            return {self._hover_bar} if self._hover_bar is not None else set()
-        if self._hover_bar is None:                 # 시작 선택됨 → 시작 마디
-            return {self._loop_sel}
-        a, b = sorted((self._loop_sel, self._hover_bar))
-        return set(range(a, b + 1))                 # 시작~호버 범위 미리보기
+        a, b = sorted((self._drag_start, self._drag_cur))
+        return set(range(a, b + 1))                 # 드래그 범위 미리보기
 
     def _update_loop_highlight(self):
         hl = self._highlight_bars()
@@ -631,19 +637,11 @@ class BeatScreen(QWidget):
             except RuntimeError:      # 재격자화로 이미 삭제된 칸
                 pass
 
-    def _on_cell(self, bar: int, seg):
-        if self._loop_sel is None:
-            self._edit_chord(seg)
-        elif self._loop_sel < 0:                    # 시작 마디
-            self._loop_sel = bar
-            self.loop_add_btn.setText(f"시작 {bar + 1}마디 — 끝 마디 클릭")
-            self._update_loop_highlight()
-        else:                                       # 끝 마디 → 이름 입력
-            s, e = sorted((self._loop_sel, bar))
-            self._reset_loop_sel()
-            # 모달을 mousePressEvent 안에서 바로 열면 재진입 크래시 —
-            # press 이벤트가 끝난 뒤에 연다.
-            QTimer.singleShot(0, lambda: self._ask_loop_name(s, e))
+    def _reset_drag(self):
+        self._drag_start = None
+        self._drag_cur = None
+        self._drag_loop = False
+        self._update_loop_highlight()
 
     def _ask_loop_name(self, s: int, e: int):
         name, ok = QInputDialog.getText(
@@ -653,37 +651,6 @@ class BeatScreen(QWidget):
             self.tl.loops.append({"name": name.strip(), "start_bar": s,
                                   "end_bar": e, "on": True})
             self._build_loops()
-
-    def _toggle_loop_sel(self):
-        if self._loop_sel is None:
-            self._loop_sel = -1
-            self.loop_add_btn.setText("시작 마디 클릭…")
-        else:
-            self._reset_loop_sel()
-
-    def _reset_loop_sel(self):
-        self._loop_sel = None
-        self._hover_bar = None
-        self._pan_y = None
-        self.loop_add_btn.setText("루프 지정")
-        self._update_loop_highlight()
-
-    def eventFilter(self, obj, ev):
-        """루프 지정 중에만: 뷰포트 빈 공간 좌클릭 드래그 = 화면 패닝."""
-        if obj is self.page_scroll.viewport() and self._loop_sel is not None:
-            t = ev.type()
-            if (t == QEvent.Type.MouseButtonPress
-                    and ev.button() == Qt.MouseButton.LeftButton):
-                self._pan_y = ev.position().y()
-            elif (t == QEvent.Type.MouseMove and self._pan_y is not None
-                    and ev.buttons() & Qt.MouseButton.LeftButton):
-                sb = self.page_scroll.verticalScrollBar()
-                sb.setValue(sb.value() - int(ev.position().y() - self._pan_y))
-                self._pan_y = ev.position().y()
-                return True
-            elif t == QEvent.Type.MouseButtonRelease:
-                self._pan_y = None
-        return super().eventFilter(obj, ev)
 
     def _build_loops(self):
         while self.loops_row.count():

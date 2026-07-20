@@ -2,9 +2,12 @@
 
 - 워드마크 로고(원형 황동 링) + 'ScaleRiff' 세리프 워드마크
 - 링크 붙여넣기 + 로컬 파일 선택
+- 라이브러리: 저장 폴더의 세션(.json)을 카드로 — 클릭 한 번 재개
+- 제한 모드(백그라운드 분석 중): 세션(.json) 선택만 활성
 - (첫 실행) 온보딩 3카드. 스킵 가능
 """
 from __future__ import annotations
+import json
 import os
 
 from PyQt6.QtWidgets import (
@@ -115,6 +118,7 @@ class LinkScreen(QWidget):
     # ── 입장 애니메이션: 로고 → 제목 → 입력란 순 ────────────────
     def showEvent(self, e):
         super().showEvent(e)
+        self.refresh_library()
         self._animate_page()
 
     def _animate_page(self):
@@ -125,8 +129,13 @@ class LinkScreen(QWidget):
 
     def _build_input(self):
         w = QWidget()
-        lay = QVBoxLayout(w)
-        lay.setContentsMargins(80, 0, 80, 0)
+        outer = QHBoxLayout(w)
+        outer.setContentsMargins(80, 0, 80, 0)
+        outer.addStretch(1)
+
+        col = QWidget()
+        lay = QVBoxLayout(col)
+        lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(6)
         lay.addStretch(1)
 
@@ -201,9 +210,86 @@ class LinkScreen(QWidget):
         go_row.addStretch(1)
         lay.addLayout(go_row)
         lay.addStretch(2)
+        outer.addWidget(col)
+
+        # ── 라이브러리(최근 세션) — 저장 폴더 *.json 카드 ────────
+        lib = QFrame()
+        lib.setFixedWidth(280)
+        lib.setStyleSheet(
+            f"QFrame{{background:{T.BG_SURFACE};border:1px solid {T.BORDER_SUBTLE};"
+            f"border-radius:12px;}}")
+        ll = QVBoxLayout(lib)
+        ll.setContentsMargins(16, 16, 16, 16)
+        ll.setSpacing(8)
+        lib_title = QLabel("라이브러리")
+        lib_title.setStyleSheet(
+            f"color:{T.TEXT_MUTED};font-family:'{T.FONT_MONO}';"
+            "font-size:12px;font-weight:700;border:none;")
+        ll.addWidget(lib_title)
+        self._lib_list = QVBoxLayout()
+        self._lib_list.setSpacing(6)
+        ll.addLayout(self._lib_list)
+        ll.addStretch(1)
+        self._lib_panel = lib
+        lib_wrap = QVBoxLayout()
+        lib_wrap.addStretch(1)
+        lib_wrap.addWidget(lib)
+        lib_wrap.addStretch(2)
+        outer.addSpacing(28)
+        outer.addLayout(lib_wrap)
+        outer.addStretch(1)
+
+        # 제한 모드에서 잠글 위젯들(세션 선택만 남김)
+        self._restricted_widgets = (self.url_edit, self.go_btn,
+                                    self.save_edit, save_btn)
+        self._restricted = False
         # 입장 애니메이션 순서(위 → 아래)
-        self._input_items = [logo, title, sub, row_wrap, save_wrap, self.go_btn]
+        self._input_items = [logo, title, sub, row_wrap, save_wrap,
+                             self.go_btn, lib]
         return w
+
+    # ── 라이브러리 ───────────────────────────────────────────────
+    def refresh_library(self):
+        while self._lib_list.count():
+            it = self._lib_list.takeAt(0)
+            if it.widget():
+                it.widget().deleteLater()
+        paths = []
+        d = self.save_dir()
+        if d and os.path.isdir(d):
+            paths = sorted(
+                (os.path.join(d, f) for f in os.listdir(d)
+                 if f.lower().endswith(".json")),
+                key=os.path.getmtime, reverse=True)[:8]
+        if not paths:
+            empty = QLabel("저장된 세션 없음")
+            empty.setStyleSheet(
+                f"color:{T.TEXT_DIM};font-size:12px;border:none;")
+            self._lib_list.addWidget(empty)
+            return
+        for p in paths:
+            try:
+                with open(p, encoding="utf-8") as f:
+                    d0 = json.load(f)
+                meta = f"{d0.get('key', '')} · {float(d0.get('bpm', 0)):.0f} BPM"
+                name = d0.get("title") or os.path.basename(p)
+            except (OSError, ValueError, TypeError):
+                continue    # 세션 파일 아님
+            card = QPushButton(f"{name[:24]}\n{meta}")
+            card.setStyleSheet(
+                f"QPushButton{{background:{T.BG_SURFACE_ALT};color:{T.TEXT_BODY};"
+                f"border:1px solid {T.BORDER_DEFAULT};border-radius:8px;"
+                "padding:8px 12px;font-size:12px;text-align:left;}"
+                f"QPushButton:hover{{border:1px solid {T.BORDER_ACTIVE};"
+                f"color:{T.TEXT_PRIMARY};}}")
+            card.clicked.connect(lambda _, path=p: self.buildRequested.emit(path))
+            self._lib_list.addWidget(card)
+
+    # ── 제한 모드(백그라운드 분석 중) — 세션(.json) 선택만 활성 ──
+    def set_restricted(self, on: bool):
+        self._restricted = bool(on)
+        for wdg in self._restricted_widgets:
+            wdg.setEnabled(not on)
 
     # ── 저장 폴더 ────────────────────────────────────────────────
     def save_dir(self) -> str:
@@ -219,6 +305,13 @@ class LinkScreen(QWidget):
             self.save_edit.setText(d)
 
     def _browse(self):
+        if self._restricted:    # 분석 중 — 세션 열기만, 선택 즉시 로드
+            path, _ = QFileDialog.getOpenFileName(
+                self, "저장된 세션 선택", self.save_dir() or "",
+                "저장된 세션 (*.json)")
+            if path:
+                self.buildRequested.emit(path)
+            return
         path, _ = QFileDialog.getOpenFileName(
             self, "오디오/세션 파일 선택", "",
             "오디오/세션 (*.mp3 *.wav *.m4a *.flac *.ogg *.json);;"

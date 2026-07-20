@@ -65,6 +65,22 @@ class MarkovModel:
                 return {int(t): c for t, c in d.items()}
         return {}
 
+    def blended(self, qfam, scale, metric, prev, decay=0.5) -> dict[int, float]:
+        """백오프 '첫 히트만' 절벽 대신 보간 — 단계별 정규화 분포를 감쇠 혼합.
+
+        구체적 컨텍스트가 희소해도 일반 컨텍스트로 부드럽게 섞여 내려간다.
+        """
+        out: dict[int, float] = {}
+        w = 1.0
+        for k in self._backoff_keys(qfam, scale, metric, prev):
+            d = self.table.get(k)
+            if d:
+                tot = sum(d.values())
+                for t, c in d.items():
+                    out[int(t)] = out.get(int(t), 0.0) + w * c / tot
+                w *= decay
+        return out
+
     # ── 직렬화 ───────────────────────────────────────────────────
     def to_dict(self):
         return {"meta": self.meta, "table": self.table}

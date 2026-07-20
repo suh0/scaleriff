@@ -111,7 +111,7 @@ def _nearest_midi(pc: int, prev: int, lo: int, hi: int) -> int:
     return best
 
 
-def decode(grid, chord_roots, prev_midi=67, lo=55, hi=79) -> list[dict]:
+def decode(grid, chord_roots, prev_midi=71, lo=60, hi=83) -> list[dict]:
     """그리드 → [{midi, beat_pos(박), dur_beats}]. 보이스리딩으로 옥타브 배치."""
     notes, i, n = [], 0, len(grid)
     prev = prev_midi

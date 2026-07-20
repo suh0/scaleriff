@@ -9,6 +9,7 @@ from __future__ import annotations
 import bisect
 from dataclasses import dataclass, field
 
+from ml import practice_log
 from player.timeline import Timeline
 
 LANDING_BEATS = 0.25   # 코드톤 착지 판정 폭(±박)
@@ -227,6 +228,16 @@ class ScoreEngine:
                 self.trend.append(s.right_pct())
         self._pass_no += 1
         s.number = self._pass_no
+        seg = self.tl.segment_at(w[0])
+        try:    # 연습 기록 영속화(§7.5) — 기록 실패가 채점을 막지 않는다
+            # ponytail: 패스가 여러 구간을 걸치면 첫 구간 kind로 기록. 구간별 분리는 필요해지면.
+            practice_log.append({
+                "kind": seg.scale.kind if seg and seg.scale else None,
+                "mode": self.mode, "level": self.level,
+                "right_pct": s.right_pct(), "left_pct": s.left_pct(),
+                "riff_pct": s.riff_pct()})
+        except OSError:
+            pass
         return s
 
     def on_seek(self, sec: float):

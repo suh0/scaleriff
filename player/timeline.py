@@ -123,7 +123,7 @@ class Timeline:
     bar_times: list[float] = field(default_factory=list)  # 마디 시작 시각(+끝) — 채점 그리드
     loop_phase: int = 0        # 감지 루프 시작 마디 오프셋
     loop_override: int = 0     # 사용자 루프 주기 보정(마디 수, 0=감지값 사용)
-    split_point: int = 48      # 왼손/오른손 존 분할 MIDI(C3 고정)
+    split_point: int = 60      # 왼손(C3~B3)/오른손(C4~B5) 존 분할 MIDI(C4 고정)
     # 사용자 정의 루프 — 코드배열표에서 마디 2개 선택으로 생성(§6).
     # [{"name": str, "start_bar": int, "end_bar": int(포함), "on": bool}, …]
     loops: list = field(default_factory=list)
@@ -210,7 +210,7 @@ class Timeline:
             bar_times=list(d.get("bar_times", [])),
             loop_phase=d.get("loop_phase", 0),
             loop_override=d.get("loop_override", 0),
-            split_point=d.get("split_point", 48),
+            split_point=d.get("split_point", 60),
             loops=[dict(l) for l in d.get("loops", [])],
             beat_times=list(d.get("beat_times", [])),
             chord_spans=[list(c) for c in d.get("chord_spans", [])],

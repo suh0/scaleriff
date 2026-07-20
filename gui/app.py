@@ -8,9 +8,11 @@ from __future__ import annotations
 import hashlib
 import os
 
-from PyQt6.QtWidgets import QMainWindow, QStackedWidget
+from PyQt6.QtWidgets import (
+    QMainWindow, QStackedWidget, QFrame, QHBoxLayout, QLabel, QPushButton
+)
 from PyQt6.QtGui import QFont
-from PyQt6.QtCore import QSettings
+from PyQt6.QtCore import QSettings, pyqtSignal
 
 from player.timeline import Timeline
 
@@ -25,6 +27,43 @@ from gui.score_screen import ScoreScreen
 from gui.main_screen import MainScreen
 from ml.timeline_builder import build_timeline
 from ml.generate import bake_examples
+
+
+class AnalysisPill(QFrame):
+    """상단 고정 알약 — 백그라운드 분석 진행(N%) → 완료 시 '연주하기' 활성."""
+    playRequested = pyqtSignal()
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.setStyleSheet(
+            f"QFrame{{background:{T.BG_SURFACE};border:1px solid {T.BORDER_DEFAULT};"
+            f"border-radius:16px;}}")
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(16, 6, 10, 6)
+        self.lbl = QLabel("분석 중… 0%")
+        self.lbl.setStyleSheet(
+            f"color:{T.TEXT_BODY};font-family:'{T.FONT_MONO}';"
+            "font-size:12px;border:none;")
+        lay.addWidget(self.lbl)
+        self.play_btn = QPushButton("연주하기 ▶")
+        self.play_btn.setStyleSheet(T.qss_ghost_btn())
+        self.play_btn.clicked.connect(self.playRequested.emit)
+        self.play_btn.hide()
+        lay.addWidget(self.play_btn)
+        self.hide()
+
+    def set_progress(self, pct: int):
+        self.lbl.setText(f"분석 중… {pct}%")
+
+    def set_ready(self, title: str):
+        self.lbl.setText(f"분석 완료 — {title[:20]}" if title else "분석 완료")
+        self.play_btn.show()
+        self.adjustSize()
+
+    def set_failed(self):
+        self.lbl.setText("분석 실패 — 링크 화면에서 다시 시도")
+        self.play_btn.hide()
+        self.adjustSize()
 
 
 class AppWindow(QMainWindow):
@@ -57,6 +96,14 @@ class AppWindow(QMainWindow):
         self.link_screen.buildRequested.connect(self._start_build)
         self.analyzing.timelineReady.connect(self._on_timeline_ready)
         self.analyzing.backRequested.connect(lambda: self.stack.setCurrentWidget(self.link_screen))
+        # 백그라운드 분석 대기(연습하며 기다리기) — 상단 알약
+        self._pill = AnalysisPill(self)
+        self._bg_wait = False
+        self._pending_tl = None
+        self.analyzing.backgroundRequested.connect(self._enter_bg_wait)
+        self.analyzing.progressChanged.connect(self._pill.set_progress)
+        self.analyzing.analysisFailed.connect(self._on_bg_failed)
+        self._pill.playRequested.connect(self._play_pending)
         self.beat.proceedRequested.connect(self._enter_score)
         self.beat.backToLinkRequested.connect(self._go_link)
         self.score.practiceRequested.connect(self._enter_main)
@@ -77,10 +124,13 @@ class AppWindow(QMainWindow):
         # 저장된 세션(.json) → 분석 생략, 즉시 로드(§4: 한 번 구운 건 다시 안 굽는다)
         if source.lower().endswith(".json") and os.path.exists(source):
             try:
-                self._on_timeline_ready(Timeline.load_json(source))
+                self._open_timeline(Timeline.load_json(source))
                 return
             except (OSError, KeyError, ValueError):
                 pass    # 세션 파일이 아니면 일반 분석으로
+        if self._bg_wait:
+            return      # 백그라운드 분석 중엔 새 분석 시작 안 함(세션 열기만)
+        self._pill.hide()    # 이전 실패 알약 정리
         self.stack.setCurrentWidget(self.analyzing)
         self.analyzing.start(build_timeline, source)
 
@@ -102,6 +152,17 @@ class AppWindow(QMainWindow):
             pass    # 저장 실패는 치명적이지 않음
 
     def _on_timeline_ready(self, timeline):
+        if self._bg_wait:               # 연습하며 기다리는 중 — 화면 전환 없이 보관
+            if not getattr(timeline, "scale_riffs", None):
+                bake_examples(timeline, self.main_screen._ml_model)
+            self._save_session(timeline)
+            self._pending_tl = timeline
+            self._pill.set_ready(timeline.title or "")
+            self._place_pill()
+            return
+        self._open_timeline(timeline)
+
+    def _open_timeline(self, timeline):
         self._timeline = timeline
         # 스케일 종류당 1개 리프 굽기(§8) — 악보 화면에서 미리 보여주기 위해 여기서 1회.
         if not getattr(timeline, "scale_riffs", None):
@@ -109,6 +170,45 @@ class AppWindow(QMainWindow):
         self._save_session(timeline)     # 재분석 없이 불러올 세션 파일(캐시)
         self.beat.set_timeline(timeline, self.main_screen._ml_model)
         self.stack.setCurrentWidget(self.beat)
+
+    # ── 백그라운드 분석 대기(연습하며 기다리기) ──────────────────
+    def _enter_bg_wait(self):
+        self._bg_wait = True
+        self.link_screen.set_restricted(True)
+        self._pill.set_progress(self.analyzing.bar.value())
+        self._pill.play_btn.hide()
+        self._pill.show()
+        self._pill.raise_()
+        self._place_pill()
+        self.stack.setCurrentWidget(self.link_screen)
+
+    def _play_pending(self):
+        tl = self._pending_tl
+        self._exit_bg_wait()
+        if tl is not None:
+            self._open_timeline(tl)
+
+    def _on_bg_failed(self):
+        if not self._bg_wait:
+            return                      # 분석 화면에 이미 오류 표시됨
+        self._pill.set_failed()
+        self._place_pill()
+        self._bg_wait = False
+        self.link_screen.set_restricted(False)
+
+    def _exit_bg_wait(self):
+        self._bg_wait = False
+        self._pending_tl = None
+        self.link_screen.set_restricted(False)
+        self._pill.hide()
+
+    def _place_pill(self):
+        self._pill.adjustSize()
+        self._pill.move((self.width() - self._pill.width()) // 2, 10)
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        self._place_pill()
 
     def _enter_score(self):
         self._timeline = self.beat.tl

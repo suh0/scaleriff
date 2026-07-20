@@ -131,7 +131,8 @@ class RiffView(QWidget):
             active = (self._rel_beat >= bp - 0.05
                       and self._rel_beat < bp + dur + 0.05)
             if st == "CHORD":
-                bg, fg = QColor(T.BADGE_CHORD), QColor(T.BADGE_TEXT)
+                bg = QColor(T.BADGE_ROOT if pc == self._root else T.BADGE_CHORD)
+                fg = QColor(T.BADGE_TEXT)
             elif st == "SCALE":
                 bg, fg = QColor(T.BADGE_SCALE), QColor(T.BADGE_SCALE_TEXT)
             else:
