@@ -280,7 +280,7 @@ def main():
     assert ms.scorer.mode == "guide"
 
     # §3.5 2차: 박자 조정 화면 — 좌(시작박)/우(BPM) 드래그 반응형 → 확정 시 재격자화
-    from ml.real_builder import regrid_timeline
+    from build.real_builder import regrid_timeline
     assert not regrid_timeline(tl, ms._ml_model, 1.0), "원자료 없이 재격자화됨"
     tl3 = _TL(audio_ref="", bpm=120, time_sig="4/4", key="C major", key_root=0,
               loop_len=0, segments=[], content_span=(0.0, 8.0),

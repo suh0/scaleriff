@@ -1,7 +1,7 @@
-"""세션 타임라인 빌더 라우터 (정의서 §2, §4).
+"""세션 타임라인 빌더 라우터 (정의서 §2.2, §4).
 
-source가 있으면 실제 파이프라인, 비면 데모 타임라인.
-진행 콜백 signature: cb(percent: int, message: str)
+source가 있으면 실제 파이프라인(real_builder), 비면 데모 타임라인.
+진행 콜백 signature: cb(percent: int, message: str) — 분석 중 화면이 표시.
 """
 from __future__ import annotations
 
@@ -21,5 +21,5 @@ def build_timeline(source: str, progress_cb=None) -> Timeline:
         return tl
 
     cb(5, "오디오 확보 중…")
-    from ml.real_builder import build_real_timeline
+    from build.real_builder import build_real_timeline
     return build_real_timeline(source, cb)

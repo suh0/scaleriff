@@ -104,11 +104,10 @@ def _cell_likelihood(cell, p4) -> float:
     return w
 
 
-def _pick_cell(rng: random.Random, must_start=False, no_empty=False, p4=None):
+def _pick_cell(rng: random.Random, must_start=False, p4=None):
     pool = [(c, w * (_cell_likelihood(c, p4) if p4 else 1.0))
             for c, w in _CELLS
-            if (not must_start or (c and c[0] == 0))
-            and (not no_empty or c)]
+            if not must_start or (c and c[0] == 0)]
     r = rng.random() * sum(w for _, w in pool)
     acc = 0.0
     for c, w in pool:
@@ -125,10 +124,8 @@ def _bar_cells(rng: random.Random, beats: int, onset_probs=None):
     half = max(1, beats // 2)
     motif = []
     for b in range(half):
-        prev_empty = bool(motif) and not motif[-1]
         p4 = onset_probs[b * 4:(b + 1) * 4] if onset_probs else None
-        motif.append(_pick_cell(rng, must_start=(b == 0),
-                                no_empty=prev_empty, p4=p4))
+        motif.append(_pick_cell(rng, must_start=(b == 0), p4=p4))
     return (motif + motif)[:beats]
 
 
@@ -321,9 +318,12 @@ _KIND_QUALITY = {
 
 
 def _riff_score(grid, model, qfams, scale_kind) -> float:
-    """후보 랭킹 점수 = 모델 평균 로그우도(전 스텝, REST/HOLD 포함) + 정박 코드톤 적중률.
+    """후보 랭킹 점수 = 모델 평균 PMI(전 스텝) + 정박 코드톤 적중률.
 
-    로그우도는 학습된 리듬(REST/HOLD) 통계까지 반영 — 데이터스러운 리듬·라인 후보 선호.
+    PMI = log p(토큰|컨텍스트) - log p(토큰): 토큰의 전역 빈도를 빼서
+    "이 문맥에서 유난히 데이터스러운가"만 남긴다. 순수 로그우도는 REST/HOLD
+    (스텝당 고확률)가 ONSET(12도수로 분산)보다 항상 유리해 음수 적은 후보만
+    뽑는 밀도 편향이 있었음 — PMI는 밀도 중립.
     """
     deg_pool = set(SCALE_DEGREES.get(scale_kind, SCALE_DEGREES["메이저"]))
     hits = tot = 0
@@ -336,13 +336,16 @@ def _riff_score(grid, model, qfams, scale_kind) -> float:
     if not is_trained(model):
         return anchor
     q_scale = _query_scale(model, scale_kind)
+    base = model.table.get(model._key("*", "*", "*", ()), {})   # 전역 토큰 빈도
+    btot = sum(base.values())
     ll, prev = 0.0, [BOS, BOS]
     for i, t in enumerate(grid):
         qfam = qfams[i] if i < len(qfams) else "maj"
         bl = model.blended(qfam, q_scale, i % STEPS_PER_BAR, tuple(prev[-2:]))
         mass = sum(bl.values())
         p = (bl.get(t, 0.0) + 1e-3) / (mass + 1e-3 * VOCAB) if mass else 1.0 / VOCAB
-        ll += math.log(p)
+        p0 = (base.get(str(t), 0) + 1e-3) / (btot + 1e-3 * VOCAB) if btot else 1.0 / VOCAB
+        ll += math.log(p) - math.log(p0)
         prev.append(t)
     return ll / len(grid) + anchor
 

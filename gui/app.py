@@ -25,7 +25,7 @@ from gui.analyzing_screen import AnalyzingScreen
 from gui.beat_screen import BeatScreen
 from gui.score_screen import ScoreScreen
 from gui.main_screen import MainScreen
-from ml.timeline_builder import build_timeline
+from build.timeline_builder import build_timeline
 from ml.generate import bake_examples
 
 

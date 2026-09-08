@@ -26,7 +26,7 @@ from analyze.theory import (
 )
 from player.timeline import ScaleOption
 from player.playhead import Playhead
-from ml.real_builder import regrid_timeline
+from build.real_builder import regrid_timeline
 from ml.generate import bake_segment
 
 ZOOM_SEC = 10.0      # 확대 창 길이

@@ -1,7 +1,7 @@
 """음악 이론 유틸 — 음이름/피치클래스, 코드 파싱, 다이아토닉, 코드-스케일.
 
-기존 piano-scale-trainer의 scale_db/enharmonic 개념을 흡수하고,
-브리프 §12가 언급한 chord_function_analyzer(코드 파싱·슬래시 코드·패턴)를 새로 작성한다.
+analyze/harmony·structure와 ml/representation이 공유하는 이론 하부층
+(스케일 음정표·코드 스펙·도수 계산). 앱 전역의 pitch class 규약을 정의한다.
 
 규약:
 - pitch class(pc): 0~11 정수. C=0, C#=1, ... B=11.

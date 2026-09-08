@@ -1,8 +1,7 @@
-"""MIDI 키보드 입력 (브리프 §2, §8).
+"""MIDI 키보드 입력 (정의서 §9).
 
-mido(+python-rtmidi 백엔드)로 실시간 노트 온/오프를 수신한다.
-기존 piano-scale-trainer/playback/midi_input.py의 콜백 패턴을 참고하되
-mido API로 새로 작성(브리프 §2는 mido 백엔드를 명시).
+mido(+python-rtmidi 백엔드)로 실시간 노트 온/오프를 QThread에서 수신해
+note_received(midi, is_on) 시그널로 넘긴다. 채점(§7.5)·연주음(§9)의 입력원.
 """
 from __future__ import annotations
 

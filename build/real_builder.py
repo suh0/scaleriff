@@ -1,12 +1,11 @@
-"""실제 세션 타임라인 빌드 — 전체 파이프라인 1회 굽기 (정의서 §2, §4, §5).
+"""실제 세션 타임라인 빌드 — 전체 파이프라인 1회 굽기 (정의서 §2.2, §4, §5).
 
   오디오 확보 → MIR(코드/키/BPM/비트·다운비트) → 마디격자(다운비트)·무음경계
   → 구조분석(루프 감지) → 화성분석(코드별 스케일 배정) → Timeline.
 
-코드별 스케일(§3): 다이아토닉 → 키의 해당 모드 / 비다이아토닉 → 로컬 코드-스케일.
-플레이어는 재생/룩업만(§4). ML 예시 생성은 현재 범위 제외(추후 §8).
-
-NOTE: 패키지 이름은 ml/ 그대로 두되(추후 §8 예시 생성 재도입 지점), 지금은 ML 미사용.
+코드별 스케일(§3.3): 다이아토닉 → 키의 해당 모드 / 비다이아토닉 → 로컬 코드-스케일.
+플레이어는 재생/룩업만(§4). 리프 굽기(§8 bake_examples)는 호출측(gui/app,
+regrid)이 Timeline 완성 직후 1회 수행한다.
 """
 from __future__ import annotations
 
@@ -113,6 +112,6 @@ def regrid_timeline(tl: Timeline, model=None, anchor_sec: float | None = None) -
     tl.bar_times = st.bar_times
     tl.loop_len = st.loop_len
     tl.loop_phase = st.loop_phase
-    from ml.generate import bake_examples   # 빌드 경로는 ML 미사용(§8) — 보정에서만
-    bake_examples(tl, model)                 # 새 격자 기준 리프/예시 재굽기
+    from ml.generate import bake_examples   # 지역 import: 무거운 ml 로딩을 보정 시점까지 지연
+    bake_examples(tl, model)                 # 새 격자 기준 리프/예시 재굽기(§8)
     return True
