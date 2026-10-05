@@ -57,7 +57,8 @@ class MainScreen(QWidget):
         self._riff_times: list[float] = []
         self._riff_idx = 0
 
-        root = QVBoxLayout(self)
+        self.content = T.compact_content(self)
+        root = QVBoxLayout(self.content)
         root.setContentsMargins(T.PAD_H, T.PAD_V, T.PAD_H, T.PAD_V)
         root.setSpacing(10)
 
@@ -94,11 +95,6 @@ class MainScreen(QWidget):
         self.lane.seekRequested.connect(self._on_seek)
         root.addWidget(self.lane)
 
-        # ── 곡 전체 재생바(스크럽) — 레인 아래, seek로 레인과 연동 ──
-        self.scrub = ScrubBar()
-        self.scrub.seekRequested.connect(self._on_seek)
-        root.addWidget(self.scrub)
-
         # ── 리프 뷰(연습 시만) — 레인 바로 아래 밴드 ──
         self.riff = RiffView()
         self.riff.setVisible(False)
@@ -110,6 +106,11 @@ class MainScreen(QWidget):
         self.piano.notePlayed.connect(
             lambda midi, on: self.on_midi_note(midi, on, screen=True))
         root.addWidget(self.piano, 1)
+
+        # ── 곡 전체 재생바(스크럽) — 건반 아래, seek로 레인과 연동 ──
+        self.scrub = ScrubBar()
+        self.scrub.seekRequested.connect(self._on_seek)
+        root.addWidget(self.scrub)
 
         # ── 하단 컨트롤 한 줄: 토글·난이도·루프 + 배지·카운트인·재생 ──
         rrow = QHBoxLayout()
@@ -162,10 +163,10 @@ class MainScreen(QWidget):
         self._style_riff_btn()
 
         # ── 패스 요약 카드 (오버레이, §7.5) ──
-        self.pass_card = PassCard(self)
+        self.pass_card = PassCard(self.content)
 
         # ── 루프 사이드바 (오버레이) — 생성한 루프 리스트 + 루프별 ON/OFF ──
-        self.loop_panel = QFrame(self)
+        self.loop_panel = QFrame(self.content)
         self.loop_panel.hide()
         self.loop_panel.setStyleSheet(
             f"QFrame{{background:{T.BG_SURFACE};border:1px solid {T.BORDER_DEFAULT};"
@@ -212,11 +213,14 @@ class MainScreen(QWidget):
 
     def _place_loop_panel(self):
         w = 270
-        self.loop_panel.setGeometry(self.width() - w - 20, 64,
-                                    w, min(380, self.height() - 130))
+        self.loop_panel.setGeometry(self.content.width() - w - 20, 64,
+                                    w, min(380, self.content.height() - 130))
 
     def resizeEvent(self, e):
         super().resizeEvent(e)
+        if self.pass_card.isVisible():
+            self.pass_card.move(
+                (self.content.width() - self.pass_card.width()) // 2, 120)
         if self.loop_panel.isVisible():
             self._place_loop_panel()
 
@@ -417,6 +421,7 @@ class MainScreen(QWidget):
         if not self.tl or not self.tl.segments:
             return
         idx = self.tl.segment_index_at(sec)
+        self._update_scale_preview(sec, idx)
         if idx < 0 or idx == self._last_idx:
             return
         self._last_idx = idx
@@ -426,10 +431,33 @@ class MainScreen(QWidget):
             {pc: degree_number(pc, seg.scale_root) for pc in seg.note_set})
         self.piano.set_pressed(set())
         self._apply_targets()              # 난이도 목표음 필터(구간별, §7.5)
-        # 현재/다음 코드·스케일·미리보기는 코드 레인이 스스로 그림(set_position)
+        # 현재/다음 코드·스케일은 코드 레인이 스스로 그림(set_position)
         # 리프연습: 새 구간 진입 시 리프 뷰만 갱신(재생은 _on_tick이 헤드 동기로 트리거)
         if self._mode == "practice":
             self.riff.set_segment(seg, self.tl.bpm, self.tl.time_sig_beats())
+
+    def _update_scale_preview(self, sec: float, idx: int):
+        self.piano.set_preview()
+        if idx < 0:
+            return
+        seg = self.tl.segments[idx]
+        upcoming = self.tl.next_segment(seg)
+        boundary = upcoming.start_sec if upcoming else seg.end_sec
+        for start, end in self._loop_spans():
+            if start <= sec < end and end <= boundary:
+                boundary = end
+                upcoming = self.tl.segment_at(start)
+                break
+        if upcoming is None or boundary > self.tl.content_end():
+            return
+        if (seg.scale_name, seg.chord_tones(), set(seg.note_set)) == (
+                upcoming.scale_name, upcoming.chord_tones(), set(upcoming.note_set)):
+            return
+        lead = min(2 * self.tl.beat_sec(), (boundary - seg.start_sec) / 2)
+        if lead <= 0 or not boundary - lead <= sec < boundary:
+            return
+        self.piano.set_preview(upcoming.note_set, upcoming.chord_tones(),
+                               upcoming.scale_root, (sec - boundary + lead) / lead)
 
     # ── 매 틱 라이브 갱신: 리프 헤드 ─────────────────────────────
     def _update_live(self, sec: float):

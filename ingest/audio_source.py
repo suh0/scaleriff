@@ -11,6 +11,8 @@ import os
 import subprocess
 import tempfile
 import hashlib
+import glob
+import shutil
 
 try:
     import imageio_ffmpeg
@@ -30,6 +32,18 @@ def _is_url(s: str) -> bool:
 
 def _cache_key(s: str) -> str:
     return hashlib.md5(s.encode("utf-8")).hexdigest()[:16]
+
+
+def _find_deno() -> str | None:
+    """PATH 또는 WinGet 설치 위치에서 Deno를 찾는다."""
+    if path := shutil.which("deno"):
+        return path
+    local = os.environ.get("LOCALAPPDATA")
+    if not local:
+        return None
+    matches = glob.glob(os.path.join(
+        local, "Microsoft", "WinGet", "Packages", "DenoLand.Deno_*", "deno.exe"))
+    return sorted(matches)[-1] if matches else None
 
 
 def to_wav(src_path: str, sr: int = ANALYZE_SR) -> str:
@@ -70,6 +84,8 @@ def download_audio(url: str, progress_cb=None) -> str:
     }
     if ffmpeg_dir:
         opts["ffmpeg_location"] = ffmpeg_dir
+    if deno := _find_deno():
+        opts["js_runtimes"] = {"deno": {"path": deno}}
 
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=True)

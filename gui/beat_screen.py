@@ -1,7 +1,7 @@
 """[2a] 박자 조정 화면 (§3.5 2차) — 분석 직후 마디선/BPM 확정.
 
-마스터-디테일: 좌측(고정) = 격자 편집(확대바 2개·박자·BPM·확정·조정완료),
-우측(스크롤) = 마디별 코드표.
+세로 기능 구성: 위 = 격자 편집(확대바 2개·박자·BPM·확정),
+아래(세로 스크롤) = 마디별 코드표·조정완료.
 - 두 확대바 모두 마디선 드래그 = 격자 평행이동(BPM 불변), 놓으면 그 위치부터
   재생. BPM(간격)은 직접 입력으로만 수정. 확정 시에만 재격자화(regrid).
 - 코드표 직접 조작: 칸 클릭 = 코드 수정, 칸 드래그 = 루프 지정(놓으면 이름 입력).
@@ -14,7 +14,7 @@ from array import array
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QPushButton,
     QComboBox, QLineEdit, QScrollArea, QInputDialog, QFrame,
-    QGraphicsOpacityEffect, QMenu
+    QGraphicsOpacityEffect, QLayout, QMenu
 )
 from PyQt6.QtGui import QPainter, QColor, QPen, QFont, QCursor
 from PyQt6.QtCore import Qt, QRectF, pyqtSignal, QTimer
@@ -31,7 +31,7 @@ from ml.generate import bake_segment
 
 ZOOM_SEC = 10.0      # 확대 창 길이
 WAVE_BUCKETS = 300   # 확대 창 파형 해상도(컬럼 수)
-BARS_PER_ROW = 8
+BARS_PER_ROW = 7
 CELL_W = 86          # 마디 칸 폭
 # 수동 코드 수정 선택지(접미사). parse_chord가 인식하는 표기.
 _EDIT_SUFFIXES = ["", "m", "7", "maj7", "m7", "m7b5", "dim", "6", "m6", "sus4"]
@@ -179,12 +179,12 @@ class BeatScreen(QWidget):
         self._drag_cur: int | None = None   # 드래그 현재 마디
         self._drag_loop = False             # 시작 칸을 벗어나면 루프 모드
 
-        # 마스터-디테일: 좌(격자 편집·고정) / 우(마디별 코드표·스크롤)
-        outer = QHBoxLayout(self)
+        # 기능별 세로 구성: 박자 조정 → 마디별 코드표
+        content = T.compact_content(self)
+        outer = QVBoxLayout(content)
         outer.setContentsMargins(T.PAD_H, T.PAD_V, T.PAD_H, T.PAD_V)
-        outer.setSpacing(24)
-        root = QVBoxLayout()      # 좌측 마스터 패널
-        root.setSpacing(10)
+        outer.setSpacing(10)
+        root = outer
 
         top = QHBoxLayout()
         self.link_btn = QPushButton("← 링크")
@@ -202,26 +202,29 @@ class BeatScreen(QWidget):
 
         self.hint_lbl = QLabel(
             "마디선을 드래그하면 격자 전체가 함께 이동하고(BPM 불변), 놓으면 "
-            "그 위치부터 재생됩니다. 확정하면 오른쪽 코드표가 새 격자로 "
+            "그 위치부터 재생됩니다. 확정하면 아래 코드표가 새 격자로 "
             "갱신되며 열립니다 — 칸 클릭=코드 수정, 칸 드래그=루프 지정.")
         self.hint_lbl.setStyleSheet(f"color:{T.TEXT_MUTED};font-size:12px;")
         self.hint_lbl.setWordWrap(True)
         root.addWidget(self.hint_lbl)
 
-        # 확대바 두 개를 위아래로 쌓음(처음 10초 아래 마지막 10초)
-        edit_col = QVBoxLayout()
-        edit_col.setSpacing(4)
+        # 확대바 두 개를 한 줄에 배치(처음 10초 왼쪽, 마지막 10초 오른쪽)
+        edit_row = QHBoxLayout()
+        edit_row.setSpacing(10)
         for side, cap in (("l", "처음 10초 — 시작박"), ("r", "마지막 10초 — 끝박")):
+            zoom_col = QVBoxLayout()
+            zoom_col.setSpacing(4)
             lbl = QLabel(cap)
             lbl.setStyleSheet(f"color:{T.TEXT_MUTED};font-size:11px;")
-            edit_col.addWidget(lbl)
+            zoom_col.addWidget(lbl)
             bar = ZoomBar()
             bar.barDragged.connect(self._on_drag)          # 양쪽 모두 격자 평행이동
             bar.dragFinished.connect(self._on_drag_end)    # 놓으면 그 위치부터 재생
-            edit_col.addWidget(bar)
+            zoom_col.addWidget(bar)
+            edit_row.addLayout(zoom_col, 1)
             setattr(self, f"zoom_{side}", bar)
 
-        # ── 편집기 바로 아래: 박자 · BPM · 시작초 · 확정(재생 멈춤+격자 적용) ──
+        # ── 박자 · BPM ───────────────────────────────────────────
         combo_qss = (
             f"QComboBox{{background:{T.BG_SURFACE_ALT};color:{T.TEXT_BODY};"
             f"border:1px solid {T.BORDER_DEFAULT};border-radius:8px;"
@@ -250,13 +253,10 @@ class BeatScreen(QWidget):
         bpm_tag = QLabel("BPM")
         bpm_tag.setStyleSheet(f"color:{T.TEXT_MUTED};font-size:12px;")
         ctrl.addWidget(bpm_tag)
-        self.anchor_lbl = QLabel("")
-        self.anchor_lbl.setStyleSheet(
-            f"color:{T.TEXT_PRIMARY};font-family:'{T.FONT_MONO}';"
-            "font-size:13px;font-weight:700;")
-        ctrl.addSpacing(10)
-        ctrl.addWidget(self.anchor_lbl)
         ctrl.addStretch(1)
+        root.addLayout(ctrl)
+
+        # 확정은 두 박자 조정바 오른쪽에 고정
         self.confirm_btn = QPushButton("확정")
         self.confirm_btn.setStyleSheet(
             f"QPushButton{{background:{T.BG_SURFACE_ALT};color:{T.TEXT_PRIMARY};"
@@ -264,28 +264,11 @@ class BeatScreen(QWidget):
             "padding:6px 18px;font-size:13px;font-weight:700;}"
             f"QPushButton:hover{{border:1px solid {T.WHITE};}}")
         self.confirm_btn.clicked.connect(self._on_confirm)
-        ctrl.addWidget(self.confirm_btn)
-        edit_col.addSpacing(4)
-        edit_col.addLayout(ctrl)
-        root.addLayout(edit_col)
-        root.addStretch(1)
+        edit_row.addWidget(
+            self.confirm_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+        root.addLayout(edit_row)
 
-        # ── 조정 완료 → 다음 화면 — 좌측 패널 하단 고정 ──
-        done_row = QHBoxLayout()
-        done_row.addStretch(1)
-        self.done_btn = QPushButton("조정 완료 → 코드·스케일 ▶")
-        self.done_btn.setStyleSheet(T.qss_primary_btn())
-        self.done_btn.clicked.connect(self._on_done)
-        done_row.addWidget(self.done_btn)
-        done_row.addStretch(1)
-        root.addLayout(done_row)
-
-        left_wrap = QWidget()
-        left_wrap.setFixedWidth(420)
-        left_wrap.setLayout(root)
-        outer.addWidget(left_wrap)
-
-        # ── 우측 디테일: 루프 리스트 + 마디별 코드표(스크롤) ──
+        # ── 아래: 루프 리스트 + 마디별 코드표(세로 스크롤) ───────
         right = QVBoxLayout()
         right.setSpacing(10)
         loop_row = QHBoxLayout()
@@ -303,6 +286,8 @@ class BeatScreen(QWidget):
 
         self.grid_scroll = QScrollArea()
         self.grid_scroll.setWidgetResizable(True)
+        self.grid_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.grid_scroll.setStyleSheet(
             "QScrollArea{border:none;background:transparent;}"
             "QScrollArea > QWidget > QWidget{background:transparent;}")
@@ -310,6 +295,7 @@ class BeatScreen(QWidget):
         self.holder.setStyleSheet("background:transparent;")
         hwrap = QHBoxLayout(self.holder)      # 표 전체 가운데 정렬
         hwrap.setContentsMargins(0, 0, 0, 0)
+        hwrap.setSizeConstraint(QLayout.SizeConstraint.SetMinAndMaxSize)
         grid_host = QWidget()
         grid_host.setStyleSheet("background:transparent;")
         self.grid = QGridLayout(grid_host)
@@ -320,7 +306,17 @@ class BeatScreen(QWidget):
         hwrap.addStretch(1)
         self.grid_scroll.setWidget(self.holder)
         right.addWidget(self.grid_scroll, 1)
-        outer.addLayout(right, 1)
+        root.addLayout(right, 1)
+
+        # ── 조정 완료 → 다음 화면 ────────────────────────────────
+        done_row = QHBoxLayout()
+        done_row.addStretch(1)
+        self.done_btn = QPushButton("조정 완료 → 코드·스케일 ▶")
+        self.done_btn.setStyleSheet(T.qss_primary_btn())
+        self.done_btn.clicked.connect(self._on_done)
+        done_row.addWidget(self.done_btn)
+        done_row.addStretch(1)
+        root.addLayout(done_row)
 
     def showEvent(self, e):
         super().showEvent(e)
@@ -340,7 +336,6 @@ class BeatScreen(QWidget):
     def _refresh(self):
         for z in (self.zoom_l, self.zoom_r):
             z.set_grid(self.anchor, self.bar_len, self._beats())
-        self.anchor_lbl.setText(f"시작 {self.anchor:.2f}s")
 
     # ── 로드 ─────────────────────────────────────────────────────
     def set_timeline(self, tl, model=None):
@@ -442,8 +437,7 @@ class BeatScreen(QWidget):
     def _set_locked(self, locked: bool):
         """확정 상태 토글 — 확정 전엔 코드표가, 확정 후엔 박자 편집부가 잠긴다."""
         self._locked = locked
-        for w in (self.zoom_l, self.zoom_r, self.sig_box, self.bpm_edit,
-                  self.anchor_lbl):
+        for w in (self.zoom_l, self.zoom_r, self.sig_box, self.bpm_edit):
             self._dim(w, locked)
         for w in (self._loop_wrap, self.holder):   # 미확정 격자의 코드표는 잠금
             self._dim(w, not locked)

@@ -4,20 +4,68 @@ QT_QPA_PLATFORM=offscreen 으로 실행한다.
 """
 import os
 import tempfile
+from copy import deepcopy
+from unittest.mock import patch
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 # 연습 기록은 임시 경로로(테스트가 실제 data/practice_log.jsonl 오염 방지)
 os.environ["SCALERIFF_PRACTICE_LOG"] = os.path.join(tempfile.mkdtemp(), "practice_log.jsonl")
 import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication, QLabel, QTextEdit, QWidget
+from PyQt6.QtGui import QImage, QColor
+from PyQt6.QtCore import QPoint
 from gui.app import AppWindow
 from player.dummy_timeline import build_dummy_timeline
 
 
 def main():
+    with open(os.path.join(os.path.dirname(__file__), "requirements.txt"), encoding="utf-8") as f:
+        assert "yt-dlp[default]" in f.read(), "YouTube EJS 의존성이 requirements.txt에 없음"
+    from ingest import audio_source
+    assert hasattr(audio_source, "_find_deno"), "Deno 런타임 탐색기가 없음"
+    with patch("ingest.audio_source.shutil.which", return_value=None), \
+            patch("ingest.audio_source.glob.glob", return_value=[r"C:\winget\deno.exe"]):
+        assert audio_source._find_deno() == r"C:\winget\deno.exe", \
+            "PATH 갱신 전 WinGet Deno를 찾지 못함"
+
     app = QApplication(sys.argv)
     win = AppWindow()
+    assert not win.analyzing.findChildren(QTextEdit), "분석 진행 로그 박스가 남아 있음"
+    win.analyzing._on_failed("HTTP Error 403: Forbidden\n\ntraceback")
+    assert "403" in win.analyzing.msg.text() and "Forbidden" in win.analyzing.msg.text(), \
+        "분석 실패 원인이 화면에 표시되지 않음"
+    win.resize(1200, 800)
+    win.show()
+    for page in (win.link_screen, win.analyzing, win.beat,
+                 win.score, win.main_screen):
+        win.stack.setCurrentWidget(page)
+        app.processEvents()
+        content = page.findChild(QWidget, "compactContent")
+        assert content is not None, f"{type(page).__name__} 콘텐츠 프레임 없음"
+        wr = content.width() / page.width()
+        hr = content.height() / page.height()
+        assert 0.73 <= wr <= 0.77, f"{type(page).__name__} 가로 비율: {wr:.3f}"
+        assert 0.73 <= hr <= 0.77, f"{type(page).__name__} 세로 비율: {hr:.3f}"
+    win.stack.setCurrentWidget(win.link_screen)
+    win.resize(1040, 740)
+    win.link_screen.stack.setCurrentWidget(win.link_screen._input)
+    app.processEvents()
+    link_input = win.link_screen._input
+    go_pos = win.link_screen.go_btn.mapTo(link_input, QPoint(0, 0))
+    save_pos = win.link_screen.save_edit.mapTo(link_input, QPoint(0, 0))
+    lib_pos = win.link_screen._lib_panel.mapTo(link_input, QPoint(0, 0))
+    assert go_pos.y() < save_pos.y(), "분석 시작 버튼이 저장경로 아래에 있음"
+    assert lib_pos.y() > save_pos.y() + win.link_screen.save_edit.height(), \
+        "최근 세션이 저장경로 아래에 있지 않음"
+    lib_center = lib_pos.x() + win.link_screen._lib_panel.width() / 2
+    assert abs(lib_center - link_input.width() / 2) <= 2, \
+        "최근 세션이 화면 가운데 정렬되지 않음"
+    lib_ratio = win.link_screen._lib_panel.width() / link_input.width()
+    assert 0.45 <= lib_ratio <= 0.55, \
+        f"최근 세션 가로 비율: {lib_ratio:.3f}"
+    assert win.link_screen.go_btn.width() < win.link_screen.url_edit.width() / 2, \
+        "분석 시작 버튼이 텍스트 폭보다 과도하게 넓음"
 
     tl = build_dummy_timeline()
     print(f"타임라인: {tl.title} | {tl.key} | 종류 {tl.available_scales}")
@@ -46,6 +94,57 @@ def main():
     assert win.stack.currentWidget() is win.beat
     assert win.beat.grid.count() > 0, "박자 화면에 코드 목록 없음"
     assert not win.beat.holder.isEnabled(), "확정 전 코드표 잠김 아님"
+    beat_content = win.beat.findChild(QWidget, "compactContent")
+    for ww, wh in ((1040, 740), (1600, 1000)):
+        win.resize(ww, wh)
+        app.processEvents()
+        zoom_l_pos = win.beat.zoom_l.mapTo(beat_content, QPoint(0, 0))
+        zoom_r_pos = win.beat.zoom_r.mapTo(beat_content, QPoint(0, 0))
+        confirm_pos = win.beat.confirm_btn.mapTo(beat_content, QPoint(0, 0))
+        grid_pos = win.beat.grid_scroll.mapTo(beat_content, QPoint(0, 0))
+        assert abs(zoom_l_pos.y() - zoom_r_pos.y()) <= 2, \
+            "처음/마지막 10초 확대바가 한 줄에 있지 않음"
+        assert confirm_pos.x() > zoom_r_pos.x() + win.beat.zoom_r.width(), \
+            "확정 버튼이 박자 조정바 오른쪽에 있지 않음"
+        zoom_bottom = max(zoom_l_pos.y() + win.beat.zoom_l.height(),
+                          zoom_r_pos.y() + win.beat.zoom_r.height())
+        assert grid_pos.y() > zoom_bottom, \
+            "마디별 코드가 박자 조정바 아래에 있지 않음"
+        assert win.beat.grid_scroll.horizontalScrollBar().maximum() == 0, \
+            "마디별 코드에 가로 스크롤이 생김"
+    win.resize(1040, 740)
+    app.processEvents()
+    assert not any(
+        label.isVisible() and label.text().startswith("시작 ")
+        for label in win.beat.findChildren(QLabel)
+    ), "시작박 표시가 남아 있음"
+    tl_long = deepcopy(tl)
+    bar_sec = tl.time_sig_beats() * tl.beat_sec()
+    for bar in range(6, 50):
+        seg = deepcopy(tl.segments[bar % 3])
+        seg.idx = bar
+        seg.start_bar, seg.end_bar = bar, bar + 1
+        seg.start_sec, seg.end_sec = bar * bar_sec, (bar + 1) * bar_sec
+        tl_long.segments.append(seg)
+    win.beat.set_timeline(tl_long)
+    app.processEvents()
+    cell0_pos = win.beat._cells[0].mapTo(win.beat.holder, QPoint(0, 0))
+    cell7_pos = win.beat._cells[7].mapTo(win.beat.holder, QPoint(0, 0))
+    assert cell7_pos.y() > cell0_pos.y(), \
+        "마디별 코드가 한 줄로 늘어나 가로 스크롤을 만듦"
+    assert win.beat.grid_scroll.horizontalScrollBar().maximum() == 0, \
+        "긴 코드표에 가로 스크롤이 생김"
+    vbar = win.beat.grid_scroll.verticalScrollBar()
+    assert vbar.maximum() > 0, "긴 코드표에 세로 스크롤이 생기지 않음"
+    vbar.setValue(vbar.maximum())
+    app.processEvents()
+    last_cell = win.beat._cells[49]
+    last_pos = last_cell.mapTo(win.beat.grid_scroll.viewport(), QPoint(0, 0))
+    assert last_pos.y() >= 0, "세로 스크롤 후 마지막 마디가 위로 잘림"
+    assert last_pos.y() + last_cell.height() <= win.beat.grid_scroll.viewport().height(), \
+        "세로 스크롤 후 마지막 마디가 보이지 않음"
+    win.beat.set_timeline(tl)
+    app.processEvents()
     win.beat._on_confirm()      # 확정 = 멈춤+적용+편집 잠금 / 코드표 열림
     assert win.stack.currentWidget() is win.beat
     assert win.beat._locked and win.beat.confirm_btn.text() == "수정"
@@ -77,6 +176,22 @@ def main():
     assert roll._fill(0).name() == _T.BADGE_ROOT, "근음 파랑 아님"
     other_ct = next(pc for pc in roll._chord_tones if pc != 0)
     assert roll._fill(other_ct).name() == _T.BADGE_CHORD
+    score_content = win.score.findChild(QWidget, "compactContent")
+    for ww, wh in ((1040, 740), (1600, 1000)):
+        win.resize(ww, wh)
+        app.processEvents()
+        for widget in (win.score.title, win.score.riffs_title,
+                       win.score._kinds_wrap, win.score.riff_lbl,
+                       win.score.roll, win.score.go_btn):
+            pos = widget.mapTo(score_content, QPoint(0, 0))
+            assert pos.x() >= 0 and pos.y() >= 0, \
+                f"ScoreScreen {type(widget).__name__} 콘텐츠 밖 시작"
+            assert pos.x() + widget.width() <= score_content.width(), \
+                f"ScoreScreen {type(widget).__name__} 오른쪽 이탈"
+            assert pos.y() + widget.height() <= score_content.height(), \
+                f"ScoreScreen {type(widget).__name__} 아래 이탈"
+    win.resize(1040, 740)
+    app.processEvents()
     # 리프 재생성: 변주 시드 증가 + 그 종류 구간 재타일링
     k0 = win.score._sel_kind
     win.score._regen_riff()
@@ -96,6 +211,31 @@ def main():
 
     # 렌더 + 입력 + 모드토글
     ms = win.main_screen
+    app.processEvents()
+    assert ms.scrub.geometry().top() > ms.piano.geometry().bottom(), \
+        "재생바가 건반 아래에 있지 않음"
+    from player.scoring import PassSummary as _OverlaySummary
+    overlay_summary = _OverlaySummary(number=1, right_hits=1, right_total=1)
+    for ww, wh in ((1040, 740), (1600, 1000)):
+        win.resize(ww, wh)
+        app.processEvents()
+        ms.pass_card.show_summary(overlay_summary, [])
+        ms.loop_btn.setChecked(True)
+        ms._toggle_loop_panel()
+        for overlay in (ms.pass_card, ms.loop_panel):
+            pos = overlay.mapTo(ms.content, QPoint(0, 0))
+            assert pos.x() >= 0 and pos.y() >= 0, \
+                f"{type(overlay).__name__} 콘텐츠 밖 시작: {pos.x()}, {pos.y()}"
+            assert pos.x() + overlay.width() <= ms.content.width(), \
+                f"{type(overlay).__name__} 콘텐츠 오른쪽 이탈"
+            assert pos.y() + overlay.height() <= ms.content.height(), \
+                f"{type(overlay).__name__} 콘텐츠 아래 이탈"
+        ms.pass_card._timer.stop()
+        ms.pass_card.hide()
+        ms.loop_btn.setChecked(False)
+        ms._toggle_loop_panel()
+    win.resize(1040, 740)
+    app.processEvents()
     ms._render_at(0.3)
     ms._render_at(tl.segments[1].start_sec + 0.1)
     ms.on_midi_note(64, True)
@@ -105,9 +245,38 @@ def main():
     ms.lane.set_position(1.0)
     assert ms.lane._pos == 1.0
     ms.lane.resize(900, 92)
+    seg1 = tl.segments[1]
+    ms.lane.setGraphicsEffect(None)  # 입장 애니메이션 투명도와 무관하게 실제 위젯 렌더 검사
+    lane_img = QImage(ms.lane.size(), QImage.Format.Format_ARGB32)
+    ms.lane.render(lane_img)
+    fx0 = int(ms.lane._sec_to_x(seg1.start_sec)) + 8
+    fx1 = int(ms.lane._sec_to_x(seg1.end_sec)) - 4
+    name_color = QColor(_T.TEXT_MUTED).name()
+    name_rows = [
+        y for y in range(4, ms.lane.height() - 4)
+        if any(lane_img.pixelColor(x, y).name() == name_color
+               for x in range(fx0, fx1))
+    ]
+    assert len(name_rows) >= 18, f"다음 코드명이 작음: {len(name_rows)}px"
+    scale_color = QColor(_T.TEXT_DIM).name()
+    scale_rows = [
+        y for y in range(4, ms.lane.height() - 4)
+        if any(lane_img.pixelColor(x, y).name() == scale_color
+               for x in range(fx0, fx1))
+    ]
+    assert scale_rows, "다음 코드 아래 스케일명이 사라짐"
+    text_rows = name_rows + scale_rows
+    text_mid = (min(text_rows) + max(text_rows)) / 2
+    assert abs(text_mid - ms.lane.height() / 2) <= 4, \
+        f"코드 트랙 텍스트 세로 중앙 불일치: {text_mid:.1f}"
+    key_fill = QColor(_T.KEY_W_FILL).name()
+    mini_key_pixels = sum(
+        lane_img.pixelColor(x, y).name() == key_fill
+        for x in range(fx0, fx1) for y in range(58, 84)
+    )
+    assert mini_key_pixels == 0, "다음 코드에 미니 건반이 남아 있음"
     seeks = []
     ms.lane.seekRequested.connect(seeks.append)
-    seg1 = tl.segments[1]
 
     class _P:                                         # 최소 마우스 이벤트 대역
         def __init__(self, x): self._x = x
@@ -432,6 +601,22 @@ def main():
     assert win.link_screen._lib_list.count() == 1
     card = win.link_screen._lib_list.itemAt(0).widget()
     assert tl3.key.split()[0] in card.text() and "BPM" in card.text()
+    for i in range(1, 8):
+        tl3.save_json(_os.path.join(lib_dir, f"demo_{i}.json"))
+    win.link_screen.refresh_library()
+    win.resize(1040, 740)
+    win.link_screen.stack.setCurrentWidget(win.link_screen._input)
+    win.stack.setCurrentWidget(win.link_screen)
+    app.processEvents()
+    assert win.link_screen._lib_list.count() == 8
+    assert all(
+        win.link_screen._lib_list.itemAt(i).widget().height()
+        >= win.link_screen._lib_list.itemAt(i).widget().sizeHint().height()
+        for i in range(8)
+    ), "최근 세션이 많을 때 카드 높이가 눌림"
+    link_content = win.link_screen.findChild(QWidget, "compactContent")
+    assert win.link_screen._input.height() <= link_content.height(), \
+        "최근 세션이 많을 때 링크 입력 화면이 콘텐츠 영역을 넘음"
 
     # §6 연습하며 기다리기: 분석은 백그라운드, 링크 화면은 세션 열기만 활성
     win.analyzing._set_steps(50)                          # 단계 체크리스트 매핑

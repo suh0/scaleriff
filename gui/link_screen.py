@@ -12,7 +12,7 @@ import os
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
-    QFileDialog, QFrame, QStackedWidget,
+    QFileDialog, QFrame, QStackedWidget, QScrollArea, QLayout,
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QSize
 
@@ -52,16 +52,16 @@ class _Onboarding(QWidget):
         super().__init__(parent)
         self._idx = 0
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(40, 40, 40, 40)
+        lay.setContentsMargins(30, 30, 30, 30)
         lay.addStretch(1)
 
         self.card = QFrame()
         self.card.setStyleSheet(
             f"QFrame{{background:{T.BG_SURFACE};border:1px solid {T.BORDER_DEFAULT};"
             f"border-radius:16px;}}")
-        self.card.setMinimumHeight(220)
+        self.card.setMinimumHeight(165)
         cl = QVBoxLayout(self.card)
-        cl.setContentsMargins(30, 30, 30, 30)
+        cl.setContentsMargins(22, 22, 22, 22)
         self.title = QLabel()
         self.title.setStyleSheet(
             f"color:{T.TEXT_PRIMARY};font-family:'{T.FONT_SANS}';"
@@ -71,11 +71,11 @@ class _Onboarding(QWidget):
         self.body.setStyleSheet(f"color:{T.TEXT_BODY};font-size:14px;border:none;")
         self.body.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.body.setWordWrap(True)
-        cl.addStretch(1); cl.addWidget(self.title); cl.addSpacing(14)
+        cl.addStretch(1); cl.addWidget(self.title); cl.addSpacing(11)
         cl.addWidget(self.body); cl.addStretch(1)
         lay.addWidget(self.card)
 
-        lay.addSpacing(20)
+        lay.addSpacing(15)
         row = QHBoxLayout()
         self.next_btn = QPushButton("다음")
         self.next_btn.setStyleSheet(T.qss_primary_btn())
@@ -103,8 +103,9 @@ class LinkScreen(QWidget):
 
     def __init__(self, show_onboarding=True, parent=None):
         super().__init__(parent)
-        self.stack = QStackedWidget(self)
-        root = QVBoxLayout(self); root.setContentsMargins(0, 0, 0, 0)
+        content = T.compact_content(self)
+        self.stack = QStackedWidget(content)
+        root = QVBoxLayout(content); root.setContentsMargins(0, 0, 0, 0)
         root.addWidget(self.stack)
 
         self._onboard = _Onboarding()
@@ -129,9 +130,8 @@ class LinkScreen(QWidget):
 
     def _build_input(self):
         w = QWidget()
-        outer = QHBoxLayout(w)
-        outer.setContentsMargins(80, 0, 80, 0)
-        outer.addStretch(1)
+        outer = QVBoxLayout(w)
+        outer.setContentsMargins(60, 0, 60, 0)
 
         col = QWidget()
         lay = QVBoxLayout(col)
@@ -175,9 +175,20 @@ class LinkScreen(QWidget):
         browse.clicked.connect(self._browse)
         row.addWidget(browse)
         row_wrap = QWidget()
-        row_wrap.setFixedWidth(520)
+        row_wrap.setFixedWidth(620)
         row_wrap.setLayout(row)
         lay.addWidget(row_wrap, alignment=Qt.AlignmentFlag.AlignHCenter)
+
+        lay.addSpacing(10)
+        # 버튼은 내용 크기 + 가운데 정렬(가로로 안 늘임)
+        go_row = QHBoxLayout()
+        go_row.addStretch(1)
+        self.go_btn = QPushButton("분석 시작")
+        self.go_btn.setStyleSheet(T.qss_primary_btn())
+        self.go_btn.clicked.connect(self._submit)
+        go_row.addWidget(self.go_btn)
+        go_row.addStretch(1)
+        lay.addLayout(go_row)
 
         # 분석 후 세션(.json) 저장 폴더
         save_row = QHBoxLayout()
@@ -195,57 +206,55 @@ class LinkScreen(QWidget):
         save_btn.clicked.connect(self._browse_save_dir)
         save_row.addWidget(save_btn)
         save_wrap = QWidget()
-        save_wrap.setFixedWidth(520)
+        save_wrap.setFixedWidth(620)
         save_wrap.setLayout(save_row)
         lay.addWidget(save_wrap, alignment=Qt.AlignmentFlag.AlignHCenter)
 
-        lay.addSpacing(10)
-        # 버튼은 내용 크기 + 가운데 정렬(가로로 안 늘임)
-        go_row = QHBoxLayout()
-        go_row.addStretch(1)
-        self.go_btn = QPushButton("분석 시작")
-        self.go_btn.setStyleSheet(T.qss_primary_btn())
-        self.go_btn.clicked.connect(self._submit)
-        go_row.addWidget(self.go_btn)
-        go_row.addStretch(1)
-        lay.addLayout(go_row)
-        lay.addStretch(2)
-        outer.addWidget(col)
-
         # ── 라이브러리(최근 세션) — 저장 폴더 *.json 카드 ────────
         lib = QFrame()
-        lib.setFixedWidth(280)
+        lib.setFixedSize(390, 210)
         lib.setStyleSheet(
             f"QFrame{{background:{T.BG_SURFACE};border:1px solid {T.BORDER_SUBTLE};"
             f"border-radius:12px;}}")
         ll = QVBoxLayout(lib)
-        ll.setContentsMargins(16, 16, 16, 16)
+        ll.setContentsMargins(12, 12, 12, 12)
         ll.setSpacing(8)
         lib_title = QLabel("라이브러리")
         lib_title.setStyleSheet(
             f"color:{T.TEXT_MUTED};font-family:'{T.FONT_MONO}';"
             "font-size:12px;font-weight:700;border:none;")
         ll.addWidget(lib_title)
-        self._lib_list = QVBoxLayout()
+        lib_scroll = QScrollArea()
+        lib_scroll.setWidgetResizable(True)
+        lib_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        lib_scroll.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        lib_scroll.setStyleSheet(
+            "QScrollArea{border:none;background:transparent;}"
+            "QScrollArea > QWidget > QWidget{background:transparent;}")
+        lib_content = QWidget()
+        lib_content.setStyleSheet("background:transparent;")
+        self._lib_list = QVBoxLayout(lib_content)
+        self._lib_list.setContentsMargins(0, 0, 0, 0)
         self._lib_list.setSpacing(6)
-        ll.addLayout(self._lib_list)
-        ll.addStretch(1)
+        self._lib_list.setSizeConstraint(
+            QLayout.SizeConstraint.SetMinAndMaxSize)
+        lib_scroll.setWidget(lib_content)
+        ll.addWidget(lib_scroll)
+        self._lib_scroll = lib_scroll
         self._lib_panel = lib
-        lib_wrap = QVBoxLayout()
-        lib_wrap.addStretch(1)
-        lib_wrap.addWidget(lib)
-        lib_wrap.addStretch(2)
-        outer.addSpacing(28)
-        outer.addLayout(lib_wrap)
-        outer.addStretch(1)
+        lay.addWidget(lib, alignment=Qt.AlignmentFlag.AlignHCenter)
+        lay.addStretch(1)
+        outer.addWidget(col)
 
         # 제한 모드에서 잠글 위젯들(세션 선택만 남김)
         self._restricted_widgets = (self.url_edit, self.go_btn,
                                     self.save_edit, save_btn)
         self._restricted = False
         # 입장 애니메이션 순서(위 → 아래)
-        self._input_items = [logo, title, sub, row_wrap, save_wrap,
-                             self.go_btn, lib]
+        self._input_items = [logo, title, sub, row_wrap, self.go_btn,
+                             save_wrap, lib]
         return w
 
     # ── 라이브러리 ───────────────────────────────────────────────

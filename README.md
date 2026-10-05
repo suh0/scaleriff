@@ -22,6 +22,7 @@
 ```powershell
 py -3.11 -m venv venv
 venv\Scripts\python.exe -m pip install -r requirements.txt
+winget install --id DenoLand.Deno -e
 ```
 시스템 ffmpeg 불필요(`imageio-ffmpeg` 동봉 바이너리 사용). madmom(비트·코드 학습모델)은
 선택 — 미설치 시 librosa 폴백. 설치 절차는 `requirements.txt` 주석 참고.

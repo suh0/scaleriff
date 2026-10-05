@@ -9,6 +9,7 @@
 from __future__ import annotations
 import os
 from PyQt6.QtGui import QFontDatabase
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout
 
 # ── §3.1 표면 / 배경 ─────────────────────────────────────────────
 BG_BASE        = "#0a0a0a"
@@ -81,9 +82,27 @@ def load_fonts():
 
 # ── 공통 레이아웃 규칙 ───────────────────────────────────────────
 # 모든 화면(새 화면 포함)의 기본 여백. root.setContentsMargins(PAD_H, PAD_V, PAD_H, PAD_V)
-PAD_H = 40
-PAD_V = 28
+PAD_H = 30
+PAD_V = 21
 # 버튼 규칙: 텍스트보다 넓게 늘이지 말 것 — 내용 크기 + 좌우 stretch로 가운데 정렬.
+
+
+def compact_content(parent: QWidget) -> QWidget:
+    """화면 중앙 75% 영역을 모든 페이지의 공통 콘텐츠 무대로 사용."""
+    outer = QVBoxLayout(parent)
+    outer.setContentsMargins(0, 0, 0, 0)
+    outer.setSpacing(0)
+    row = QHBoxLayout()
+    row.setContentsMargins(0, 0, 0, 0)
+    content = QWidget(parent)
+    content.setObjectName("compactContent")
+    outer.addStretch(1)
+    outer.addLayout(row, 6)
+    outer.addStretch(1)
+    row.addStretch(1)
+    row.addWidget(content, 6)
+    row.addStretch(1)
+    return content
 
 
 # ── 공통 QSS 스니펫 ──────────────────────────────────────────────

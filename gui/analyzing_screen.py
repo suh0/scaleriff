@@ -7,7 +7,6 @@ from __future__ import annotations
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QProgressBar, QPushButton,
-    QTextEdit
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 
@@ -54,8 +53,9 @@ class AnalyzingScreen(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._worker = None
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(80, 0, 80, 0)
+        content = T.compact_content(self)
+        lay = QVBoxLayout(content)
+        lay.setContentsMargins(60, 0, 60, 0)
         lay.addStretch(1)
 
         self.title = QLabel("분석 중…")
@@ -99,15 +99,6 @@ class AnalyzingScreen(QWidget):
             f"QProgressBar::chunk{{background:{T.WHITE};border-radius:5px;}}")
         lay.addWidget(self.bar)
 
-        self.log = QTextEdit()
-        self.log.setReadOnly(True)
-        self.log.setFixedHeight(120)
-        self.log.setStyleSheet(
-            f"QTextEdit{{background:{T.BG_INSET};color:{T.TEXT_DIM};border:none;"
-            f"border-radius:8px;font-family:'{T.FONT_MONO}';font-size:11px;}}")
-        lay.addSpacing(16)
-        lay.addWidget(self.log)
-
         bg_row = QHBoxLayout()
         bg_row.addStretch(1)
         self.bg_btn = QPushButton("연습하며 기다리기")
@@ -128,11 +119,10 @@ class AnalyzingScreen(QWidget):
     def showEvent(self, e):
         super().showEvent(e)
         stagger([self.title, self.msg, self._steps_wrap, self.bar,
-                 self.log, self.bg_btn])
+                 self.bg_btn])
 
     def start(self, build_fn, source):
         self.bar.setValue(0)
-        self.log.clear()
         self.err_btn.hide()
         self.bg_btn.show()
         self.title.setText("분석 중…")
@@ -164,14 +154,14 @@ class AnalyzingScreen(QWidget):
     def _on_progress(self, pct, msg):
         self.bar.setValue(pct)
         self.msg.setText(msg)
-        self.log.append(f"[{pct:3d}%] {msg}")
         self._set_steps(pct)
         self.progressChanged.emit(pct)
 
     def _on_failed(self, err):
         self.title.setText("분석에 실패했어요")
-        self.msg.setText("링크나 파일을 확인해 주세요")
-        self.log.append("\n" + err)
+        detail = next((line.strip() for line in err.splitlines() if line.strip()), "")
+        self.msg.setText(detail.removeprefix("ERROR: ") or "링크나 파일을 확인해 주세요")
+        self.msg.setToolTip(err)
         self.bg_btn.hide()
         self.err_btn.show()
         self.analysisFailed.emit()

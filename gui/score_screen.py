@@ -29,9 +29,10 @@ class ScoreScreen(QWidget):
         self._model = None      # ML 모델(수동 수정 시 리프 재생성용)
         self.note_player = shared_player()           # 리프 미리듣기(전역 공유)
         self._riff_timers: list[QTimer] = []
-        root = QVBoxLayout(self)
-        root.setContentsMargins(56, 40, 56, 40)   # 여유 있는 패딩
-        root.setSpacing(16)
+        content = T.compact_content(self)
+        root = QVBoxLayout(content)
+        root.setContentsMargins(42, 30, 42, 30)   # 여유 있는 패딩
+        root.setSpacing(12)
 
         top = QHBoxLayout()
         self.link_btn = QPushButton("← 박자 조정")

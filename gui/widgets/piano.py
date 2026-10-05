@@ -11,6 +11,7 @@
 - 범위: 3옥타브 C3–B5 (MIDI 48–83) — 왼손 C3~B3 / 오른손 C4~B5
 - 흰 건반 가로:세로 비율 WHITE_RATIO 고정 → 어떤 창에서도 비율 유지(레터박스)
 - 배지는 가이드·연습 모드 모두 전체 표시(퀴즈 블러 제거 §10)
+- 전환 직전 다음 스케일의 건반 테두리가 선명해지며 예고한다.
 """
 from __future__ import annotations
 
@@ -51,6 +52,10 @@ class PianoWidget(QWidget):
         self._split = 0                      # 난이도 목표음 필터(§7.5, 0=없음)
         self._left_targets: set[int] = set()
         self._right_targets: set[int] = set()
+        self._preview_notes: set[int] = set()
+        self._preview_chords: set[int] = set()
+        self._preview_root = 0
+        self._preview_opacity = 0.0
 
     # ── 상태 세터 ────────────────────────────────────────────────
     def set_scale(self, note_set, chord_tones):
@@ -72,6 +77,30 @@ class PianoWidget(QWidget):
         self._left_targets = set(left or ())
         self._right_targets = set(right or ())
         self.update()
+
+    def set_preview(self, notes=(), chords=(), root=0, progress=0.0):
+        """다음 스케일 테두리: 초반에 빠르게 선명해지는 0~100% 예고."""
+        self._preview_notes = set(notes)
+        self._preview_chords = set(chords)
+        self._preview_root = root
+        t = max(0.0, min(1.0, progress))
+        self._preview_opacity = 1 - (1 - t) ** 3
+        self.update()
+
+    def _draw_preview_border(self, p: QPainter, midi: int, r: QRectF):
+        pc = midi % 12
+        if midi in self._pressed or pc not in self._preview_notes or not self._preview_opacity:
+            return
+        if pc != self._preview_root and pc not in self._preview_chords:
+            return
+        tint = QColor(T.BADGE_ROOT if pc == self._preview_root else
+                      T.BADGE_CHORD)
+        tint.setAlphaF(self._preview_opacity)
+        p.save()
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.setPen(QPen(tint, 3.0))
+        p.drawRoundedRect(r.adjusted(1.5, 1.5, -1.5, -1.5), 3, 3)
+        p.restore()
 
     def _is_dim(self, midi: int) -> bool:
         if not self._split:
@@ -180,6 +209,8 @@ class PianoWidget(QWidget):
             p.setPen(QPen(QColor(T.KEY_W_BORDER), 1.0))
             p.drawRoundedRect(r, 3, 3)
 
+        self._draw_preview_border(p, midi, r)
+
         # 배지 — 눌렸을 때 꽉 찬 색이면 배지 생략, 안 눌렸을 때만 표시
         if cst != "DEFAULT" and not is_pressed:
             bsz = 26
@@ -207,6 +238,8 @@ class PianoWidget(QWidget):
         p.setBrush(QColor(fill))
         p.setPen(Qt.PenStyle.NoPen)
         p.drawRoundedRect(r, 3, 3)
+
+        self._draw_preview_border(p, midi, r)
 
         # 배지 — 안 눌렸을 때만 표시
         if cst != "DEFAULT" and not is_pressed:
