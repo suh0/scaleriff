@@ -26,7 +26,7 @@ from gui.anim import stagger
 from gui.widgets.piano import PianoWidget
 from gui.widgets.chord_lane import ChordLane
 from gui.widgets.scrub_bar import ScrubBar
-from gui.widgets.riff_view import RiffView
+from gui.widgets.falling_notes import FallingNotes
 
 # 코드/가이드를 재생 위치보다 앞당겨 표시하는 보정값(초). 0 = 보정 없음.
 SYNC_LOOKAHEAD_SEC = 0.0
@@ -81,16 +81,12 @@ class MainScreen(QWidget):
             f"color:{T.TEXT_PRIMARY};font-family:'{T.FONT_SANS}';"
             "font-size:15px;font-weight:700;")
         top.addWidget(self.song_lbl)
-        top.addStretch(1)
-        self.time_lbl = QLabel("")
-        self.time_lbl.setStyleSheet(
-            f"color:{T.TEXT_BODY};font-family:'{T.FONT_MONO}';font-size:12px;")
-        top.addWidget(self.time_lbl)
         top.addSpacing(12)
         self.bpm_lbl = QLabel("")
         self.bpm_lbl.setStyleSheet(
             f"color:{T.TEXT_MUTED};font-family:'{T.FONT_MONO}';font-size:12px;")
         top.addWidget(self.bpm_lbl)
+        top.addStretch(1)
         root.addLayout(top)
 
         # ── 코드 레인 — HUD+다음 미리보기 통합(고정 플레이헤드) ──
@@ -98,24 +94,29 @@ class MainScreen(QWidget):
         self.lane.seekRequested.connect(self._on_seek)
         root.addWidget(self.lane)
 
-        # ── 리프 뷰(연습 시만) — 레인 바로 아래 밴드 ──
-        self.riff = RiffView()
-        riff_policy = self.riff.sizePolicy()
-        riff_policy.setRetainSizeWhenHidden(True)
-        self.riff.setSizePolicy(riff_policy)
-        self.riff.setVisible(False)
-        root.addWidget(self.riff)
+        # 리프 예고 공간은 모든 모드에서 같은 높이로 확보한다.
+        root.addSpacing(108)
         root.addSpacing(16)
 
         # ── 피아노 (리프연습과 무관하게 가만히 — 가이드 그대로) ──
         self.piano = PianoWidget()
         self.piano.notePlayed.connect(self.on_midi_note)
         root.addWidget(self.piano, 1)
+        self.riff = FallingNotes(self.piano, self.content)
 
         # ── 곡 전체 재생바(스크럽) — 건반 아래, seek로 레인과 연동 ──
         self.scrub = ScrubBar()
         self.scrub.seekRequested.connect(self._on_seek)
-        root.addWidget(self.scrub)
+        scrub_row = QHBoxLayout()
+        self.time_lbl = QLabel("00:00")
+        self.total_time_lbl = QLabel("00:00")
+        for label in (self.time_lbl, self.total_time_lbl):
+            label.setStyleSheet(
+                f"color:{T.TEXT_BODY};font-family:'{T.FONT_MONO}';font-size:12px;")
+        scrub_row.addWidget(self.time_lbl)
+        scrub_row.addWidget(self.scrub, 1)
+        scrub_row.addWidget(self.total_time_lbl)
+        root.addLayout(scrub_row)
 
         # ── 하단 컨트롤 한 줄: 도전모드·루프 + 재생 ──
         rrow = QHBoxLayout()
@@ -224,8 +225,17 @@ class MainScreen(QWidget):
 
     def resizeEvent(self, e):
         super().resizeEvent(e)
+        if hasattr(self, "riff"):
+            self._place_falling_notes()
         if self.loop_panel.isVisible():
             self._place_loop_panel()
+
+    def _place_falling_notes(self):
+        geo = self.piano._geometry()
+        if geo:
+            top = self.lane.geometry().bottom() + 10
+            bottom = self.piano.y() + geo[2]
+            self.riff.setGeometry(self.piano.x(), top, self.piano.width(), max(1, int(bottom - top)))
 
     def _build_loop_rows(self):
         while self.loop_rows.count():
@@ -318,14 +328,23 @@ class MainScreen(QWidget):
         재생 헤드 위치에 맞춰 트리거하므로 일시정지·시킹 시 함께 멈추고 따라간다(§2).
         """
         ev: list[tuple[float, int]] = []
+        falling = []
         if self.tl:
             beat = self.tl.beat_sec()
             for seg in self.tl.segments:
                 for n in seg.example:
                     ev.append((seg.start_sec + n["beat_pos"] * beat, n["midi"]))
+                    pc = n["midi"] % 12
+                    if pc in seg.chord_tones():
+                        color = T.BADGE_ROOT if pc == seg.scale_root else T.BADGE_CHORD
+                    else:
+                        color = T.BADGE_SCALE
+                    falling.append((ev[-1][0], n["midi"], color,
+                                    n.get("dur_beats", 0.5) * beat))
             ev.sort(key=lambda e: e[0])
         self._riff_events = ev
         self._riff_times = [t for t, _ in ev]
+        self.riff.set_events(falling, self.tl.beat_sec() if self.tl else 0.5)
 
     def _seek_riff_idx(self, sec: float):
         """리프 재생 커서를 sec 위치로 이동(시킹/모드 진입 시 과거 음 몰아 재생 방지)."""
@@ -352,7 +371,8 @@ class MainScreen(QWidget):
         self.lane.set_timeline(tl)
         self.scrub.set_timeline(tl)
         self.scrub.set_position(0.0)
-        self.time_lbl.setText(f"{_fmt_sec(0)} / {_fmt_sec(tl.total_sec())}")
+        self.time_lbl.setText(_fmt_sec(0))
+        self.total_time_lbl.setText(_fmt_sec(tl.total_sec()))
         self._render_at(0.0)
 
     def pause(self):
@@ -383,19 +403,20 @@ class MainScreen(QWidget):
             self.loop_btn.setChecked(False)
             self.loop_panel.hide()
         self.riff.setVisible(practice)
+        self._place_falling_notes()
+        self.riff.raise_()
+        self.loop_panel.raise_()
         self._apply_targets()
         if practice:
-            seg = self._current_segment()
-            if seg and self.tl:
-                self.riff.set_segment(seg, self.tl.bpm, self.tl.time_sig_beats())
             # 현재 위치부터 리프 재생(과거 음은 건너뜀)
             self._build_riff_events()
             self._seek_riff_idx(self.playhead.position_sec() if self.playhead else 0.0)
-        else:
-            self.riff.clear()
+        self.riff.set_position(self.playhead.position_sec() if self.playhead else 0.0,
+                               self._loop_spans())
         if challenge:
             self._reset_challenge()
         else:
+            self._render_at(self.playhead.position_sec() if self.playhead else 0.0)
             self._on_state(self.playhead.is_playing() if self.playhead else False)
 
     def _reset_challenge(self):
@@ -438,8 +459,7 @@ class MainScreen(QWidget):
         self.lane.set_position(sec)
         self.scrub.set_position(sec)       # 레인·재생바 함께 이동
         if self.tl:
-            self.time_lbl.setText(
-                f"{_fmt_sec(sec)} / {_fmt_sec(self.tl.total_sec())}")
+            self.time_lbl.setText(_fmt_sec(sec))
         # 사용자 루프(§6): 켜진 루프 끝에 닿으면 시작으로
         if self.playhead and self.playhead.is_playing():
             for s0, e0 in self._loop_spans():
@@ -447,7 +467,6 @@ class MainScreen(QWidget):
                     self._seek_to(s0)
                     return
         self._render_at(sec + SYNC_LOOKAHEAD_SEC)   # 구간 변경 시 무거운 갱신
-        self._update_live(sec)                       # 매 틱 카운트인·리프 헤드
         # 리프를 재생 헤드에 맞춰 트리거(재생 중일 때만 → 일시정지 시 함께 멈춤, §2)
         if self._mode == "practice" and self.playhead and self.playhead.is_playing():
             ev = self._riff_events
@@ -471,12 +490,13 @@ class MainScreen(QWidget):
         self.piano.set_pressed(set())
         self._apply_targets()              # 난이도 목표음 필터(구간별, §7.5)
         # 현재/다음 코드·스케일은 코드 레인이 스스로 그림(set_position)
-        # 리프연습: 새 구간 진입 시 리프 뷰만 갱신(재생은 _on_tick이 헤드 동기로 트리거)
-        if self._mode == "practice":
-            self.riff.set_segment(seg, self.tl.bpm, self.tl.time_sig_beats())
 
     def _update_scale_preview(self, sec: float, idx: int):
         self.piano.set_preview()
+        if self._mode == "practice":
+            self._place_falling_notes()
+            self.riff.set_position(sec, self._loop_spans())
+            return
         if idx < 0:
             return
         seg = self.tl.segments[idx]
@@ -497,17 +517,6 @@ class MainScreen(QWidget):
             return
         self.piano.set_preview(upcoming.note_set, upcoming.chord_tones(),
                                upcoming.scale_root, (sec - boundary + lead) / lead)
-
-    # ── 매 틱 라이브 갱신: 리프 헤드 ─────────────────────────────
-    def _update_live(self, sec: float):
-        if not self.tl or not self.tl.segments:
-            return
-        idx = self.tl.segment_index_at(sec)
-        if idx < 0:
-            return
-        seg = self.tl.segments[idx]
-        if self._mode == "practice" and self.playhead and self.playhead.is_playing():
-            self.riff.set_play_pos_sec(sec, seg.start_sec, self.tl.bpm)
 
     # ── 입력 콜백 ────────────────────────────────────────────────
     def on_midi_note(self, midi: int, is_on: bool):
