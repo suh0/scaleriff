@@ -11,12 +11,12 @@
 - 범위: 3옥타브 C3–B5 (MIDI 48–83) — 왼손 C3~B3 / 오른손 C4~B5
 - 흰 건반 가로:세로 비율 WHITE_RATIO 고정 → 어떤 창에서도 비율 유지(레터박스)
 - 배지는 가이드·연습 모드 모두 전체 표시(퀴즈 블러 제거 §10)
-- 전환 직전 다음 음의 건반 위 둥근 막대가 넓어지며 예고한다.
+- 전환 직전 다음 음의 건반 아래 둥근 막대가 건반 너비까지 넓어진다.
 """
 from __future__ import annotations
 
 from PyQt6.QtWidgets import QWidget, QSizePolicy
-from PyQt6.QtGui import QPainter, QColor, QPen, QFont
+from PyQt6.QtGui import QPainter, QColor, QPen
 from PyQt6.QtCore import Qt, QRectF, pyqtSignal
 
 from gui import theme as T
@@ -25,7 +25,8 @@ MIDI_LOW  = 48   # C3
 MIDI_HIGH = 83   # B5
 
 WHITE_RATIO = 4.2   # 흰 건반 가로:세로 고정 비율
-PREVIEW_SPACE = 10  # 건반 밖 예고 막대를 위한 상단 여백
+PREVIEW_SPACE = 16  # 흰 건반 아래 예고 막대 여백
+PREVIEW_HEIGHT = 4
 # 왼손(C3~B3)/오른손(C4~B5) 사이 시각 간격.
 GAP_MIDI  = 60       # 이 음(C4) 앞에 간격
 GAP_UNITS = 0.8      # 간격 폭(흰 건반 폭 배수)
@@ -81,7 +82,7 @@ class PianoWidget(QWidget):
         self.update()
 
     def set_preview(self, notes=(), chords=(), root=0, progress=0.0):
-        """다음 음의 왕관 막대: 점점 넓어지고 초반에 빠르게 선명해진다."""
+        """다음 음의 하단 막대: 건반 너비까지 넓어지고 빠르게 선명해진다."""
         self._preview_notes = set(notes)
         self._preview_chords = set(chords)
         self._preview_root = root
@@ -90,9 +91,9 @@ class PianoWidget(QWidget):
         self._preview_opacity = 1 - (1 - t) ** 3
         self.update()
 
-    def _draw_preview_crown(self, p: QPainter, midi: int, r: QRectF):
+    def _draw_preview_bar(self, p: QPainter, midi: int, r: QRectF):
         pc = midi % 12
-        if midi in self._pressed or pc not in self._preview_notes or not self._preview_opacity:
+        if pc not in self._preview_notes or not self._preview_opacity:
             return
         if pc != self._preview_root and pc not in self._preview_chords:
             return
@@ -102,9 +103,10 @@ class PianoWidget(QWidget):
         p.save()
         p.setBrush(tint)
         p.setPen(Qt.PenStyle.NoPen)
-        width = min(14.0, r.width() * 0.5) * (0.3 + 0.7 * self._preview_progress)
-        crown = QRectF(r.center().x() - width / 2, r.top() - 8, width, 4)
-        p.drawRoundedRect(crown, 2, 2)
+        width = r.width() * (0.3 + 0.7 * self._preview_progress)
+        y = r.bottom() + 4 if _is_white(midi) else r.bottom() - PREVIEW_HEIGHT
+        bar = QRectF(r.center().x() - width / 2, y, width, PREVIEW_HEIGHT)
+        p.drawRoundedRect(bar, 2, 2)
         p.restore()
 
     def _is_dim(self, midi: int) -> bool:
@@ -127,7 +129,7 @@ class PianoWidget(QWidget):
             kh = h
             kw = kh / WHITE_RATIO
         total_w = kw * units
-        return white_midis, (w - total_w) / 2.0, PREVIEW_SPACE + (h - kh) / 2.0, kw, kh
+        return white_midis, (w - total_w) / 2.0, (h - kh) / 2.0, kw, kh
 
     @staticmethod
     def _wx(i: int, white_midis: list[int], x0: float, kw: float) -> float:
@@ -169,12 +171,14 @@ class PianoWidget(QWidget):
 
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        preview_rects = []
 
         # 흰 건반
         for i, midi in enumerate(white_midis):
             rx = self._wx(i, white_midis, x0, kw)
             r = QRectF(rx + 1, y0, kw - 2, kh - 1)
             self._draw_white(p, midi, r)
+            preview_rects.append((midi, r))
 
         # 검은 건반 (흰 건반 위에 덮어 그림) — B|C 경계엔 검은 건반이 없어
         # 중앙 간격과 겹치지 않는다.
@@ -186,6 +190,10 @@ class PianoWidget(QWidget):
                 rx = self._wx(i, white_midis, x0, kw) + kw - bw / 2
                 r = QRectF(rx, y0, bw, bh)
                 self._draw_black(p, bmidi, r)
+                preview_rects.append((bmidi, r))
+
+        for midi, r in preview_rects:
+            self._draw_preview_bar(p, midi, r)
 
     def _draw_white(self, p: QPainter, midi: int, r: QRectF):
         is_pressed = midi in self._pressed
@@ -197,7 +205,8 @@ class PianoWidget(QWidget):
             if is_out_pressed:
                 fill = T.KEY_PRESSED_OUT      # 빨간색
             elif cst == "CHORD":
-                fill = T.KEY_PRESSED_CHORD    # 초록색
+                fill = (T.BADGE_ROOT if self._degrees.get(midi % 12) == "1"
+                        else T.KEY_PRESSED_CHORD)
             elif cst == "SCALE":
                 fill = T.BORDER_DEFAULT       # 회색 (#555555)
             else:
@@ -214,10 +223,8 @@ class PianoWidget(QWidget):
             p.setPen(QPen(QColor(T.KEY_W_BORDER), 1.0))
             p.drawRoundedRect(r, 3, 3)
 
-        self._draw_preview_crown(p, midi, r)
-
-        # 배지 — 눌렸을 때 꽉 찬 색이면 배지 생략, 안 눌렸을 때만 표시
-        if cst != "DEFAULT" and not is_pressed:
+        # 배지는 눌림 상태에도 유지한다.
+        if cst != "DEFAULT":
             bsz = 26
             cx = r.x() + r.width() / 2
             cy = r.y() + r.height() - bsz / 2 - 5
@@ -233,7 +240,8 @@ class PianoWidget(QWidget):
             if is_out_pressed:
                 fill = T.KEY_PRESSED_OUT      # 빨간색
             elif cst == "CHORD":
-                fill = T.KEY_PRESSED_CHORD    # 초록색
+                fill = (T.BADGE_ROOT if self._degrees.get(midi % 12) == "1"
+                        else T.KEY_PRESSED_CHORD)
             elif cst == "SCALE":
                 fill = T.BORDER_DEFAULT       # 밝은 회색 (#555555)
             else:
@@ -244,18 +252,16 @@ class PianoWidget(QWidget):
         p.setPen(Qt.PenStyle.NoPen)
         p.drawRoundedRect(r, 3, 3)
 
-        self._draw_preview_crown(p, midi, r)
-
-        # 배지 — 안 눌렸을 때만 표시
-        if cst != "DEFAULT" and not is_pressed:
+        # 하단 예고 막대 높이만큼 배지를 올려 겹침을 피한다.
+        if cst != "DEFAULT":
             bsz = 20
             cx = r.x() + r.width() / 2
-            cy = r.y() + r.height() - bsz / 2 - 3
+            cy = r.y() + r.height() - bsz / 2 - 3 - PREVIEW_HEIGHT
             self._draw_badge(p, midi, cst, cx, cy, bsz)
 
     def _draw_badge(self, p: QPainter, midi: int, state: str,
                     cx: float, cy: float, sz: int):
-        """원형 배지 (색 동그라미 + 도수 텍스트). CHORD/SCALE만 호출됨."""
+        """숫자 없는 원형 색 배지. CHORD/SCALE만 호출됨."""
         pc = midi % 12
         deg = self._degrees.get(pc)
         if deg is None:
@@ -265,22 +271,17 @@ class PianoWidget(QWidget):
 
         if state == "CHORD":
             bg = QColor(T.BADGE_ROOT if deg == "1" else T.BADGE_CHORD)  # 근음=파랑
-            fg = QColor(T.BADGE_TEXT)
+            if deg != "1":
+                sz *= 0.85
         else:   # SCALE
             bg = QColor(T.BADGE_SCALE)
-            fg = QColor(T.BADGE_SCALE_TEXT)
+            sz *= 0.70
 
         badge = QRectF(cx - sz / 2, cy - sz / 2, sz, sz)
         p.setBrush(bg)
         p.setPen(Qt.PenStyle.NoPen)
         p.drawEllipse(badge)
 
-        f = QFont(T.FONT_MONO)
-        f.setPixelSize(max(7, int(sz * 0.46)))
-        f.setBold(True)
-        p.setFont(f)
-        p.setPen(fg)
-        p.drawText(badge, Qt.AlignmentFlag.AlignCenter, deg)
         p.setOpacity(1.0)
 
     # ── 마우스 입력 ──────────────────────────────────────────────

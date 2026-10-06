@@ -46,7 +46,8 @@ def main():
         wr = content.width() / page.width()
         hr = content.height() / page.height()
         assert 0.73 <= wr <= 0.77, f"{type(page).__name__} 가로 비율: {wr:.3f}"
-        assert 0.73 <= hr <= 0.77, f"{type(page).__name__} 세로 비율: {hr:.3f}"
+        expected_hr = 0.875 if page is win.main_screen else 0.75
+        assert abs(hr - expected_hr) <= 0.02, f"{type(page).__name__} 세로 비율: {hr:.3f}"
     win.stack.setCurrentWidget(win.link_screen)
     win.resize(1040, 740)
     win.link_screen.stack.setCurrentWidget(win.link_screen._input)
@@ -303,9 +304,13 @@ def main():
     ms._on_tick(2.5)
     assert ms.lane._pos == 2.5 and ms.scrub._pos == 2.5
 
-    # 리프연습 ON/OFF 토글 + 리프 뷰 표시 연동
-    ms._toggle_riff(); assert ms._mode == "practice" and not ms.riff.isHidden()
-    ms._toggle_riff(); assert ms._mode == "guide" and ms.riff.isHidden()
+    # 도전모드 메뉴 → 리프연습 / 자유연습 → 리프 뷰 표시 연동
+    assert ms.challenge_btn.menu() is ms.challenge_menu
+    assert [a.text() for a in ms.challenge_menu.actions()] == ["자유연습", "리프연습", "스케일도전", "리프도전"]
+    ms._mode_actions["riff"].trigger()
+    assert ms._mode == "practice" and not ms.riff.isHidden()
+    ms._mode_actions["free"].trigger()
+    assert ms._mode == "guide" and ms.riff.isHidden()
 
     # ML 리프: 스케일 '종류당 1개' (코드 등장마다가 아님, §8)
     assert tl.scale_riffs, "scale_riffs 미생성"
@@ -351,13 +356,13 @@ def main():
     assert _rv._total_beats == tl2.time_sig_beats(), f"가이드 1마디 아님: {_rv._total_beats}"
     assert all(n["beat_pos"] < tl2.time_sig_beats() for n in _rv._notes), "가이드에 2마디째 음"
     # §2 리프가 곡에 함께 구워짐(재생 헤드 동기) — 일시정지/시킹과 함께 동작
-    ms._toggle_riff()                       # 연습 ON → 이벤트 생성
+    ms._mode_actions["riff"].trigger()     # 리프연습 → 이벤트 생성
     assert ms._riff_events and ms._riff_times == sorted(ms._riff_times), "리프 이벤트 정렬"
     mid = tl.segments[1].start_sec
     ms._seek_riff_idx(mid)
     assert all(t < mid for t in ms._riff_times[:ms._riff_idx]), "시킹 커서 오류(앞)"
     assert all(t >= mid for t in ms._riff_times[ms._riff_idx:]), "시킹 커서 오류(뒤)"
-    ms._toggle_riff()                       # OFF
+    ms._mode_actions["free"].trigger()     # 자유연습
 
     # §1 수동 코드 수정: 박자 조정 화면 코드 목록에서 바꾸면 스케일·리프 재계산
     win.beat.set_timeline(tl, ms._ml_model)
@@ -395,24 +400,26 @@ def main():
     assert d2.bar_times == [] and d2.split_point == 60 and d2.loops == []
 
     # 난이도: 선택 → 건반 목표음 필터
-    ms.diff_combo.setCurrentIndex(1)             # Lv1: 왼손 근음 + 오른손 코드톤
+    ms._difficulty_actions[0].trigger()         # Lv1: 왼손 근음 + 오른손 코드톤
     seg = ms._current_segment()
     assert ms.piano._split == tl.split_point
     assert ms.piano._right_targets == set(seg.chord_tones()), "Lv1 오른손 ≠ 코드톤"
     assert ms.piano._left_targets == {seg.chord.root % 12}, "Lv1 왼손 ≠ 근음"
-    ms.diff_combo.setCurrentIndex(2)
+    ms._difficulty_actions[1].trigger()
     assert ms.piano._left_targets == {seg.chord.root % 12}
     assert ms.piano._right_targets == set(seg.note_set)
-    ms.diff_combo.setCurrentIndex(3)
+    ms._difficulty_actions[2].trigger()
     assert ms.piano._left_targets == set(seg.chord_tones())
     assert ms.piano._right_targets == set(seg.note_set)
-    # 리프연습 진입 → 난이도 비활성(§7: 리프연습은 난이도 미적용)
-    ms._toggle_riff()
-    assert not ms.diff_combo.isEnabled()
-    ms._toggle_riff()
-    assert ms.diff_combo.isEnabled()
+    # 리프연습에는 이전 자유연습의 난이도 필터를 적용하지 않음
+    ms._mode_actions["riff"].trigger()
+    assert ms.piano._split == 0 and ms._mode_actions["riff"].isChecked()
+    assert not any(a.isChecked() for a in ms._difficulty_actions)
+    ms._difficulty_actions[2].trigger()
+    assert ms.piano._split == tl.split_point and not ms._mode_actions["riff"].isChecked()
+    assert ms._difficulty_actions[2].isChecked()
     # 해제 → 필터 해제
-    ms.diff_combo.setCurrentIndex(0)
+    ms._mode_actions["free"].trigger()
     assert ms.piano._split == 0
 
     # §3.5 2차: 박자 조정 화면 — 좌(시작박)/우(BPM) 드래그 반응형 → 확정 시 재격자화

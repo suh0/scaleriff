@@ -44,6 +44,19 @@ def main():
                 assert win._timeline.to_dict() == saved, "저장된 수정 내용이 달라짐"
                 assert win.stack.currentWidget() is win.beat
 
+            # 중단 가능한 분석이 보관한 작업별 폴더에서도 세션을 재사용.
+            nested = Path(directory) / "analysis_saved"
+            nested.mkdir()
+            audio = audio.rename(nested / audio.name)
+            tl.audio_ref = tl.wav_ref = str(audio)
+            win._on_timeline_ready(tl)
+            saved = tl.to_dict()
+            session = Path(win._session_path(tl))
+            with patch.object(win.analyzing, "start") as start:
+                win._start_build(url)
+                assert not start.called, "작업별 폴더의 저장된 링크를 재분석함"
+                assert win._timeline.to_dict() == saved
+
             win._bg_wait = True
             with patch.object(win, "_load_link_cache", side_effect=AssertionError("대기 중 조회")):
                 win._start_build(url)

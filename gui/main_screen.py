@@ -2,7 +2,7 @@
 
 타임라인을 재생하며 위젯을 갱신만 한다(§4: 재분석 없음).
 레이아웃: 상단바(뒤로/곡명/BPM/시간) · 코드 레인(고정 플레이헤드로 블록이 흐름)
-        · 리프 뷰(연습 시) · 피아노 · 하단 컨트롤 한 줄(토글·난이도·루프·
+        · 리프 뷰(연습 시) · 피아노 · 하단 컨트롤 한 줄(도전모드·루프·
         카운트인·재생)
 """
 from __future__ import annotations
@@ -10,7 +10,7 @@ from __future__ import annotations
 import bisect
 
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QFrame, QComboBox
+    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QPushButton, QFrame, QMenu
 )
 from PyQt6.QtCore import pyqtSignal
 
@@ -48,6 +48,9 @@ class MainScreen(QWidget):
         self.note_player = shared_player()
         self._last_idx = -1
         self._mode = "guide"               # guide ↔ practice(리프연습)
+        self._difficulty = 0
+        self._challenge_active = False
+        self._selected_mode = "free"
         self._ml_model = load_model()      # 부트스트랩/학습 모델(없으면 규칙 폴백)
         # 재생 헤드에 동기화된 리프 이벤트(절대초, midi) — 일시정지/시킹과 함께 동작(§2)
         self._riff_events: list[tuple[float, int]] = []
@@ -55,6 +58,9 @@ class MainScreen(QWidget):
         self._riff_idx = 0
 
         self.content = T.compact_content(self)
+        # 좌우 폭은 유지하고, 메인 화면은 창 하단까지 사용한다.
+        self.layout().setStretch(1, 7)
+        self.layout().setStretch(2, 0)
         root = QVBoxLayout(self.content)
         root.setContentsMargins(T.PAD_H, T.PAD_V, T.PAD_H, T.PAD_V)
         root.setSpacing(10)
@@ -94,8 +100,12 @@ class MainScreen(QWidget):
 
         # ── 리프 뷰(연습 시만) — 레인 바로 아래 밴드 ──
         self.riff = RiffView()
+        riff_policy = self.riff.sizePolicy()
+        riff_policy.setRetainSizeWhenHidden(True)
+        self.riff.setSizePolicy(riff_policy)
         self.riff.setVisible(False)
         root.addWidget(self.riff)
+        root.addSpacing(16)
 
         # ── 피아노 (리프연습과 무관하게 가만히 — 가이드 그대로) ──
         self.piano = PianoWidget()
@@ -107,27 +117,45 @@ class MainScreen(QWidget):
         self.scrub.seekRequested.connect(self._on_seek)
         root.addWidget(self.scrub)
 
-        # ── 하단 컨트롤 한 줄: 토글·난이도·루프 + 재생 ──
+        # ── 하단 컨트롤 한 줄: 도전모드·루프 + 재생 ──
         rrow = QHBoxLayout()
-        self.riff_btn = QPushButton("리프연습")
-        self.riff_btn.setCheckable(True)
-        self.riff_btn.setFixedSize(150, 40)   # ON/OFF 토글해도 크기 불변(레이아웃 고정)
-        self.riff_btn.clicked.connect(self._toggle_riff)
-        rrow.addWidget(self.riff_btn)
-        rrow.addSpacing(10)
-        # 난이도 선택기 — 가이드 모드의 건반 목표음 필터
-        self.diff_combo = QComboBox()
-        self.diff_combo.addItems([
-            "난이도 없음", "Lv1 · 근음+코드톤", "Lv2 · 근음+스케일", "Lv3 · 코드톤+스케일"])
-        self.diff_combo.setFixedHeight(40)
-        self.diff_combo.setStyleSheet(
-            f"QComboBox{{background:transparent;color:{T.TEXT_PRIMARY};"
+        self.challenge_btn = QPushButton("자유연습")
+        self.challenge_btn.setFixedHeight(40)
+        self.challenge_btn.setStyleSheet(
+            f"QPushButton{{background:transparent;color:{T.TEXT_PRIMARY};"
             f"border:1px solid {T.BORDER_ACTIVE};border-radius:10px;"
-            "padding:4px 12px;font-size:13px;font-weight:700;}"
-            f"QComboBox QAbstractItemView{{background:{T.BG_INSET};"
-            f"color:{T.TEXT_BODY};selection-background-color:{T.BORDER_DEFAULT};}}")
-        self.diff_combo.currentIndexChanged.connect(self._apply_targets)
-        rrow.addWidget(self.diff_combo)
+            "padding:4px 18px;font-size:13px;font-weight:700;}")
+        self.challenge_menu = QMenu(self.challenge_btn)
+        self.challenge_menu.setStyleSheet(
+            f"QMenu{{background:{T.BG_INSET};color:{T.TEXT_BODY};"
+            f"border:1px solid {T.BORDER_DEFAULT};padding:6px;}}"
+            "QMenu::item{padding:8px 24px;}"
+            f"QMenu::item:selected{{background:{T.BORDER_DEFAULT};}}")
+        self._mode_actions = {}
+        for mode, text in (("free", "자유연습"), ("riff", "리프연습")):
+            action = self.challenge_menu.addAction(text)
+            action.setCheckable(True)
+            action.triggered.connect(lambda checked=False, m=mode: self._select_practice(m))
+            self._mode_actions[mode] = action
+        scale_menu = self.challenge_menu.addMenu("스케일도전")
+        scale_menu.setStyleSheet(self.challenge_menu.styleSheet())
+        self._mode_actions["scale_challenge"] = scale_menu.menuAction()
+        scale_menu.menuAction().setCheckable(True)
+        self._difficulty_actions = []
+        for level, text in enumerate([
+                "Lv1 · 근음+코드톤", "Lv2 · 근음+스케일", "Lv3 · 코드톤+스케일"], 1):
+            action = scale_menu.addAction(text)
+            action.setCheckable(True)
+            action.triggered.connect(lambda checked=False, lv=level:
+                                     self._select_practice("scale_challenge", lv))
+            self._difficulty_actions.append(action)
+        action = self.challenge_menu.addAction("리프도전")
+        action.setCheckable(True)
+        action.triggered.connect(lambda: self._select_practice("riff_challenge"))
+        self._mode_actions["riff_challenge"] = action
+        self._mode_actions["free"].setChecked(True)
+        self.challenge_btn.setMenu(self.challenge_menu)
+        rrow.addWidget(self.challenge_btn)
         # 루프 버튼 — 사이드바 토글(생성한 루프 리스트, 루프별 ON/OFF)
         self.loop_btn = QPushButton("루프 ▸")
         self.loop_btn.setCheckable(True)
@@ -148,9 +176,14 @@ class MainScreen(QWidget):
             f"border-radius:30px;font-size:22px;font-weight:700;}}"
             f"QPushButton:hover{{background:{T.TEXT_BODY};}}")
         self.play_btn.clicked.connect(self._toggle_play)
-        rrow.addWidget(self.play_btn)
-        root.addLayout(rrow)
-        self._style_riff_btn()
+        playback_row = QGridLayout()
+        playback_row.addLayout(rrow, 0, 0)
+        playback_row.addWidget(self.play_btn, 0, 1)
+        playback_row.addWidget(QWidget(), 0, 2)
+        for column in (0, 2):
+            playback_row.setColumnStretch(column, 1)
+            playback_row.setColumnMinimumWidth(column, rrow.minimumSize().width())
+        root.addLayout(playback_row)
 
         # ── 루프 사이드바 (오버레이) — 생성한 루프 리스트 + 루프별 ON/OFF ──
         self.loop_panel = QFrame(self.content)
@@ -173,20 +206,6 @@ class MainScreen(QWidget):
     def showEvent(self, e):
         super().showEvent(e)
         stagger([self.lane, self.piano, self.play_btn])
-
-    # ── 리프연습 토글 버튼 스타일 ────────────────────────────────
-    def _style_riff_btn(self):
-        on = (self._mode == "practice")
-        self.riff_btn.setChecked(on)
-        self.riff_btn.setText("리프연습  ●  ON" if on else "리프연습  ○  OFF")
-        # 두 상태 동일 박스 모델(테두리 1px·폰트 동일) + 고정 크기 → 토글해도 안 밀림
-        if on:
-            bg, fg, border = T.WHITE, T.BG_BASE, T.WHITE
-        else:
-            bg, fg, border = "transparent", T.TEXT_PRIMARY, T.BORDER_ACTIVE
-        self.riff_btn.setStyleSheet(
-            f"QPushButton{{background:{bg};color:{fg};border:1px solid {border};"
-            f"border-radius:10px;font-size:13px;font-weight:700;}}")
 
     # ── 루프 사이드바(§6): 루프별 ON/OFF ─────────────────────────
     def _toggle_loop_panel(self):
@@ -244,6 +263,8 @@ class MainScreen(QWidget):
 
     def _loop_spans(self) -> list[tuple[float, float]]:
         """켜진 사용자 루프의 (start_sec, end_sec) — 타임라인 마디 격자 기준."""
+        if self._challenge_active:
+            return []
         loops = getattr(self.tl, "loops", []) if self.tl else []
         if not loops:
             return []
@@ -276,8 +297,8 @@ class MainScreen(QWidget):
     def _apply_targets(self):
         """현재 구간의 존별 목표음을 건반 배지 필터로 반영(비목표음 흐리게)."""
         seg = self._current_segment()
-        level = self.diff_combo.currentIndex()
-        if seg is None or level == 0:
+        level = self._difficulty
+        if self._mode == "practice" or seg is None or level == 0:
             self.piano.set_targets(0)
             return
         left = {seg.chord.root % 12} if level in (1, 2) else set(seg.chord_tones())
@@ -314,6 +335,7 @@ class MainScreen(QWidget):
     def set_timeline(self, tl: Timeline):
         if self.playhead:
             self.playhead.pause()
+        self._select_practice("free")
         self.tl = tl
         self._last_idx = -1
         self._build_loop_rows()            # 사용자 루프 리스트(사이드바) 갱신
@@ -337,14 +359,31 @@ class MainScreen(QWidget):
         if self.playhead:
             self.playhead.pause()
 
-    # ── 리프연습 ON/OFF ──────────────────────────────────────────
-    def _toggle_riff(self):
-        self._mode = "practice" if self._mode != "practice" else "guide"
-        self._style_riff_btn()
+    # ── 연습 / 도전 모드 선택 ───────────────────────────────────
+    def _select_practice(self, mode: str, level: int = 0):
+        challenge = mode in ("scale_challenge", "riff_challenge")
+        if challenge or self._challenge_active:
+            self.pause()
+        self._selected_mode = mode
+        self._challenge_active = challenge
+        self._mode = "practice" if mode in ("riff", "riff_challenge") else "guide"
+        self._difficulty = level
         practice = (self._mode == "practice")
+        for lv, action in enumerate(self._difficulty_actions, 1):
+            action.setChecked(mode == "scale_challenge" and lv == level)
+        for key, action in self._mode_actions.items():
+            action.setChecked(key == mode)
+        self.challenge_btn.setText(self._mode_actions[mode].text())
+        self.challenge_btn.setToolTip(
+            self._difficulty_actions[level - 1].text() if mode == "scale_challenge" else "")
+        self.lane.setEnabled(not challenge)
+        self.scrub.setEnabled(not challenge)
+        self.loop_btn.setVisible(not challenge)
+        if challenge:
+            self.loop_btn.setChecked(False)
+            self.loop_panel.hide()
         self.riff.setVisible(practice)
-        # 리프연습은 난이도 미적용(§7) — 선택기 비활성(루프는 모드 무관)
-        self.diff_combo.setEnabled(not practice)
+        self._apply_targets()
         if practice:
             seg = self._current_segment()
             if seg and self.tl:
@@ -354,16 +393,42 @@ class MainScreen(QWidget):
             self._seek_riff_idx(self.playhead.position_sec() if self.playhead else 0.0)
         else:
             self.riff.clear()
+        if challenge:
+            self._reset_challenge()
+        else:
+            self._on_state(self.playhead.is_playing() if self.playhead else False)
+
+    def _reset_challenge(self):
+        self.pause()
+        self._last_idx = -1
+        self._seek_to(0.0)
+        self._on_state(False)
 
     # ── 재생 제어 ────────────────────────────────────────────────
     def _toggle_play(self):
         if self.playhead:
-            self.playhead.toggle()
+            if self._challenge_active:
+                if self.playhead.is_playing():
+                    self._reset_challenge()
+                else:
+                    self._seek_to(0.0)
+                    self.playhead.play()
+            else:
+                self.playhead.toggle()
 
     def _on_state(self, playing: bool):
-        self.play_btn.setText("⏸" if playing else "▶")
+        self.challenge_btn.setEnabled(not (self._challenge_active and playing))
+        if self._challenge_active:
+            self.play_btn.setText("포기" if playing else "도전")
+        else:
+            self.play_btn.setText("⏸" if playing else "▶")
 
     def _on_seek(self, sec: float):
+        if self._challenge_active:
+            return
+        self._seek_to(sec)
+
+    def _seek_to(self, sec: float):
         if self.playhead:
             self.playhead.seek(sec)
             self._render_at(sec)
@@ -379,7 +444,7 @@ class MainScreen(QWidget):
         if self.playhead and self.playhead.is_playing():
             for s0, e0 in self._loop_spans():
                 if e0 <= sec < e0 + 0.5:
-                    self._on_seek(s0)
+                    self._seek_to(s0)
                     return
         self._render_at(sec + SYNC_LOOKAHEAD_SEC)   # 구간 변경 시 무거운 갱신
         self._update_live(sec)                       # 매 틱 카운트인·리프 헤드
@@ -427,7 +492,7 @@ class MainScreen(QWidget):
         if (seg.scale_name, seg.chord_tones(), set(seg.note_set)) == (
                 upcoming.scale_name, upcoming.chord_tones(), set(upcoming.note_set)):
             return
-        lead = min(2 * self.tl.beat_sec(), (boundary - seg.start_sec) / 2)
+        lead = min(4 * self.tl.beat_sec(), boundary - seg.start_sec)
         if lead <= 0 or not boundary - lead <= sec < boundary:
             return
         self.piano.set_preview(upcoming.note_set, upcoming.chord_tones(),

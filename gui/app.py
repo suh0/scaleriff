@@ -105,6 +105,7 @@ class AppWindow(QMainWindow):
         self.analyzing.backgroundRequested.connect(self._enter_bg_wait)
         self.analyzing.progressChanged.connect(self._pill.set_progress)
         self.analyzing.analysisFailed.connect(self._on_bg_failed)
+        self.analyzing.analysisCancelled.connect(self._on_analysis_cancelled)
         self._pill.playRequested.connect(self._play_pending)
         self.beat.proceedRequested.connect(self._enter_score)
         self.beat.backToLinkRequested.connect(self._go_link)
@@ -143,7 +144,8 @@ class AppWindow(QMainWindow):
 
     def _load_link_cache(self, source):
         # 기존 다운로드·세션 파일의 해시로 조회 — 별도 색인 없이 과거 세션도 재사용.
-        for audio in glob.glob(os.path.join(glob.escape(_CACHE_DIR), f"dl_{_cache_key(source)}.*")):
+        for audio in glob.glob(os.path.join(glob.escape(_CACHE_DIR), "**",
+                                            f"dl_{_cache_key(source)}.*"), recursive=True):
             key = hashlib.md5(audio.encode("utf-8")).hexdigest()[:16]
             for directory in dict.fromkeys((self.link_screen.save_dir() or _CACHE_DIR,
                                             _CACHE_DIR)):
@@ -203,7 +205,7 @@ class AppWindow(QMainWindow):
     def _enter_bg_wait(self):
         self._bg_wait = True
         self.link_screen.set_restricted(True)
-        self._pill.set_progress(self.analyzing.bar.value())
+        self._pill.set_progress(int(self.analyzing._display_progress))
         self._pill.play_btn.hide()
         self._pill.show()
         self._pill.raise_()
@@ -223,6 +225,10 @@ class AppWindow(QMainWindow):
         self._place_pill()
         self._bg_wait = False
         self.link_screen.set_restricted(False)
+
+    def _on_analysis_cancelled(self):
+        self._exit_bg_wait()
+        self.stack.setCurrentWidget(self.link_screen)
 
     def _exit_bg_wait(self):
         self._bg_wait = False
@@ -273,6 +279,7 @@ class AppWindow(QMainWindow):
             self._midi = None
 
     def closeEvent(self, e):
+        self.analyzing.shutdown()
         if self._midi:
             self._midi.stop()
         if self.main_screen.playhead:
