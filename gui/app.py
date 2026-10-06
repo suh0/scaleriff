@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import glob
 import hashlib
 import os
 
@@ -15,6 +16,7 @@ from PyQt6.QtGui import QFont
 from PyQt6.QtCore import QSettings, pyqtSignal
 
 from player.timeline import Timeline
+from ingest.audio_source import _cache_key, _is_url
 
 _CACHE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                           "cache")
@@ -131,8 +133,34 @@ class AppWindow(QMainWindow):
         if self._bg_wait:
             return      # 백그라운드 분석 중엔 새 분석 시작 안 함(세션 열기만)
         self._pill.hide()    # 이전 실패 알약 정리
+        if _is_url(source):
+            cached = self._load_link_cache(source)
+            if cached is not None:
+                self._open_timeline(cached)
+                return
         self.stack.setCurrentWidget(self.analyzing)
         self.analyzing.start(build_timeline, source)
+
+    def _load_link_cache(self, source):
+        # 기존 다운로드·세션 파일의 해시로 조회 — 별도 색인 없이 과거 세션도 재사용.
+        for audio in glob.glob(os.path.join(glob.escape(_CACHE_DIR), f"dl_{_cache_key(source)}.*")):
+            key = hashlib.md5(audio.encode("utf-8")).hexdigest()[:16]
+            for directory in dict.fromkeys((self.link_screen.save_dir() or _CACHE_DIR,
+                                            _CACHE_DIR)):
+                try:
+                    paths = glob.glob(os.path.join(glob.escape(directory), f"*_{key}.json"))
+                    paths.sort(key=os.path.getmtime, reverse=True)
+                except OSError:
+                    continue
+                for path in paths:
+                    try:
+                        tl = Timeline.load_json(path)
+                        if (tl.audio_ref == audio and os.path.isfile(tl.audio_ref)
+                                and os.path.isfile(tl.wav_ref) and tl.segments):
+                            return tl
+                    except (OSError, KeyError, ValueError, TypeError):
+                        continue
+        return None
 
     def _session_path(self, tl) -> str:
         d = self.link_screen.save_dir() or _CACHE_DIR

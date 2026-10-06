@@ -140,7 +140,7 @@ TAIL_RMS_THR_RATIO = 0.06   # 아웃트로 무음 임계(전체 RMS 피크 대�
 
 
 def detect_content_span(y, sr, duration: float, downbeat_times=None,
-                        chords=None, bar_sec: float = 2.0, log=print):
+                        chords=None, bar_sec: float = 2.0, log=print, *, y_harm=None):
     """화성 콘텐츠 구간(인트로 드럼·무음 제외). 시작은 '첫 코드 라벨'이 아니라
     실제 하모닉 에너지로 잡는다(§5.2.2 강화).
 
@@ -158,7 +158,8 @@ def detect_content_span(y, sr, duration: float, downbeat_times=None,
     # ── 1) 하모닉 성분 RMS로 화성 온셋 ───────────────────────────
     onset_sec = 0.0
     try:
-        y_harm = librosa.effects.harmonic(y, margin=2.0)
+        if y_harm is None:
+            y_harm = librosa.effects.harmonic(y, margin=2.0)
         hrms = librosa.feature.rms(y=y_harm)[0]
         if hrms.size:
             htimes = librosa.times_like(hrms, sr=sr)
@@ -323,7 +324,7 @@ class MirBackend:
             print(msg)        # 디버그 콘솔
             cb(66, msg)       # 분석 중 화면 로그
         content_span = detect_content_span(y, sr, duration, downbeat_times,
-                                            chords, bar_sec, log=_dbg)
+                                            chords, bar_sec, log=_dbg, y_harm=y_harm)
 
         cb(68, "키 추정…")
         key_root, key_mode = self._estimate_key(chroma, chords)

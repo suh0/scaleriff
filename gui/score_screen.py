@@ -35,7 +35,7 @@ class ScoreScreen(QWidget):
         root.setSpacing(12)
 
         top = QHBoxLayout()
-        self.link_btn = QPushButton("← 박자 조정")
+        self.link_btn = QPushButton("← 코드 편집")
         self.link_btn.setStyleSheet(T.qss_ghost_btn())
         self.link_btn.clicked.connect(self.backToBeatRequested.emit)
         top.addWidget(self.link_btn)

@@ -119,10 +119,9 @@ class Timeline:
     # 스케일 종류당 1개 리프(상대값, 루트0 기준). 코드 근음으로 이조해 재생(§8).
     # { kind: {notes:[{midi,beat_pos,dur_beats}], note_set:[pc], chord_tones:[pc], n_bars} }
     scale_riffs: dict = field(default_factory=dict)
-    # ── 채점(§7.5)·보정(§3.5) ────────────────────────────────────
-    bar_times: list[float] = field(default_factory=list)  # 마디 시작 시각(+끝) — 채점 그리드
+    # ── 마디 격자·보정(§3.5) ────────────────────────────────────
+    bar_times: list[float] = field(default_factory=list)  # 마디 시작 시각(+끝)
     loop_phase: int = 0        # 감지 루프 시작 마디 오프셋
-    loop_override: int = 0     # 사용자 루프 주기 보정(마디 수, 0=감지값 사용)
     split_point: int = 60      # 왼손(C3~B3)/오른손(C4~B5) 존 분할 MIDI(C4 고정)
     # 사용자 정의 루프 — 코드배열표에서 마디 2개 선택으로 생성(§6).
     # [{"name": str, "start_bar": int, "end_bar": int(포함), "on": bool}, …]
@@ -189,7 +188,6 @@ class Timeline:
             "scale_riffs": self.scale_riffs,
             "bar_times": list(self.bar_times),
             "loop_phase": self.loop_phase,
-            "loop_override": self.loop_override,
             "split_point": self.split_point,
             "loops": [dict(l) for l in self.loops],
             "beat_times": list(self.beat_times),
@@ -209,7 +207,6 @@ class Timeline:
             scale_riffs=d.get("scale_riffs", {}),
             bar_times=list(d.get("bar_times", [])),
             loop_phase=d.get("loop_phase", 0),
-            loop_override=d.get("loop_override", 0),
             split_point=d.get("split_point", 60),
             loops=[dict(l) for l in d.get("loops", [])],
             beat_times=list(d.get("beat_times", [])),

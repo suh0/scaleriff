@@ -11,7 +11,7 @@
 - 범위: 3옥타브 C3–B5 (MIDI 48–83) — 왼손 C3~B3 / 오른손 C4~B5
 - 흰 건반 가로:세로 비율 WHITE_RATIO 고정 → 어떤 창에서도 비율 유지(레터박스)
 - 배지는 가이드·연습 모드 모두 전체 표시(퀴즈 블러 제거 §10)
-- 전환 직전 다음 스케일의 건반 테두리가 선명해지며 예고한다.
+- 전환 직전 다음 음의 건반 위 둥근 막대가 넓어지며 예고한다.
 """
 from __future__ import annotations
 
@@ -25,7 +25,8 @@ MIDI_LOW  = 48   # C3
 MIDI_HIGH = 83   # B5
 
 WHITE_RATIO = 4.2   # 흰 건반 가로:세로 고정 비율
-# 왼손(C3~B3)/오른손(C4~B5) 사이 시각 간격 = 채점 스플릿(C4)과 일치.
+PREVIEW_SPACE = 10  # 건반 밖 예고 막대를 위한 상단 여백
+# 왼손(C3~B3)/오른손(C4~B5) 사이 시각 간격.
 GAP_MIDI  = 60       # 이 음(C4) 앞에 간격
 GAP_UNITS = 0.8      # 간격 폭(흰 건반 폭 배수)
 
@@ -56,6 +57,7 @@ class PianoWidget(QWidget):
         self._preview_chords: set[int] = set()
         self._preview_root = 0
         self._preview_opacity = 0.0
+        self._preview_progress = 0.0
 
     # ── 상태 세터 ────────────────────────────────────────────────
     def set_scale(self, note_set, chord_tones):
@@ -79,15 +81,16 @@ class PianoWidget(QWidget):
         self.update()
 
     def set_preview(self, notes=(), chords=(), root=0, progress=0.0):
-        """다음 스케일 테두리: 초반에 빠르게 선명해지는 0~100% 예고."""
+        """다음 음의 왕관 막대: 점점 넓어지고 초반에 빠르게 선명해진다."""
         self._preview_notes = set(notes)
         self._preview_chords = set(chords)
         self._preview_root = root
         t = max(0.0, min(1.0, progress))
+        self._preview_progress = t
         self._preview_opacity = 1 - (1 - t) ** 3
         self.update()
 
-    def _draw_preview_border(self, p: QPainter, midi: int, r: QRectF):
+    def _draw_preview_crown(self, p: QPainter, midi: int, r: QRectF):
         pc = midi % 12
         if midi in self._pressed or pc not in self._preview_notes or not self._preview_opacity:
             return
@@ -97,9 +100,11 @@ class PianoWidget(QWidget):
                       T.BADGE_CHORD)
         tint.setAlphaF(self._preview_opacity)
         p.save()
-        p.setBrush(Qt.BrushStyle.NoBrush)
-        p.setPen(QPen(tint, 3.0))
-        p.drawRoundedRect(r.adjusted(1.5, 1.5, -1.5, -1.5), 3, 3)
+        p.setBrush(tint)
+        p.setPen(Qt.PenStyle.NoPen)
+        width = min(14.0, r.width() * 0.5) * (0.3 + 0.7 * self._preview_progress)
+        crown = QRectF(r.center().x() - width / 2, r.top() - 8, width, 4)
+        p.drawRoundedRect(crown, 2, 2)
         p.restore()
 
     def _is_dim(self, midi: int) -> bool:
@@ -114,7 +119,7 @@ class PianoWidget(QWidget):
         n = len(white_midis)
         if n == 0:
             return None
-        w, h = self.width(), self.height()
+        w, h = self.width(), self.height() - PREVIEW_SPACE
         units = n + GAP_UNITS            # 중앙 간격 포함 폭
         kw = w / units
         kh = kw * WHITE_RATIO
@@ -122,7 +127,7 @@ class PianoWidget(QWidget):
             kh = h
             kw = kh / WHITE_RATIO
         total_w = kw * units
-        return white_midis, (w - total_w) / 2.0, (h - kh) / 2.0, kw, kh
+        return white_midis, (w - total_w) / 2.0, PREVIEW_SPACE + (h - kh) / 2.0, kw, kh
 
     @staticmethod
     def _wx(i: int, white_midis: list[int], x0: float, kw: float) -> float:
@@ -209,7 +214,7 @@ class PianoWidget(QWidget):
             p.setPen(QPen(QColor(T.KEY_W_BORDER), 1.0))
             p.drawRoundedRect(r, 3, 3)
 
-        self._draw_preview_border(p, midi, r)
+        self._draw_preview_crown(p, midi, r)
 
         # 배지 — 눌렸을 때 꽉 찬 색이면 배지 생략, 안 눌렸을 때만 표시
         if cst != "DEFAULT" and not is_pressed:
@@ -239,7 +244,7 @@ class PianoWidget(QWidget):
         p.setPen(Qt.PenStyle.NoPen)
         p.drawRoundedRect(r, 3, 3)
 
-        self._draw_preview_border(p, midi, r)
+        self._draw_preview_crown(p, midi, r)
 
         # 배지 — 안 눌렸을 때만 표시
         if cst != "DEFAULT" and not is_pressed:

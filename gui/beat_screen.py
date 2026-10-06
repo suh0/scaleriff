@@ -1,7 +1,6 @@
 """[2a] 박자 조정 화면 (§3.5 2차) — 분석 직후 마디선/BPM 확정.
 
-세로 기능 구성: 위 = 격자 편집(확대바 2개·박자·BPM·확정),
-아래(세로 스크롤) = 마디별 코드표·조정완료.
+화면 순서: 격자 편집(확대바 2개·박자·BPM·확인) → 코드 편집(세로 스크롤).
 - 두 확대바 모두 마디선 드래그 = 격자 평행이동(BPM 불변), 놓으면 그 위치부터
   재생. BPM(간격)은 직접 입력으로만 수정. 확정 시에만 재격자화(regrid).
 - 코드표 직접 조작: 칸 클릭 = 코드 수정, 칸 드래그 = 루프 지정(놓으면 이름 입력).
@@ -14,7 +13,7 @@ from array import array
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QPushButton,
     QComboBox, QLineEdit, QScrollArea, QInputDialog, QFrame,
-    QGraphicsOpacityEffect, QLayout, QMenu
+    QGraphicsOpacityEffect, QLayout, QMenu, QStackedWidget
 )
 from PyQt6.QtGui import QPainter, QColor, QPen, QFont, QCursor
 from PyQt6.QtCore import Qt, QRectF, pyqtSignal, QTimer
@@ -173,18 +172,26 @@ class BeatScreen(QWidget):
         self.beat_len = 0.5      # 박 길이(초) — BPM = 60/beat_len
         self._dur = ZOOM_SEC
         self._applied = None     # 마지막 적용 격자(중복 재격자화 방지)
-        self._locked = False     # 확정 후 편집 잠금(확정 ↔ 수정 토글)
+        self._locked = False     # 확인 후 코드 편집 단계
         self._cells: dict[int, QFrame] = {} # bar → 칸(하이라이트용)
         self._drag_start: int | None = None # 칸 드래그 시작 마디
         self._drag_cur: int | None = None   # 드래그 현재 마디
         self._drag_loop = False             # 시작 칸을 벗어나면 루프 모드
 
-        # 기능별 세로 구성: 박자 조정 → 마디별 코드표
+        # 같은 타임라인을 공유하는 박자 조정 / 코드 편집 화면
         content = T.compact_content(self)
         outer = QVBoxLayout(content)
         outer.setContentsMargins(T.PAD_H, T.PAD_V, T.PAD_H, T.PAD_V)
         outer.setSpacing(10)
-        root = outer
+        self.pages = QStackedWidget()
+        outer.addWidget(self.pages)
+        self.beat_page = QWidget()
+        self.chord_page = QWidget()
+        self.pages.addWidget(self.beat_page)
+        self.pages.addWidget(self.chord_page)
+        root = QVBoxLayout(self.beat_page)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(10)
 
         top = QHBoxLayout()
         self.link_btn = QPushButton("← 링크")
@@ -202,8 +209,9 @@ class BeatScreen(QWidget):
 
         self.hint_lbl = QLabel(
             "마디선을 드래그하면 격자 전체가 함께 이동하고(BPM 불변), 놓으면 "
-            "그 위치부터 재생됩니다. 확정하면 아래 코드표가 새 격자로 "
-            "갱신되며 열립니다 — 칸 클릭=코드 수정, 칸 드래그=루프 지정.")
+            "그 위치부터 재생됩니다. 확인을 누르면 변경한 박자를 반영한 "
+            "코드 편집 화면으로 이동합니다. 코드 편집 후 박자를 다시 변경하면 "
+            "코드 수정이 초기화됩니다. 박자를 변경하지 않으면 코드 수정은 유지됩니다.")
         self.hint_lbl.setStyleSheet(f"color:{T.TEXT_MUTED};font-size:12px;")
         self.hint_lbl.setWordWrap(True)
         root.addWidget(self.hint_lbl)
@@ -257,7 +265,7 @@ class BeatScreen(QWidget):
         root.addLayout(ctrl)
 
         # 확정은 두 박자 조정바 오른쪽에 고정
-        self.confirm_btn = QPushButton("확정")
+        self.confirm_btn = QPushButton("확인")
         self.confirm_btn.setStyleSheet(
             f"QPushButton{{background:{T.BG_SURFACE_ALT};color:{T.TEXT_PRIMARY};"
             f"border:1px solid {T.BORDER_ACTIVE};border-radius:8px;"
@@ -267,6 +275,22 @@ class BeatScreen(QWidget):
         edit_row.addWidget(
             self.confirm_btn, 0, Qt.AlignmentFlag.AlignVCenter)
         root.addLayout(edit_row)
+        root.addStretch(1)
+
+        root = QVBoxLayout(self.chord_page)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(10)
+        chord_top = QHBoxLayout()
+        self.back_to_beat_btn = QPushButton("← 박자 조정")
+        self.back_to_beat_btn.setStyleSheet(T.qss_ghost_btn())
+        self.back_to_beat_btn.clicked.connect(self._back_to_beat)
+        chord_top.addWidget(self.back_to_beat_btn)
+        chord_top.addSpacing(8)
+        chord_title = QLabel("코드 편집")
+        chord_title.setStyleSheet(title.styleSheet())
+        chord_top.addWidget(chord_title)
+        chord_top.addStretch(1)
+        root.addLayout(chord_top)
 
         # ── 아래: 루프 리스트 + 마디별 코드표(세로 스크롤) ───────
         right = QVBoxLayout()
@@ -311,7 +335,7 @@ class BeatScreen(QWidget):
         # ── 조정 완료 → 다음 화면 ────────────────────────────────
         done_row = QHBoxLayout()
         done_row.addStretch(1)
-        self.done_btn = QPushButton("조정 완료 → 코드·스케일 ▶")
+        self.done_btn = QPushButton("편집 완료 → 코드·스케일 ▶")
         self.done_btn.setStyleSheet(T.qss_primary_btn())
         self.done_btn.clicked.connect(self._on_done)
         done_row.addWidget(self.done_btn)
@@ -320,10 +344,8 @@ class BeatScreen(QWidget):
 
     def showEvent(self, e):
         super().showEvent(e)
-        # 잠금(불투명) 효과가 걸린 쪽은 페이드인 생략(효과 보존)
-        zooms = [] if self._locked else [self.zoom_l, self.zoom_r]
-        grids = [self.holder] if self._locked else []
-        stagger([self.hint_lbl] + zooms + grids + [self.done_btn])
+        stagger([self.holder, self.done_btn] if self._locked else
+                [self.hint_lbl, self.zoom_l, self.zoom_r])
 
     # ── 격자 상태 ────────────────────────────────────────────────
     def _beats(self) -> int:
@@ -401,7 +423,7 @@ class BeatScreen(QWidget):
         self.zoom_l.set_position(sec)
         self.zoom_r.set_position(sec)
 
-    # ── 확정(멈춤+재격자화, 화면 유지) / 조정 완료(다음 화면) ────
+    # ── 확인(멈춤+재격자화 → 코드 편집) / 편집 완료 ────────────
     def _grid_state(self):
         return (self.sig_box.currentData(),
                 round(60.0 / self.beat_len, 1), round(self.anchor, 4))
@@ -441,16 +463,18 @@ class BeatScreen(QWidget):
             self._dim(w, locked)
         for w in (self._loop_wrap, self.holder):   # 미확정 격자의 코드표는 잠금
             self._dim(w, not locked)
-        self.confirm_btn.setText("수정" if locked else "확정")
+        self.pages.setCurrentWidget(self.chord_page if locked else self.beat_page)
         if not locked:
             self._reset_drag()       # 박자 재편집 → 루프 드래그 중단
 
     def _on_confirm(self):
-        if self._locked:                # 수정 — 잠금 해제(재확정 전까지 편집 가능)
-            self._set_locked(False)
-        else:                           # 확정 — 노래 멈춤 + 격자 적용 + 잠금
-            self._apply()
-            self._set_locked(True)
+        self._on_bpm_edited()
+        self._apply()
+        self._set_locked(True)
+
+    def _back_to_beat(self):
+        self.pause()
+        self._set_locked(False)
 
     def _on_done(self):
         if not self._locked:

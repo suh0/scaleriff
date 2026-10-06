@@ -355,8 +355,7 @@ def _kind_seed(kind: str) -> int:
     return sum((i + 1) * ord(c) for i, c in enumerate(kind))
 
 
-def generate_scale_riff(model, scale_kind: str, n_bars=1, variant=0,
-                        density_penalty=0.0) -> list[dict]:
+def generate_scale_riff(model, scale_kind: str, n_bars=1, variant=0) -> list[dict]:
     """스케일 종류당 1개 리프(루트 0 상대값).
 
     음악적 파이프라인(generate_phrase)에 위임 — 학습 분포(있으면) 기반
@@ -376,19 +375,15 @@ def generate_scale_riff(model, scale_kind: str, n_bars=1, variant=0,
     ok = [c for c in cands if len(c["notes"]) >= min_notes]
     if not ok:
         return max(cands, key=lambda c: len(c["notes"]))["notes"]
-    # density_penalty>0(연습 이력 부진) → 음수 적은 후보 선호(밀도 하한은 위에서 보장)
-    return max(ok, key=lambda c: _riff_score(c["grid"], model, qfams, scale_kind)
-               - density_penalty * len(c["notes"]))["notes"]
+    return max(ok, key=lambda c: _riff_score(c["grid"], model, qfams, scale_kind))["notes"]
 
 
-def _make_riff(model, kind: str, max_bars: int, variant: int = 0,
-               density_penalty: float = 0.0) -> dict:
+def _make_riff(model, kind: str, max_bars: int, variant: int = 0) -> dict:
     """스케일 종류 1개의 리프 dict(상대값 + note_set/chord_tones/quality)."""
     quality = _KIND_QUALITY.get(kind, "maj7")
     qfam = quality_family(quality)
     return {
-        "notes": generate_scale_riff(model, kind, n_bars=max_bars, variant=variant,
-                                     density_penalty=density_penalty),
+        "notes": generate_scale_riff(model, kind, n_bars=max_bars, variant=variant),
         "note_set": sorted(SCALE_DEGREES.get(kind, SCALE_DEGREES["메이저"])),
         "chord_tones": sorted(QFAM_CHORD_TONES.get(qfam, QFAM_CHORD_TONES["maj"])),
         "quality": quality,
@@ -437,17 +432,9 @@ def bake_examples(timeline, model, max_bars=1):
 
 
 def rebake_kind(timeline, model, kind: str, max_bars=1) -> dict:
-    """리프 재생성 — 같은 종류의 다른 변주(시드 변경) + 그 종류 구간 전부 재타일링.
-
-    연습 기록(§7.5): 해당 종류 최근 20패스 평균 right_pct<60이면 밀도 페널티로
-    성긴 후보를 선택(못 따라가는 사용자에게 쉬운 변주). 이력 없으면 페널티 0.
-    """
-    from ml.practice_log import recent_right_pct
-    acc = recent_right_pct(kind)
-    dp = 0.15 if acc is not None and acc < 60 else 0.0
+    """리프 재생성 — 같은 종류의 다른 변주(시드 변경) + 그 종류 구간 전부 재타일링."""
     v = (timeline.scale_riffs.get(kind) or {}).get("variant", 0) + 1
-    timeline.scale_riffs[kind] = _make_riff(model, kind, max_bars, variant=v,
-                                            density_penalty=dp)
+    timeline.scale_riffs[kind] = _make_riff(model, kind, max_bars, variant=v)
     for seg in timeline.segments:
         if seg.scale and seg.scale.kind == kind:
             _tile_segment(timeline, seg)

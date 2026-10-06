@@ -7,7 +7,7 @@ import tempfile
 from copy import deepcopy
 from unittest.mock import patch
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-# 연습 기록은 임시 경로로(테스트가 실제 data/practice_log.jsonl 오염 방지)
+# 이전 기록 경로를 지정해도 연주가 채점 기록을 생성하지 않아야 한다.
 os.environ["SCALERIFF_PRACTICE_LOG"] = os.path.join(tempfile.mkdtemp(), "practice_log.jsonl")
 import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -53,17 +53,15 @@ def main():
     app.processEvents()
     link_input = win.link_screen._input
     go_pos = win.link_screen.go_btn.mapTo(link_input, QPoint(0, 0))
-    save_pos = win.link_screen.save_edit.mapTo(link_input, QPoint(0, 0))
-    lib_pos = win.link_screen._lib_panel.mapTo(link_input, QPoint(0, 0))
-    assert go_pos.y() < save_pos.y(), "분석 시작 버튼이 저장경로 아래에 있음"
-    assert lib_pos.y() > save_pos.y() + win.link_screen.save_edit.height(), \
-        "최근 세션이 저장경로 아래에 있지 않음"
-    lib_center = lib_pos.x() + win.link_screen._lib_panel.width() / 2
-    assert abs(lib_center - link_input.width() / 2) <= 2, \
-        "최근 세션이 화면 가운데 정렬되지 않음"
-    lib_ratio = win.link_screen._lib_panel.width() / link_input.width()
-    assert 0.45 <= lib_ratio <= 0.55, \
-        f"최근 세션 가로 비율: {lib_ratio:.3f}"
+    save_pos = win.link_screen.save_label.mapTo(link_input, QPoint(0, 0))
+    url_pos = win.link_screen.url_edit.mapTo(link_input, QPoint(0, 0))
+    assert url_pos.y() + win.link_screen.url_edit.height() <= save_pos.y(), \
+        "저장경로가 링크 입력란 아래에 있지 않음"
+    assert save_pos.y() + win.link_screen.save_label.height() <= go_pos.y(), \
+        "저장경로가 분석 시작 버튼 위에 있지 않음"
+    assert win.link_screen.save_dir() in win.link_screen.save_label.text()
+    assert not hasattr(win.link_screen, "_lib_panel"), "라이브러리 패널이 남아 있음"
+    assert not hasattr(win.link_screen, "save_edit"), "저장경로 입력란이 남아 있음"
     assert win.link_screen.go_btn.width() < win.link_screen.url_edit.width() / 2, \
         "분석 시작 버튼이 텍스트 폭보다 과도하게 넓음"
 
@@ -87,13 +85,16 @@ def main():
     assert tl.total_bars() == len(tl.segments)
     assert tl.segment_for_bar(0) is tl.segments[0]
 
-    # 화면 흐름: 분석완료 → 박자 조정(코드 목록 포함) → 악보 → 연습(메인)
+    # 화면 흐름: 분석완료 → 박자 조정 → 코드 편집 → 악보 → 연습(메인)
     assert win.link_screen.save_dir(), "분석 후 저장경로 기본값 없음"
     win._on_timeline_ready(tl)
     assert os.path.exists(win._session_path(tl)), "세션 자동 저장 안 됨"
     assert win.stack.currentWidget() is win.beat
     assert win.beat.grid.count() > 0, "박자 화면에 코드 목록 없음"
     assert not win.beat.holder.isEnabled(), "확정 전 코드표 잠김 아님"
+    assert win.beat.pages.currentWidget() is win.beat.beat_page
+    assert win.beat.zoom_l.isVisible() and not win.beat.grid_scroll.isVisible()
+    assert not win.beat.done_btn.isVisible()
     beat_content = win.beat.findChild(QWidget, "compactContent")
     for ww, wh in ((1040, 740), (1600, 1000)):
         win.resize(ww, wh)
@@ -101,15 +102,10 @@ def main():
         zoom_l_pos = win.beat.zoom_l.mapTo(beat_content, QPoint(0, 0))
         zoom_r_pos = win.beat.zoom_r.mapTo(beat_content, QPoint(0, 0))
         confirm_pos = win.beat.confirm_btn.mapTo(beat_content, QPoint(0, 0))
-        grid_pos = win.beat.grid_scroll.mapTo(beat_content, QPoint(0, 0))
         assert abs(zoom_l_pos.y() - zoom_r_pos.y()) <= 2, \
             "처음/마지막 10초 확대바가 한 줄에 있지 않음"
         assert confirm_pos.x() > zoom_r_pos.x() + win.beat.zoom_r.width(), \
             "확정 버튼이 박자 조정바 오른쪽에 있지 않음"
-        zoom_bottom = max(zoom_l_pos.y() + win.beat.zoom_l.height(),
-                          zoom_r_pos.y() + win.beat.zoom_r.height())
-        assert grid_pos.y() > zoom_bottom, \
-            "마디별 코드가 박자 조정바 아래에 있지 않음"
         assert win.beat.grid_scroll.horizontalScrollBar().maximum() == 0, \
             "마디별 코드에 가로 스크롤이 생김"
     win.resize(1040, 740)
@@ -127,6 +123,7 @@ def main():
         seg.start_sec, seg.end_sec = bar * bar_sec, (bar + 1) * bar_sec
         tl_long.segments.append(seg)
     win.beat.set_timeline(tl_long)
+    win.beat.confirm_btn.click()
     app.processEvents()
     cell0_pos = win.beat._cells[0].mapTo(win.beat.holder, QPoint(0, 0))
     cell7_pos = win.beat._cells[7].mapTo(win.beat.holder, QPoint(0, 0))
@@ -145,15 +142,23 @@ def main():
         "세로 스크롤 후 마지막 마디가 보이지 않음"
     win.beat.set_timeline(tl)
     app.processEvents()
-    win.beat._on_confirm()      # 확정 = 멈춤+적용+편집 잠금 / 코드표 열림
+    assert win.beat.pages.currentWidget() is win.beat.beat_page
+    win.beat.confirm_btn.click()      # 확인 = 박자 적용 후 코드 편집 화면
     assert win.stack.currentWidget() is win.beat
-    assert win.beat._locked and win.beat.confirm_btn.text() == "수정"
+    assert win.beat._locked and win.beat.confirm_btn.text() == "확인"
+    assert win.beat.pages.currentWidget() is win.beat.chord_page
+    assert win.beat.grid_scroll.isVisible() and not win.beat.zoom_l.isVisible()
+    assert win.beat.done_btn.isVisible()
     assert not win.beat.zoom_l.isEnabled() and not win.beat.bpm_edit.isEnabled()
     assert win.beat.holder.isEnabled() and win.beat._loop_wrap.isEnabled()
-    win.beat._on_confirm()      # 수정 = 잠금 해제 / 코드표 다시 잠김
-    assert not win.beat._locked and win.beat.confirm_btn.text() == "확정"
+    win.beat.back_to_beat_btn.click()
+    assert not win.beat._locked and win.beat.pages.currentWidget() is win.beat.beat_page
     assert win.beat.zoom_l.isEnabled() and not win.beat.holder.isEnabled()
-    win.beat._on_done()         # 조정 완료 → 악보 화면
+    segments_before = list(tl.segments)
+    win.beat.confirm_btn.click()
+    assert all(a is b for a, b in zip(segments_before, tl.segments)), \
+        "박자 변경 없이 돌아오면 코드 편집 내용을 보존해야 함"
+    win.beat.done_btn.click()         # 편집 완료 → 악보 화면
     assert win.stack.currentWidget() is win.score
     # 악보 화면: 사용된 스케일 칩이 종류 수만큼 생성 + 첫 스케일이 기본 선택됐는지
     assert len(win.score._kind_btns) == len(tl.scale_riffs), "스케일 칩 수 불일치"
@@ -202,9 +207,10 @@ def main():
     assert len(win.score._riff_timers) == len(tl.scale_riffs[k0]["notes"])
     win.score._stop_riff()
     assert not win.score._riff_timers
-    # ← 박자 조정 버튼 = 조정 화면으로
+    # ← 코드 편집 버튼 = 확인된 코드 편집 화면으로
     win.score.backToBeatRequested.emit()
     assert win.stack.currentWidget() is win.beat
+    assert win.beat.pages.currentWidget() is win.beat.chord_page
     win._enter_score()
     win.score.practiceRequested.emit()
     assert win.stack.currentWidget() is win.main_screen
@@ -214,15 +220,12 @@ def main():
     app.processEvents()
     assert ms.scrub.geometry().top() > ms.piano.geometry().bottom(), \
         "재생바가 건반 아래에 있지 않음"
-    from player.scoring import PassSummary as _OverlaySummary
-    overlay_summary = _OverlaySummary(number=1, right_hits=1, right_total=1)
     for ww, wh in ((1040, 740), (1600, 1000)):
         win.resize(ww, wh)
         app.processEvents()
-        ms.pass_card.show_summary(overlay_summary, [])
         ms.loop_btn.setChecked(True)
         ms._toggle_loop_panel()
-        for overlay in (ms.pass_card, ms.loop_panel):
+        for overlay in (ms.loop_panel,):
             pos = overlay.mapTo(ms.content, QPoint(0, 0))
             assert pos.x() >= 0 and pos.y() >= 0, \
                 f"{type(overlay).__name__} 콘텐츠 밖 시작: {pos.x()}, {pos.y()}"
@@ -230,8 +233,6 @@ def main():
                 f"{type(overlay).__name__} 콘텐츠 오른쪽 이탈"
             assert pos.y() + overlay.height() <= ms.content.height(), \
                 f"{type(overlay).__name__} 콘텐츠 아래 이탈"
-        ms.pass_card._timer.stop()
-        ms.pass_card.hide()
         ms.loop_btn.setChecked(False)
         ms._toggle_loop_panel()
     win.resize(1040, 740)
@@ -369,57 +370,42 @@ def main():
     print(f"  scale_riffs: {list(tl.scale_riffs)}  riff_events={len(ms._riff_events)}  "
           f"(모델 {'O' if ms._ml_model else 'X'})")
 
-    # §7.5 채점: 엔진 생성 + 배지 + 패스 요약 카드
-    from player.scoring import PassSummary
-    assert ms.scorer is not None, "set_timeline 후 scorer 미생성"
-    eng = ms.scorer
-    assert eng.windows, "패스 창 미생성"
-    eng.tick(eng.windows[0][0] + 0.01)          # 패스 진입(유효)
-    eng.note_on(72, eng.windows[0][0] + 0.5)    # 오른손 존
-    ms._update_badge()
-    assert "오른손" in ms.acc_lbl.text(), ms.acc_lbl.text()
-    summary = PassSummary(number=1, right_hits=3, right_total=4,
-                          left_hits=1, left_total=2, landing_hits=1,
-                          landing_opps=2, out_counts={1: 2})
-    eng.trend = [62, 75]
-    ms._on_pass_done(summary)
-    assert not ms.pass_card.isHidden(), "패스 카드 미표시"
-    body = ms.pass_card.body_lbl.text()
-    assert "75%" in body and "스케일 밖" in body and "틀림" not in body, body
-    assert "62 → 75" in body, body
-    assert ms.acc_lbl.text() == "", "패스 후 배지 리셋 안 됨"
-    # 모드 전환 → 진행 중 패스 무효화(리프연습 무채점, §7.5 1차)
-    eng.note_on(72, eng.windows[0][0] + 0.6)
-    ms._toggle_riff()
-    assert eng.cur.right_total == 0, "모드 전환 시 패스 리셋 안 됨"
-    ms._toggle_riff()
-
-    # §3.5 분석 보정: 루프 override → 연습 재진입 시 채점에 반영(스플릿 C4 고정)
-    tl.loop_override = 4                         # (UI 콤보 제거 — 값 경로만 검증)
-    assert tl.split_point == 60                  # 왼손 C3~B3 / 오른손 C4~B5
-    win.score.practiceRequested.emit()           # → 메인 재진입 = 엔진 재생성
+    # 연주 입력과 반복 재생 후에도 채점 기록을 생성하지 않는다.
+    ms._on_seek(0.0)
+    ms._toggle_play()
+    ms.piano.notePlayed.emit(64, True)
+    assert 64 in ms.piano._pressed
+    ms.piano.notePlayed.emit(64, False)
+    assert 64 not in ms.piano._pressed
+    ms._on_tick(tl.content_end())
+    ms.pause()
+    assert not os.path.exists(os.environ["SCALERIFF_PRACTICE_LOG"])
+    win.score.practiceRequested.emit()
     assert win.stack.currentWidget() is win.main_screen
-    eng2 = ms.scorer
-    assert eng2 is not eng, "재진입 시 엔진 미재생성"
-    assert all(w[3] == 4 for w in eng2.windows) or len(eng2.windows) == 1, \
-        eng2.windows
-    w0 = eng2.windows[0]
-    eng2.tick(w0[0] + 0.01)
-    eng2.note_on(50, w0[0] + 0.1)                # C3~B3 → 왼손 존
-    eng2.note_on(72, w0[0] + 0.15)               # C4~B5 → 오른손 존
-    assert (eng2.cur.right_total, eng2.cur.left_total) == (1, 1)
-    # 보정값은 타임라인 JSON에 영속
+
+    # 세션 저장/복원과 구 캐시의 기본값 유지.
     from player.timeline import Timeline as _TL2
     d = _TL2.from_dict(tl.to_dict())
-    assert d.loop_override == 4 and d.split_point == 60
+    assert d.bar_times == tl.bar_times and d.split_point == 60
+    old = tl.to_dict()
+    old["loop_override"] = 4  # 이전 채점 설정이 있어도 세션 로드 가능
+    for key in ("bar_times", "loop_phase", "split_point", "loops"):
+        old.pop(key, None)
+    d2 = _TL2.from_dict(old)
+    assert d2.bar_times == [] and d2.split_point == 60 and d2.loops == []
 
-    # §7.5 난이도: 선택 → 채점 기준 교체 + 건반 목표음 필터
+    # 난이도: 선택 → 건반 목표음 필터
     ms.diff_combo.setCurrentIndex(1)             # Lv1: 왼손 근음 + 오른손 코드톤
-    assert ms.scorer.level == 1
     seg = ms._current_segment()
     assert ms.piano._split == tl.split_point
     assert ms.piano._right_targets == set(seg.chord_tones()), "Lv1 오른손 ≠ 코드톤"
     assert ms.piano._left_targets == {seg.chord.root % 12}, "Lv1 왼손 ≠ 근음"
+    ms.diff_combo.setCurrentIndex(2)
+    assert ms.piano._left_targets == {seg.chord.root % 12}
+    assert ms.piano._right_targets == set(seg.note_set)
+    ms.diff_combo.setCurrentIndex(3)
+    assert ms.piano._left_targets == set(seg.chord_tones())
+    assert ms.piano._right_targets == set(seg.note_set)
     # 리프연습 진입 → 난이도 비활성(§7: 리프연습은 난이도 미적용)
     ms._toggle_riff()
     assert not ms.diff_combo.isEnabled()
@@ -427,26 +413,7 @@ def main():
     assert ms.diff_combo.isEnabled()
     # 해제 → 필터 해제
     ms.diff_combo.setCurrentIndex(0)
-    assert ms.scorer.level == 0
     assert ms.piano._split == 0
-
-    # §7.5 2차: 리프연습 = 리프 일치도 채점
-    ms._toggle_riff()                            # 연습 ON → 채점 기준 교체
-    eng3 = ms.scorer
-    assert eng3.mode == "practice" and eng3._riff, "리프 이벤트 미전달"
-    w0 = eng3.windows[0]
-    riff_in = [(t, m) for t, m in eng3._riff if w0[0] <= t < w0[1]]
-    assert riff_in, "첫 패스 창에 리프 음 없음"
-    eng3.tick(w0[0] + 0.01)
-    eng3.note_on(riff_in[0][1], riff_in[0][0])   # 첫 리프 음 정시 연주 → 일치
-    s3 = eng3.tick(w0[1] + 0.01)
-    assert s3 and (s3.riff_hits, s3.riff_total) == (1, len(riff_in)), \
-        (s3.riff_hits, s3.riff_total)
-    ms._on_pass_done(s3)
-    body = ms.pass_card.body_lbl.text()
-    assert "리프 일치율" in body and "추이" not in body, body
-    ms._toggle_riff()                            # OFF → 가이드 복귀
-    assert ms.scorer.mode == "guide"
 
     # §3.5 2차: 박자 조정 화면 — 좌(시작박)/우(BPM) 드래그 반응형 → 확정 시 재격자화
     from build.real_builder import regrid_timeline
@@ -481,7 +448,8 @@ def main():
     bs.pause()
     bars_before = list(tl3.bar_times)
     assert tl3.bar_times == bars_before, "드래그만으로 재격자화됨"
-    bs._on_confirm()                  # 확정 → 멈춤+재격자화+잠금, 화면 유지
+    bs._on_confirm()                  # 확인 → 멈춤+재격자화 후 코드 편집
+    assert bs.pages.currentWidget() is bs.chord_page
     assert not bs.playhead.is_playing()
     assert bs._locked and not bs.zoom_l.isEnabled(), "확정 후 편집부 잠금 안 됨"
     assert tl3.bpm == 120.0 and tl3.bar_times == [0.5, 2.5, 4.5, 6.5, 8.0], \
@@ -490,6 +458,14 @@ def main():
     assert tl3.segments[1].start_sec == 4.5 and tl3.segments[1].scale_name == "F 리디안"
     assert all(s.example for s in tl3.segments), "재격자화 후 리프 미굽기"
     assert bs.grid.count() > 0, "확정 후 코드 목록 미갱신"
+    bs.back_to_beat_btn.click()
+    bs.bpm_edit.setText("96")
+    bs.confirm_btn.click()
+    assert tl3.bpm == 96.0 and tl3.bar_times[:3] == [0.5, 3.0, 5.5]
+    assert bs.pages.currentWidget() is bs.chord_page
+    bs.back_to_beat_btn.click()
+    bs.bpm_edit.setText("120")
+    bs.confirm_btn.click()
 
     # §6 사용자 루프: 코드표 칸 드래그 → 이름 입력 → 목록 관리 (클릭=코드 수정)
     import gui.beat_screen as _bsm
@@ -556,6 +532,16 @@ def main():
     # 루프는 세션 JSON에 영속
     assert _TL.from_dict(tl3.to_dict()).loops == tl3.loops
 
+    # 마디 격자가 없는 구 세션도 BPM 기반 루프 재생을 유지한다.
+    saved_bars = tl3.bar_times
+    tl3.bar_times = []
+    assert ms._loop_spans() == [(0.0, 6.0)]
+    ms.playhead.play()
+    ms._on_tick(6.1)
+    assert abs(ms.playhead.position_sec() - 0.0) < 0.05
+    ms.pause()
+    tl3.bar_times = saved_bars
+
     # 건반 중앙 간격 — 왼손(C3~B3)|오른손(C4~B5) 시각 분리(B3|C4)
     pw = ms.piano
     pw.resize(900, 220)
@@ -591,32 +577,17 @@ def main():
     assert win._timeline.chord_spans == tl3.chord_spans   # 원자료도 복원 → 재보정 가능
     _os.remove(sess)
 
-    # §6 라이브러리: 저장 폴더의 세션(.json) 카드 — 클릭 한 번 재개
-    lib_dir = _tmp.mkdtemp()
-    win.link_screen.set_save_dir(lib_dir)
-    win.link_screen.refresh_library()
-    assert win.link_screen._lib_list.count() == 1        # "저장된 세션 없음"
-    tl3.save_json(_os.path.join(lib_dir, "demo.json"))
-    win.link_screen.refresh_library()
-    assert win.link_screen._lib_list.count() == 1
-    card = win.link_screen._lib_list.itemAt(0).widget()
-    assert tl3.key.split()[0] in card.text() and "BPM" in card.text()
-    for i in range(1, 8):
-        tl3.save_json(_os.path.join(lib_dir, f"demo_{i}.json"))
-    win.link_screen.refresh_library()
-    win.resize(1040, 740)
-    win.link_screen.stack.setCurrentWidget(win.link_screen._input)
-    win.stack.setCurrentWidget(win.link_screen)
-    app.processEvents()
-    assert win.link_screen._lib_list.count() == 8
-    assert all(
-        win.link_screen._lib_list.itemAt(i).widget().height()
-        >= win.link_screen._lib_list.itemAt(i).widget().sizeHint().height()
-        for i in range(8)
-    ), "최근 세션이 많을 때 카드 높이가 눌림"
-    link_content = win.link_screen.findChild(QWidget, "compactContent")
-    assert win.link_screen._input.height() <= link_content.height(), \
-        "최근 세션이 많을 때 링크 입력 화면이 콘텐츠 영역을 넘음"
+    # 최근 저장경로 표시와 해당 폴더로의 실제 세션 저장
+    previous_dir = win.link_screen.save_dir()
+    with _tmp.TemporaryDirectory() as save_dir:
+        win.link_screen.set_save_dir(save_dir)
+        assert win.link_screen.save_label.text() == f"최근 저장경로: {save_dir}"
+        with patch.object(win, "_settings"):
+            win._save_session(tl3)
+            win._settings.setValue.assert_called_once_with("save_dir", save_dir)
+        saved = _TL.load_json(win._session_path(tl3))
+        assert saved.bpm == tl3.bpm and saved.chord_spans == tl3.chord_spans
+    win.link_screen.set_save_dir(previous_dir)
 
     # §6 연습하며 기다리기: 분석은 백그라운드, 링크 화면은 세션 열기만 활성
     win.analyzing._set_steps(50)                          # 단계 체크리스트 매핑
@@ -644,7 +615,7 @@ def main():
     from gui.anim import stagger as _stagger
     _stagger([ms.play_btn, ms.lane])
 
-    print("\nSMOKE OK — 스케일/악보+수동수정/리프동기재생/리프불변식(1마디·스케일안·밀도·해결·음역)/채점UI/보정/난이도/리프일치/마디선+확정잠금/루프정의·사이드바/건반간격/파형·세션/애니메이션 정상")
+    print("\nSMOKE OK — 스케일/악보+수동수정/리프동기재생/리프불변식(1마디·스케일안·밀도·해결·음역)/보정/난이도/마디선+확정잠금/루프정의·사이드바/건반간격/파형·세션/애니메이션 정상")
 
 
 if __name__ == "__main__":

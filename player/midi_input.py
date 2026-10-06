@@ -1,7 +1,7 @@
 """MIDI 키보드 입력 (정의서 §9).
 
 mido(+python-rtmidi 백엔드)로 실시간 노트 온/오프를 QThread에서 수신해
-note_received(midi, is_on) 시그널로 넘긴다. 채점(§7.5)·연주음(§9)의 입력원.
+note_received(midi, is_on) 시그널로 넘긴다. 연주음(§9)과 건반 표시의 입력원.
 """
 from __future__ import annotations
 

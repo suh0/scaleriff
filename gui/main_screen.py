@@ -2,7 +2,7 @@
 
 타임라인을 재생하며 위젯을 갱신만 한다(§4: 재분석 없음).
 레이아웃: 상단바(뒤로/곡명/BPM/시간) · 코드 레인(고정 플레이헤드로 블록이 흐름)
-        · 리프 뷰(연습 시) · 피아노 · 하단 컨트롤 한 줄(토글·난이도·루프·배지·
+        · 리프 뷰(연습 시) · 피아노 · 하단 컨트롤 한 줄(토글·난이도·루프·
         카운트인·재생)
 """
 from __future__ import annotations
@@ -17,7 +17,6 @@ from PyQt6.QtCore import pyqtSignal
 from player.timeline import Timeline
 from player.playhead import Playhead
 from player.note_synth import shared_player
-from player.scoring import ScoreEngine
 from analyze.theory import degree_number
 from ml.model import load_model
 from ml.generate import bake_examples
@@ -28,7 +27,6 @@ from gui.widgets.piano import PianoWidget
 from gui.widgets.chord_lane import ChordLane
 from gui.widgets.scrub_bar import ScrubBar
 from gui.widgets.riff_view import RiffView
-from gui.widgets.pass_card import PassCard
 
 # 코드/가이드를 재생 위치보다 앞당겨 표시하는 보정값(초). 0 = 보정 없음.
 SYNC_LOOKAHEAD_SEC = 0.0
@@ -50,7 +48,6 @@ class MainScreen(QWidget):
         self.note_player = shared_player()
         self._last_idx = -1
         self._mode = "guide"               # guide ↔ practice(리프연습)
-        self.scorer: ScoreEngine | None = None   # 연주 채점(§7.5) — 가이드 모드 전용
         self._ml_model = load_model()      # 부트스트랩/학습 모델(없으면 규칙 폴백)
         # 재생 헤드에 동기화된 리프 이벤트(절대초, midi) — 일시정지/시킹과 함께 동작(§2)
         self._riff_events: list[tuple[float, int]] = []
@@ -102,9 +99,7 @@ class MainScreen(QWidget):
 
         # ── 피아노 (리프연습과 무관하게 가만히 — 가이드 그대로) ──
         self.piano = PianoWidget()
-        # 화면 건반은 항상 오른손(솔로) 존으로 채점(§7.5)
-        self.piano.notePlayed.connect(
-            lambda midi, on: self.on_midi_note(midi, on, screen=True))
+        self.piano.notePlayed.connect(self.on_midi_note)
         root.addWidget(self.piano, 1)
 
         # ── 곡 전체 재생바(스크럽) — 건반 아래, seek로 레인과 연동 ──
@@ -112,7 +107,7 @@ class MainScreen(QWidget):
         self.scrub.seekRequested.connect(self._on_seek)
         root.addWidget(self.scrub)
 
-        # ── 하단 컨트롤 한 줄: 토글·난이도·루프 + 배지·카운트인·재생 ──
+        # ── 하단 컨트롤 한 줄: 토글·난이도·루프 + 재생 ──
         rrow = QHBoxLayout()
         self.riff_btn = QPushButton("리프연습")
         self.riff_btn.setCheckable(True)
@@ -120,7 +115,7 @@ class MainScreen(QWidget):
         self.riff_btn.clicked.connect(self._toggle_riff)
         rrow.addWidget(self.riff_btn)
         rrow.addSpacing(10)
-        # 난이도 선택기(§7.5, 가이드 모드 전용) — 통과/실패 없음, 채점 기준 필터
+        # 난이도 선택기 — 가이드 모드의 건반 목표음 필터
         self.diff_combo = QComboBox()
         self.diff_combo.addItems([
             "난이도 없음", "Lv1 · 근음+코드톤", "Lv2 · 근음+스케일", "Lv3 · 코드톤+스케일"])
@@ -131,7 +126,7 @@ class MainScreen(QWidget):
             "padding:4px 12px;font-size:13px;font-weight:700;}"
             f"QComboBox QAbstractItemView{{background:{T.BG_INSET};"
             f"color:{T.TEXT_BODY};selection-background-color:{T.BORDER_DEFAULT};}}")
-        self.diff_combo.currentIndexChanged.connect(self._on_level_changed)
+        self.diff_combo.currentIndexChanged.connect(self._apply_targets)
         rrow.addWidget(self.diff_combo)
         # 루프 버튼 — 사이드바 토글(생성한 루프 리스트, 루프별 ON/OFF)
         self.loop_btn = QPushButton("루프 ▸")
@@ -145,11 +140,6 @@ class MainScreen(QWidget):
         self.loop_btn.clicked.connect(self._toggle_loop_panel)
         rrow.addWidget(self.loop_btn)
         rrow.addStretch(1)
-        self.acc_lbl = QLabel("")          # 실시간 적중률 배지(존별, §7.5)
-        self.acc_lbl.setStyleSheet(
-            f"color:{T.TEXT_MUTED};font-family:'{T.FONT_MONO}';font-size:12px;")
-        rrow.addWidget(self.acc_lbl)
-        rrow.addSpacing(14)
         # 재생/일시정지 (흰 원형, §6.1)
         self.play_btn = QPushButton("▶")
         self.play_btn.setFixedSize(60, 60)
@@ -161,9 +151,6 @@ class MainScreen(QWidget):
         rrow.addWidget(self.play_btn)
         root.addLayout(rrow)
         self._style_riff_btn()
-
-        # ── 패스 요약 카드 (오버레이, §7.5) ──
-        self.pass_card = PassCard(self.content)
 
         # ── 루프 사이드바 (오버레이) — 생성한 루프 리스트 + 루프별 ON/OFF ──
         self.loop_panel = QFrame(self.content)
@@ -218,9 +205,6 @@ class MainScreen(QWidget):
 
     def resizeEvent(self, e):
         super().resizeEvent(e)
-        if self.pass_card.isVisible():
-            self.pass_card.move(
-                (self.content.width() - self.pass_card.width()) // 2, 120)
         if self.loop_panel.isVisible():
             self._place_loop_panel()
 
@@ -259,11 +243,25 @@ class MainScreen(QWidget):
         btn.setText("● ON" if on else "○ OFF")
 
     def _loop_spans(self) -> list[tuple[float, float]]:
-        """켜진 사용자 루프의 (start_sec, end_sec) — 채점 마디 격자 기준."""
+        """켜진 사용자 루프의 (start_sec, end_sec) — 타임라인 마디 격자 기준."""
         loops = getattr(self.tl, "loops", []) if self.tl else []
         if not loops:
             return []
-        bars = self.scorer._bars if self.scorer else self.tl.bar_times
+        bars = self.tl.bar_times
+        if len(bars) < 2:
+            # 구 캐시는 BPM으로 마디 격자를 복원한다.
+            bar_len = self.tl.beat_sec() * self.tl.time_sig_beats()
+            start, end = self.tl.content_span
+            if end <= start:
+                start, end = 0.0, self.tl.total_sec()
+            if bar_len <= 0 or end <= start:
+                return []
+            bars = []
+            t = start
+            while t < end - 1e-6:
+                bars.append(t)
+                t += bar_len
+            bars.append(end)
         n = len(bars) - 1
         out = []
         for lp in loops:
@@ -275,21 +273,16 @@ class MainScreen(QWidget):
         return out
 
     # ── 난이도(§7.5) ─────────────────────────────────────────────
-    def _on_level_changed(self, lv: int):
-        if self.scorer:
-            self.scorer.set_level(lv)          # 기준 교체 = 진행 중 패스 무효화
-        self.acc_lbl.setText("")
-        self._apply_targets()
-
     def _apply_targets(self):
         """현재 구간의 존별 목표음을 건반 배지 필터로 반영(비목표음 흐리게)."""
         seg = self._current_segment()
-        if seg is None or not self.scorer or self.scorer.level == 0:
+        level = self.diff_combo.currentIndex()
+        if seg is None or level == 0:
             self.piano.set_targets(0)
             return
-        self.piano.set_targets(self.tl.split_point,
-                               self.scorer.left_targets(seg),
-                               self.scorer.right_targets(seg))
+        left = {seg.chord.root % 12} if level in (1, 2) else set(seg.chord_tones())
+        right = set(seg.chord_tones()) if level == 1 else set(seg.note_set)
+        self.piano.set_targets(self.tl.split_point, left, right)
 
     # ── ML 예시 재생 ─────────────────────────────────────────────
     def _current_segment(self):
@@ -312,8 +305,6 @@ class MainScreen(QWidget):
             ev.sort(key=lambda e: e[0])
         self._riff_events = ev
         self._riff_times = [t for t, _ in ev]
-        if self.scorer:
-            self.scorer.set_riff_events(ev)   # 리프 일치도 채점(§7.5 2차)
 
     def _seek_riff_idx(self, sec: float):
         """리프 재생 커서를 sec 위치로 이동(시킹/모드 진입 시 과거 음 몰아 재생 방지)."""
@@ -325,12 +316,7 @@ class MainScreen(QWidget):
             self.playhead.pause()
         self.tl = tl
         self._last_idx = -1
-        self.scorer = ScoreEngine(tl)      # 보정(악보 화면) 반영해 패스 창 재계산
-        self.scorer.set_level(self.diff_combo.currentIndex())
-        self.scorer.set_mode(self._mode)
         self._build_loop_rows()            # 사용자 루프 리스트(사이드바) 갱신
-        self.acc_lbl.setText("")
-        self.pass_card.hide()
         if not getattr(tl, "scale_riffs", None):   # 아직이면 1회 굽기(§8)
             bake_examples(tl, self._ml_model)
         self._build_riff_events()          # 리프를 곡에 함께 구움(§2)
@@ -359,10 +345,6 @@ class MainScreen(QWidget):
         self.riff.setVisible(practice)
         # 리프연습은 난이도 미적용(§7) — 선택기 비활성(루프는 모드 무관)
         self.diff_combo.setEnabled(not practice)
-        # 모드 전환 = 채점 기준 교체 + 진행 중 패스 무효화(§7: 기준은 모드를 따라감)
-        if self.scorer:
-            self.scorer.set_mode(self._mode)
-        self.acc_lbl.setText("")
         if practice:
             seg = self._current_segment()
             if seg and self.tl:
@@ -382,9 +364,6 @@ class MainScreen(QWidget):
         self.play_btn.setText("⏸" if playing else "▶")
 
     def _on_seek(self, sec: float):
-        if self.scorer:
-            self.scorer.on_seek(sec)   # seek이 동기로 tick을 부를 수 있어 먼저 무효화
-        self.acc_lbl.setText("")
         if self.playhead:
             self.playhead.seek(sec)
             self._render_at(sec)
@@ -396,12 +375,7 @@ class MainScreen(QWidget):
         if self.tl:
             self.time_lbl.setText(
                 f"{_fmt_sec(sec)} / {_fmt_sec(self.tl.total_sec())}")
-        # 채점(§7.5): 패스 경계 감지 → 요약(기준은 모드를 따라감)
-        if self.scorer:
-            summary = self.scorer.tick(sec)
-            if summary:
-                self._on_pass_done(summary)
-        # 사용자 루프(§6): 켜진 루프 끝에 닿으면 시작으로 — 채점 tick 뒤에 되감기
+        # 사용자 루프(§6): 켜진 루프 끝에 닿으면 시작으로
         if self.playhead and self.playhead.is_playing():
             for s0, e0 in self._loop_spans():
                 if e0 <= sec < e0 + 0.5:
@@ -470,25 +444,8 @@ class MainScreen(QWidget):
         if self._mode == "practice" and self.playhead and self.playhead.is_playing():
             self.riff.set_play_pos_sec(sec, seg.start_sec, self.tl.bpm)
 
-    # ── 채점 표시 ────────────────────────────────────────────────
-    def _on_pass_done(self, summary):
-        # 추이는 가이드 존별 적중률만(§7.5 1차) — 리프연습 요약엔 미표기
-        trend = self.scorer.trend if self._mode == "guide" else []
-        self.pass_card.show_summary(summary, trend)
-        self.acc_lbl.setText("")           # 새 패스 시작 — 배지 리셋
-
-    def _update_badge(self):
-        s = self.scorer.cur
-        r = s.right_pct()
-        l = s.left_pct()
-        if r is None and l is None:
-            self.acc_lbl.setText("")
-            return
-        fmt = lambda p: "–" if p is None else f"{p}%"
-        self.acc_lbl.setText(f"오른손 {fmt(r)} · 왼손 {fmt(l)}")
-
     # ── 입력 콜백 ────────────────────────────────────────────────
-    def on_midi_note(self, midi: int, is_on: bool, screen: bool = False):
+    def on_midi_note(self, midi: int, is_on: bool):
         if not self.tl or self.playhead is None:
             return
         pressed = set(self.piano._pressed)
@@ -498,8 +455,3 @@ class MainScreen(QWidget):
         else:
             pressed.discard(midi)
         self.piano.set_pressed(pressed)
-        # 채점: 재생 중 note-on만(§7.5 — 정지 중 자유 연주는 무채점)
-        if is_on and self.scorer and self.playhead.is_playing():
-            self.scorer.note_on(midi, self.playhead.position_sec(), screen=screen)
-            if self._mode == "guide":      # 실시간 배지는 존별 채점만
-                self._update_badge()
