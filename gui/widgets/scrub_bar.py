@@ -21,10 +21,15 @@ class ScrubBar(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setMinimumHeight(52)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setAccessibleName("곡 재생 위치")
+        self.setToolTip("클릭·드래그로 이동 · 방향키로 5초 이동 · Home/End로 처음/끝")
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setMouseTracking(True)
         self._timeline = None
         self._pos = 0.0
         self._dragging = False
+        self._hover_x = None
 
     def set_timeline(self, timeline):
         self._timeline = timeline
@@ -47,15 +52,32 @@ class ScrubBar(QWidget):
 
     # ── 마우스 = seek ────────────────────────────────────────────
     def mousePressEvent(self, e):
+        self.setFocus()
         self._dragging = True
         self.seekRequested.emit(self._x_to_sec(e.position().x()))
 
     def mouseMoveEvent(self, e):
+        self._hover_x = e.position().x()
+        self.update()
         if self._dragging:
             self.seekRequested.emit(self._x_to_sec(e.position().x()))
 
     def mouseReleaseEvent(self, e):
         self._dragging = False
+
+    def leaveEvent(self, event):
+        self._hover_x = None
+        self.update()
+        super().leaveEvent(event)
+
+    def keyPressEvent(self, event):
+        targets = {Qt.Key.Key_Left: self._pos - 5, Qt.Key.Key_Right: self._pos + 5,
+                   Qt.Key.Key_Home: 0, Qt.Key.Key_End: self._total()}
+        if event.key() in targets:
+            self.seekRequested.emit(max(0, min(self._total(), targets[event.key()])))
+            event.accept()
+        else:
+            super().keyPressEvent(event)
 
     # ── 렌더 ─────────────────────────────────────────────────────
     def paintEvent(self, event):
@@ -97,3 +119,14 @@ class ScrubBar(QWidget):
         p.setBrush(QColor(T.SCRUB_HEAD))
         p.setPen(QPen(QColor(T.BORDER_DEFAULT), 1))
         p.drawEllipse(QRectF(head_x - 6, track_y + track_h / 2 - 6, 12, 12))
+        if self.hasFocus():
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.setPen(QPen(QColor(T.BORDER_ACTIVE), 1))
+            p.drawRoundedRect(QRectF(1, track_y - 5, w - 2, track_h + 10), 7, 7)
+        if self._hover_x is not None:
+            seconds = int(self._x_to_sec(self._hover_x))
+            p.setFont(QFont(T.FONT_MONO, 9))
+            p.setPen(QColor(T.TEXT_PRIMARY))
+            x = max(0, min(w - 60, self._hover_x - 30))
+            p.drawText(QRectF(x, 0, 60, 22), Qt.AlignmentFlag.AlignCenter,
+                       f"{seconds // 60:02d}:{seconds % 60:02d}")

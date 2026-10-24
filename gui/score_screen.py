@@ -8,12 +8,14 @@
 from __future__ import annotations
 
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QScrollArea
 )
-from PyQt6.QtCore import pyqtSignal, QTimer
+from PyQt6.QtCore import pyqtSignal, QTimer, Qt
 
 from gui import theme as T
 from gui.anim import stagger
+from gui.widgets.flow_header import FlowHeader
+from gui.widgets.elided_label import ElidedLabel
 from gui.widgets.riff_roll import RiffRoll
 from ml.generate import rebake_kind
 from player.note_synth import shared_player
@@ -31,21 +33,21 @@ class ScoreScreen(QWidget):
         self._riff_timers: list[QTimer] = []
         content = T.compact_content(self)
         root = QVBoxLayout(content)
-        root.setContentsMargins(42, 30, 42, 30)   # 여유 있는 패딩
+        root.setContentsMargins(T.PAD_H, T.PAD_V, T.PAD_H, T.PAD_V)
         root.setSpacing(12)
+        root.addWidget(FlowHeader(4))
 
         top = QHBoxLayout()
         self.link_btn = QPushButton("← 코드 편집")
         self.link_btn.setStyleSheet(T.qss_ghost_btn())
         self.link_btn.clicked.connect(self.backToBeatRequested.emit)
         top.addWidget(self.link_btn)
-        self.title = QLabel("코드 진행")
+        self.title = ElidedLabel("리프 확인")
         self.title.setStyleSheet(
             f"color:{T.TEXT_PRIMARY};font-family:'{T.FONT_SANS}';"
             "font-size:18px;font-weight:700;")
         top.addSpacing(8)
-        top.addWidget(self.title)
-        top.addStretch(1)
+        top.addWidget(self.title, 1)
         self.key_lbl = QLabel("")
         self.key_lbl.setStyleSheet(
             f"color:{T.TEXT_MUTED};font-family:'{T.FONT_MONO}';font-size:12px;")
@@ -57,12 +59,29 @@ class ScoreScreen(QWidget):
         self.riffs_title.setStyleSheet(
             f"color:{T.TEXT_PRIMARY};font-family:'{T.FONT_MONO}';"
             "font-size:13px;font-weight:700;")
-        root.addWidget(self.riffs_title)
+        body = QHBoxLayout()
+        body.setSpacing(24)
+        sidebar = QWidget()
+        sidebar.setMinimumWidth(210)
+        sidebar.setMaximumWidth(290)
+        side = QVBoxLayout(sidebar)
+        side.setContentsMargins(0, 0, 0, 0)
+        side.addWidget(self.riffs_title)
         self.kinds_row = QVBoxLayout()
         self.kinds_row.setSpacing(6)
         self._kinds_wrap = QWidget()
+        self._kinds_wrap.setObjectName("scaleList")
+        self._kinds_wrap.setStyleSheet(f"QWidget#scaleList{{background:{T.BG_BASE};}}")
         self._kinds_wrap.setLayout(self.kinds_row)
-        root.addWidget(self._kinds_wrap)
+        self.kinds_row.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self.kinds_scroll = QScrollArea()
+        self.kinds_scroll.setWidgetResizable(True)
+        self.kinds_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.kinds_scroll.setWidget(self._kinds_wrap)
+        side.addWidget(self.kinds_scroll, 1)
+        body.addWidget(sidebar, 1)
+        preview = QVBoxLayout()
+        preview.setSpacing(12)
 
         # ── 선택한 스케일의 리프 — 세로 건반이 붙은 피아노롤 ──
         riff_head = QHBoxLayout()
@@ -74,23 +93,30 @@ class ScoreScreen(QWidget):
         self.play_riff_btn.setStyleSheet(T.qss_ghost_btn())
         self.play_riff_btn.clicked.connect(self._play_riff)
         riff_head.addWidget(self.play_riff_btn)
-        self.regen_btn = QPushButton("리프 재생성 ↻")
+        self.regen_btn = QPushButton("다시 만들기")
         self.regen_btn.setStyleSheet(T.qss_ghost_btn())
         self.regen_btn.clicked.connect(self._regen_riff)
         riff_head.addWidget(self.regen_btn)
-        root.addLayout(riff_head)
+        preview.addLayout(riff_head)
         self.roll = RiffRoll()
-        root.addWidget(self.roll)
-
-        root.addStretch(1)
+        preview.addWidget(self.roll)
+        self.empty_lbl = QLabel("확인할 리프가 없어요. 코드 편집에서 코드를 확인하거나 연습을 시작하세요.")
+        self.empty_lbl.setWordWrap(True)
+        self.empty_lbl.setStyleSheet(f"color:{T.TEXT_MUTED};font-size:14px;")
+        preview.addWidget(self.empty_lbl)
+        preview.addStretch(1)
+        body.addLayout(preview, 3)
+        root.addLayout(body, 1)
 
         bottom = QHBoxLayout()
-        bottom.addStretch(1)
+        footnote = QLabel("스케일을 고르고 리프를 들어본 뒤, 직접 연주해보세요.")
+        footnote.setStyleSheet(f"color:{T.TEXT_MUTED};font-size:12px;")
+        footnote.setWordWrap(True)
+        bottom.addWidget(footnote, 1)
         self.go_btn = QPushButton("연습 시작 ▶")
         self.go_btn.setStyleSheet(T.qss_primary_btn())
         self.go_btn.clicked.connect(self.practiceRequested.emit)
         bottom.addWidget(self.go_btn)
-        bottom.addStretch(1)
         root.addLayout(bottom)
 
     def showEvent(self, e):
@@ -113,11 +139,12 @@ class ScoreScreen(QWidget):
     def _chip_qss(selected: bool) -> str:
         if selected:
             return (f"QPushButton{{background:{T.WHITE};color:{T.BG_BASE};border:none;"
-                    f"border-radius:14px;padding:6px 14px;font-size:12px;font-weight:700;}}")
+                    f"border-radius:7px;padding:8px 14px;font-size:12px;font-weight:700;}}"
+                    f"QPushButton:focus{{border:1px solid {T.BORDER_ACTIVE};}}")
         return (f"QPushButton{{background:{T.BG_SURFACE_ALT};color:{T.TEXT_BODY};"
-                f"border:1px solid {T.BORDER_DEFAULT};border-radius:14px;"
-                f"padding:6px 14px;font-size:12px;}}"
-                f"QPushButton:hover{{border:1px solid {T.BORDER_ACTIVE};color:{T.TEXT_PRIMARY};}}")
+                f"border:1px solid {T.BORDER_DEFAULT};border-radius:7px;"
+                f"padding:8px 14px;font-size:12px;text-align:left;}}"
+                f"QPushButton:hover,QPushButton:focus{{border:1px solid {T.BORDER_ACTIVE};color:{T.TEXT_PRIMARY};}}")
 
     def _kind_context(self, kind: str) -> str:
         """곡맥락 — 그 스케일이 쓰인 코드(등장순)."""
@@ -135,8 +162,9 @@ class ScoreScreen(QWidget):
         self._kind_btns = {}
         self._sel_kind = None
         riffs = getattr(self.tl, "scale_riffs", None) or {}
-        widgets = (self.riffs_title, self._kinds_wrap, self.riff_lbl,
+        widgets = (self.riffs_title, self.kinds_scroll, self.riff_lbl,
                    self.roll, self.regen_btn, self.play_riff_btn)
+        self.empty_lbl.setVisible(not bool(riffs))
         if not riffs:
             for wdg in widgets:
                 wdg.hide()
@@ -146,6 +174,10 @@ class ScoreScreen(QWidget):
         for kind, data in riffs.items():
             ctx = self._kind_context(kind)
             row = QPushButton(f"{kind} — {ctx}" if ctx else kind)
+            row.setToolTip(row.text())
+            row.setMinimumWidth(0)
+            row.setMaximumWidth(270)
+            row.setText(row.fontMetrics().elidedText(row.text(), Qt.TextElideMode.ElideRight, 236))
             row.setStyleSheet(self._chip_qss(False))
             row.clicked.connect(lambda _, k=kind: self._show_riff(k))
             self.kinds_row.addWidget(row)

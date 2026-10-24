@@ -1,81 +1,83 @@
 # ScaleRiff
 
-좋아하는 곡(YouTube 링크/로컬 파일) 위에서 **코드에 맞는 스케일을 익히는** 데스크톱 앱.
-곡을 분석해 코드·키·스케일을 배정하고, WJazzD로 학습한 모델이 스케일마다 짧은 **리프**를
-생성한다. 사용자는 가이드/리프연습 모드로 연주하고, 루프 1주기(패스)마다 채점 요약을 받는다.
-연습 성적은 다음 리프 재생성의 난이도에 반영된다(학습 루프).
+**인공지능 기반 피아노 즉흥연주 연습 시스템** — 좋아하는 곡의 코드·키·박자를 확인하고,
+학습된 Markov 모델의 예시를 듣기 → 모방 → 변주 → 자유 즉흥 → 자기 연주 재청취로 연결하는 Windows 앱.
 
-> **전체 사양은 [`document/scaleriff_system_definition.md`](document/scaleriff_system_definition.md)가 단일 출처.**
-> 코드 주석의 `§`번호는 그 문서를 가리킨다.
+- 실제 구현 기준: [시스템 정의서](document/scaleriff_system_definition.md)
+- 개선·추가사항 및 잔여 한계: [개선 관리](document/IMPROVEMENTS.md)
+- 측정 결과: [음악 분석 평가](document/MUSIC_EVALUATION.md), [AI 평가](document/AI_EVALUATION.md)
 
-## 아키텍처: 빌드 → 플레이어
-모든 분석·생성을 **빌드 단계에서 한 번에 굽고**(pre-bake) 세션 타임라인을 만든 뒤,
-화면들은 그 타임라인의 **뷰/플레이어로만** 동작한다. 재생·스크럽 중 재분석·재추론 없음(§4).
+## 설치·실행
 
-```
-소스 → 오디오 확보 → MIR(코드·키·BPM·다운비트) → 구조(루프) → 화성(스케일 배정)
-     → Timeline → 리프 굽기(스케일 종류당 1개) → ★세션★ → 플레이어(재생·채점·룩업만)
-```
+검증 환경은 **Windows, Python 3.12, `.venv`, Qt FFmpeg 백엔드**다.
+`requirements-tested.txt`는 이번 검증 환경의 의존성 버전 제약이다.
 
-## 설치 (Windows, Python 3.11 고정)
-> python-rtmidi가 3.14와 비호환 → **3.11 고정**.
 ```powershell
-py -3.11 -m venv venv
-venv\Scripts\python.exe -m pip install -r requirements.txt
-winget install --id DenoLand.Deno -e
+py -3.12 -m venv .venv
+& ./.venv/Scripts/python.exe -m pip install -r requirements.txt -c requirements-tested.txt
+& ./.venv/Scripts/python.exe main.py
 ```
-시스템 ffmpeg 불필요(`imageio-ffmpeg` 동봉 바이너리 사용). madmom(비트·코드 학습모델)은
-선택 — 미설치 시 librosa 폴백. 설치 절차는 `requirements.txt` 주석 참고.
 
-## 실행
+YouTube 입력은 yt-dlp와 JavaScript 런타임 Deno를 사용한다. 필요 시 `winget install --id DenoLand.Deno -e`로 설치한다.
+분석/속도 변환용 ffmpeg 실행 파일은 imageio-ffmpeg가 제공한다. madmom은 선택 사항이며 현재 검증 환경은 librosa 경로다.
+
+## 사용 흐름
+
+1. 곡 링크, 로컬 오디오 또는 저장된 세션 JSON을 연다. 같은 링크의 유효한 세션은 재사용한다.
+2. **박자 조정 → 코드 편집**에서 BPM·시작박·키·코드를 확인한다. 자동 코드는 장·단 3화음 추정이다.
+   같은 마디의 여러 코드를 유지하며, 코드가 여러 개면 해당 마디에서 편집할 구간을 고른다.
+3. 코드·스케일 화면에서 기본 예시를 듣거나 다시 생성하고 연습 화면으로 이동한다.
+4. 연습 화면에서 현재 2마디/곡 전체/사용자 루프와 3도·7도·근음·코드톤 목표를 선택한다.
+5. **리프 듣기 → 따라 치기 → 변주하기 → 자유 즉흥 → 내 연주 듣기**를 진행한다.
+   모방에서는 낙하 가이드를 보며 자신의 소리로 연주하고, 변주·즉흥에서는 건반 가이드를 숨긴다.
+6. 구간이 끝나거나 재생을 일시정지하면 참고 점수와 근거를 확인한다. 내 연주 듣기는 선택한 구간과 겹치는 최근 기록을 재생한다.
+   다음 단계는 그 기록의 결과에 따라 음 수/착지 목표를 조절한다.
+
+기존 자유 재생·리프연습·스케일도전·리프도전도 유지한다. 도전 모드는 이동/루프를 잠근다.
+MIDI 피아노가 없으면 화면 건반으로 연습할 수 있다. **입력·소리**에서 장치 연결/재연결,
+음정 유지 속도(0.5/0.75/1/1.25배), 원곡·리프·연주 음량, 입력 지연 보정, 저음/고음 경계를 조절한다.
+연주 강약·음 길이·채널·페달을 보존한다. 채점의 저음/고음 구분은 선택한 MIDI 음역 경계를 사용한다.
+
+## 점수의 의미
+
+- **리프 모방**: 같은 음높이를 박의 ±0.25 이내에서 1:1 대응한다. 누락·추가음, 타이밍·음 길이를 반영한다.
+- **스케일 과제**: 난이도별 목표음 60% + 지원되는 착지 목표 40%. 코드에 선택한 3도/7도가 없으면 유효한 목표음만 평가한다.
+- **자유 즉흥·변주**: 선택한 착지 과제의 달성 정도를 표시한다. 경과음 전체를 감점하지 않는다.
+- 연주가 없거나 비교 기준이 없으면 점수 대신 이유를 표시한다. 표본 수와 피드백을 함께 제공한다.
+- 이 점수는 연습 목표의 참고 지표다. 자연스러움·창의성·실제 학습 효과는 별도 청취/사용자 평가가 필요하다.
+
+## 내부 구조
+
+```text
+소스 → 오디오 확보 → MIR → 구조/화성 → Timeline → 예시 굽기 → 플레이어
+                                      ↑                    ↓
+                       실제 진행 조건 Markov 생성     MIDI 연주 기록
+                                      ↑                    ↓
+                              다음 목표·밀도 ← 과제별 점수·다시듣기
+```
+
+`ingest/` 오디오·분석, `analyze/` 구조·이론, `build/` 준비/보정,
+`ml/` 학습·생성·평가, `player/` 시간축·재생·연주 기록·점수, `gui/` 화면을 담당한다.
+MIR과 생성은 준비/명시적 사용자 액션에서 실행한다. 재생 시각·리프·채점은 공용 원본 시간축을 사용한다.
+속도 변환은 ffmpeg atempo 캐시를 준비하며 재생 틱에서 실행하지 않는다.
+
+## 저장·검증
+
+세션 JSON v2에 분석 원자료, 시간 기반 코드 수정, 루프, 모델 출처/해시, 연주와 결과를 함께 저장한다.
+원자 저장으로 실패 시 이전 파일을 보존하고 화면 하단에 실패 원인을 표시한다. 구 세션은 호환 로드한다.
+오디오가 이동하면 세션 상대 경로를 확인하고, 찾지 못하면 원본 파일을 다시 선택한다.
+개선 논의가 생기면 `document/IMPROVEMENTS.md`에 상태·근거·완료 기준·남은 한계를 갱신한다.
+
+화면 구성·색상·애니메이션·벤치마크와 UI 검증은 [UI/UX 관리 문서](document/UI_UX.md)와
+[UI 작업표](document/UI_UX_PLAN.md)에서 관리한다. 다크 스튜디오 스타일이며 입력·소리에서 전환 효과를 줄일 수 있다.
+전체 화면 사진은 `.venv/Scripts/python.exe tools/capture_ui.py`로 재생성한다.
+
 ```powershell
-venv\Scripts\python.exe main.py
-```
-링크/파일을 넣고 분석 → 박자 조정 → 악보 → 메인 플레이어. 소스 없이 *데모 타임라인*으로
-둘러보기 가능. MIDI 키보드는 자동 연결(mido), 없으면 화면 피아노를 마우스로 클릭.
-
-## 모듈 구성 (기능별)
-```
-build/    빌드 파이프라인 — 소스 → 세션 타임라인 (§2.2)
-          timeline_builder(라우터)  real_builder(실제 파이프라인 + 마디선 재격자화)
-
-ingest/   오디오·MIR 입력 (§3.1)
-          audio_source(yt-dlp/파일→모노 WAV)  mir_extract(코드·키·BPM·비트·다운비트)
-          _madmom_compat(numpy/collections 옛 별칭 셰임 — madmom import 전 필수)
-
-analyze/  음악 이론·분석 (§3.2–3.3)
-          theory(pc·코드파싱·스케일·도수 — 전역 이론층)  structure(마디격자·루프감지)
-          harmony(홈키·전조·디투어 → note_set)
-
-ml/       리프 생성 (§8)
-          representation(16분 그리드 토큰, 코드 근음 상대 도수)  model(백오프 Markov)
-          generate(구조 생성기 + 모델 prior + PMI 랭킹, bake/rebake)
-          practice_log(연습기록 — 학습 루프 폐회로)  train/(오프라인 WJazzD 학습)
-
-player/   재생·상태·채점 (§5, §7.5, §9)
-          timeline(세션 스키마 = 단일 상태)  playhead(오디오 재생/seek)
-          scoring(존 판정·패스 집계, Qt 비의존)  note_synth(연주/리프 신스)
-          midi_input(mido)  dummy_timeline(데모)
-
-gui/      PyQt6 화면 (§6, 디자인 단일출처 theme.py)
-          app(화면 흐름)  link/analyzing/beat/score/main_screen  theme  anim
-          widgets/(piano chord_lane scrub_bar riff_roll riff_view mini_guide
-                   pass_card countin)
+$env:PYTHONUTF8='1'
+& ./.venv/Scripts/python.exe tools/run_checks.py
+& ./.venv/Scripts/python.exe -m ml.evaluate --out document/AI_EVALUATION.md
+& ./.venv/Scripts/python.exe tools/evaluate_music.py
 ```
 
-## ML 모델
-- 런타임: **order-2 백오프 Markov**(`models/markov.json`, torch 불필요). 없으면 부트스트랩
-  `models/default_markov.json`(git 추적) 폴백 — 무데이터에도 앱 동작.
-- 표현은 **코드 근음 기준 상대 도수**(키 독립). 생성은 구조(리듬 셀·AA'·컨투어·앵커)가
-  품질 하한, 모델이 도수 prior + 리듬 통계 + PMI 후보 랭킹.
-- 데이터 학습/재학습: **`ml/train/README.md`** 참고 (WJazzD 단일 소스).
-
-## 자가 점검
-```powershell
-$env:PYTHONUTF8="1"; $env:QT_QPA_PLATFORM="offscreen"
-venv\Scripts\python.exe tests_smoke.py      # UI/타임라인/흐름 + 리프 불변식
-venv\Scripts\python.exe tests_ml.py         # 표현/학습/게이트/폴백
-venv\Scripts\python.exe tests_scoring.py    # 존 판정·패스·밀도페널티
-venv\Scripts\python.exe tests_mir.py        # 합성 오디오 MIR
-venv\Scripts\python.exe tests_analyze.py    # 구조·화성
-```
+전체 오프라인 검사는 모든 tests_*.py의 실제 진입점을 실행한다. `--network`를 주면 YouTube 실제 다운로드 평가도 포함한다.
+실기기 MIDI, 장시간 스피커 청감, 학습자 전후 효과는 자동 검사와 분리해 개선 관리 문서에 기록한다.

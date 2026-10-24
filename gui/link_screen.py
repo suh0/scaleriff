@@ -17,6 +17,7 @@ from PyQt6.QtCore import Qt, pyqtSignal, QSize
 
 from gui import theme as T
 from gui.anim import stagger
+from gui.widgets.flow_header import FlowHeader
 
 try:
     from PyQt6.QtSvgWidgets import QSvgWidget
@@ -28,9 +29,9 @@ _LOGO = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
                      "assets", "scaleriff_logo.svg")
 
 ONBOARD_CARDS = [
-    ("🔗  링크 넣기", "좋아하는 곡의 링크나 오디오 파일을 넣으면\n앱이 코드·키·박자를 분석해요."),
-    ("🎼  스케일 가이드", "코드마다 어떤 스케일이 통하는지\n건반 색으로 알려줘요 — 코드톤·스케일음·밖."),
-    ("🎹  직접 쳐보기", "곡 위에서 자유롭게 즉흥을 쳐봐요. 틀린 음은 없어요.\n연습 모드에선 AI 리프가 곡에 맞춰 흘러 따라 칠 수 있어요."),
+    ("좋아하는 곡에서 시작하세요", "링크나 오디오 파일을 넣으면 코드·키·박자를 분석해요.\n분석이 끝나면 박자와 코드를 직접 확인할 수 있어요."),
+    ("다음 음을 미리 확인하세요", "파랑은 근음, 초록은 코드톤, 회색은 스케일음이에요.\n다음 코드의 안내는 건반 아래 작은 막대로 예고해요."),
+    ("듣고, 따라 치고, 바꿔보세요", "짧은 리프를 따라 친 뒤 리듬과 끝음을 바꿔보세요.\n자유 즉흥에서는 스케일 밖 경과음을 일괄 오답 처리하지 않아요."),
 ]
 
 
@@ -61,6 +62,10 @@ class _Onboarding(QWidget):
         self.card.setMinimumHeight(165)
         cl = QVBoxLayout(self.card)
         cl.setContentsMargins(22, 22, 22, 22)
+        self.position = QLabel()
+        self.position.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.position.setStyleSheet(f"color:{T.BORDER_ACTIVE};font-size:12px;border:none;")
+        cl.addWidget(self.position)
         self.title = QLabel()
         self.title.setStyleSheet(
             f"color:{T.TEXT_PRIMARY};font-family:'{T.FONT_SANS}';"
@@ -79,13 +84,17 @@ class _Onboarding(QWidget):
         self.next_btn = QPushButton("다음")
         self.next_btn.setStyleSheet(T.qss_primary_btn())
         self.next_btn.clicked.connect(self._next)
-        row.addStretch(1); row.addWidget(self.next_btn); row.addStretch(1)
+        skip = QPushButton("건너뛰기")
+        skip.setStyleSheet(T.qss_ghost_btn())
+        skip.clicked.connect(self.done.emit)
+        row.addStretch(1); row.addWidget(skip); row.addWidget(self.next_btn); row.addStretch(1)
         lay.addLayout(row)
         lay.addStretch(1)
         self._render()
 
     def _render(self):
         t, b = ONBOARD_CARDS[self._idx]
+        self.position.setText(f"{self._idx + 1} / {len(ONBOARD_CARDS)}")
         self.title.setText(t); self.body.setText(b)
         self.next_btn.setText("시작하기" if self._idx == len(ONBOARD_CARDS) - 1 else "다음")
 
@@ -102,9 +111,10 @@ class LinkScreen(QWidget):
 
     def __init__(self, show_onboarding=True, parent=None):
         super().__init__(parent)
-        content = T.compact_content(self)
+        content = T.compact_content(self, max_width=860)
         self.stack = QStackedWidget(content)
-        root = QVBoxLayout(content); root.setContentsMargins(0, 0, 0, 0)
+        root = QVBoxLayout(content); root.setContentsMargins(T.PAD_H, T.PAD_V, T.PAD_H, T.PAD_V)
+        root.addWidget(FlowHeader(0))
         root.addWidget(self.stack)
 
         self._onboard = _Onboarding()
@@ -129,7 +139,7 @@ class LinkScreen(QWidget):
     def _build_input(self):
         w = QWidget()
         outer = QVBoxLayout(w)
-        outer.setContentsMargins(60, 0, 60, 0)
+        outer.setContentsMargins(18, 0, 18, 0)
 
         col = QWidget()
         lay = QVBoxLayout(col)
@@ -139,7 +149,7 @@ class LinkScreen(QWidget):
 
         logo_row = QHBoxLayout()
         logo_row.addStretch(1)
-        logo = _logo_widget(56)
+        logo = _logo_widget(52)
         logo_row.addWidget(logo)
         logo_row.addStretch(1)
         lay.addLayout(logo_row)
@@ -147,7 +157,7 @@ class LinkScreen(QWidget):
         title = QLabel("ScaleRiff")
         title.setStyleSheet(
             f"color:{T.TEXT_PRIMARY};font-family:'{T.FONT_SANS_EN}';"
-            "font-size:30px;font-weight:900;")
+            "font-size:36px;font-weight:700;")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lay.addWidget(title)
         sub = QLabel("좋아하는 곡 위에서 배우는 즉흥 연주")
@@ -156,34 +166,35 @@ class LinkScreen(QWidget):
         lay.addWidget(sub)
         lay.addSpacing(12)
 
-        side_btn_qss = (
-            f"QPushButton{{background:{T.BG_SURFACE_ALT};color:{T.TEXT_BODY};"
-            f"border:1px solid {T.BORDER_DEFAULT};border-radius:10px;padding:10px 14px;}}"
-            f"QPushButton:hover{{border:1px solid {T.BORDER_ACTIVE};}}")
-        # 입력란들은 화면폭과 무관하게 고정폭 + 가운데 정렬(컴팩트)
         row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(10)
         self.url_edit = QLineEdit()
         self.url_edit.setPlaceholderText(
-            "유튜브 링크, 오디오 파일, 또는 저장된 세션(.json) 경로를 붙여넣기")
+            "곡 링크 또는 오디오·세션 파일 경로")
+        self.url_edit.setAccessibleName("곡 링크 또는 파일 경로")
         self.url_edit.setStyleSheet(T.qss_input())
         self.url_edit.returnPressed.connect(self._submit)
         row.addWidget(self.url_edit, 1)
-        browse = QPushButton("파일선택")
-        browse.setStyleSheet(side_btn_qss)
+        browse = QPushButton("파일 선택")
+        browse.setStyleSheet(T.qss_ghost_btn())
+        browse.setMinimumHeight(46)
         browse.clicked.connect(self._browse)
         row.addWidget(browse)
         row_wrap = QWidget()
-        row_wrap.setFixedWidth(620)
         row_wrap.setLayout(row)
-        lay.addWidget(row_wrap, alignment=Qt.AlignmentFlag.AlignHCenter)
+        lay.addWidget(row_wrap)
 
         self._save_dir = ""
         self.save_label = QLabel()
-        self.save_label.setFixedWidth(598)
         self.save_label.setWordWrap(True)
         self.save_label.setTextFormat(Qt.TextFormat.PlainText)
         self.save_label.setStyleSheet(f"color:{T.TEXT_MUTED};font-size:11px;")
-        lay.addWidget(self.save_label, alignment=Qt.AlignmentFlag.AlignHCenter)
+        lay.addWidget(self.save_label)
+        self.input_hint = QLabel("YouTube 링크 · MP3, WAV, M4A, FLAC, OGG · 저장된 세션 JSON")
+        self.input_hint.setWordWrap(True)
+        self.input_hint.setStyleSheet(f"color:{T.TEXT_DIM};font-size:11px;")
+        lay.addWidget(self.input_hint)
 
         lay.addSpacing(10)
         # 버튼은 내용 크기 + 가운데 정렬(가로로 안 늘임)
@@ -220,6 +231,7 @@ class LinkScreen(QWidget):
     def set_save_dir(self, d: str):
         self._save_dir = (d or "").strip()
         self.save_label.setText(f"최근 저장경로: {self._save_dir}")
+        self.save_label.setToolTip(self._save_dir)
 
     def _browse(self):
         if self._restricted:    # 분석 중 — 세션 열기만, 선택 즉시 로드
@@ -237,6 +249,11 @@ class LinkScreen(QWidget):
             self.url_edit.setText(path)
 
     def _submit(self):
+        if self._restricted:
+            return
         src = self.url_edit.text().strip()
         if src:
             self.buildRequested.emit(src)
+        else:
+            self.input_hint.setText("곡 링크나 파일 경로를 입력하거나 ‘파일 선택’을 눌러주세요.")
+            self.url_edit.setFocus()

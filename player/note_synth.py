@@ -1,14 +1,14 @@
 """사용자 연주음 신디 — 친 음(MIDI/마우스)을 피아노 음색으로 즉시 소리낸다.
 
 저지연 재생을 위해 음마다 16-bit PCM WAV을 미리/지연 렌더링해 캐시하고,
-음별 QSoundEffect로 재생한다(자연스러운 폴리포니, 키 떼면 자연 감쇠).
+음/채널별 QSoundEffect로 재생하며 note-off와 페달로 음길이를 제어한다.
 """
 from __future__ import annotations
 
 import os
 import numpy as np
 
-from PyQt6.QtCore import QObject, QUrl
+from PyQt6.QtCore import QObject, QTimer, QUrl
 
 SR = 44100   # 샘플레이트
 
@@ -41,7 +41,8 @@ _CACHE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))
                       "cache", "notes")
 os.makedirs(_CACHE, exist_ok=True)
 
-NOTE_DUR = 1.1   # 한 음 길이(초) — 피아노 감쇠
+NOTE_DUR = 6.0   # 누른 동안 재생할 피아노의 자연 감쇠
+DEFAULT_NOTE_DUR = 1.1
 
 
 def _render_silence_wav() -> str:
@@ -55,7 +56,7 @@ def _render_silence_wav() -> str:
 
 
 def _render_note_wav(midi: int) -> str:
-    path = os.path.join(_CACHE, f"piano_{midi}.wav")
+    path = os.path.join(_CACHE, f"piano_v2_{midi}.wav")
     if os.path.exists(path):
         return path
     import soundfile as sf
@@ -68,32 +69,39 @@ def _render_note_wav(midi: int) -> str:
 
 class NotePlayer(QObject):
     # 상시 보유 이펙트는 화면 건반 전 음역(C3~B5 = 48~83)만 미리 로드한다.
-    # 건반 클릭·MIDI·리프 재생 모두 이 안 → lazy 생성(비동기 로드) 무음 방지.
-    # 이 정도(36개)는 백엔드 보이스 한도 안. 범위 밖은 preload()로 대비.
+    # MIDI는 0~15 채널, 리프/재청취는 16/17의 독립 보이스를 사용한다.
+    # 입력 건반은 미리 로드하고 예정 리프는 preload()로 대비한다.
     def __init__(self, parent=None, prewarm=range(48, 84)):
         super().__init__(parent)
-        self._fx: dict[int, object] = {}
+        self._fx: dict[object, object] = {}
+        self._volume = 0.7
+        self._held: set[tuple[int, int]] = set()
+        self._sustained: set[tuple[int, int]] = set()
+        self._pedal: set[int] = set()
+        self._velocity: dict[tuple[int, int], int] = {}
+        self._generation: dict[tuple[int, int], int] = {}
         if _HAS_SE:
             for m in prewarm:
                 self._effect(m)
 
-    def preload(self, midis):
+    def preload(self, midis, channel: int = 16):
         """재생 예정 음들의 이펙트를 미리 생성(비동기 로드 시작)만 해 둔다."""
         for m in midis:
-            self._effect(m)
+            self._effect(m, channel)
 
-    def _effect(self, midi: int):
-        if midi in self._fx:
-            return self._fx[midi]
+    def _effect(self, midi: int, channel: int = 0):
+        key = (channel, midi)
+        if key in self._fx:
+            return self._fx[key]
         if not _HAS_SE:
             return None
         eff = QSoundEffect(self)
         eff.setSource(QUrl.fromLocalFile(_render_note_wav(midi)))
-        eff.setVolume(0.7)
+        eff.setVolume(self._volume)
         eff.statusChanged.connect(
             lambda e=eff, m=midi: e.status() == QSoundEffect.Status.Error
             and print(f"[note_synth] 로드 실패 midi={m}: {e.source().toString()}"))
-        self._fx[midi] = eff
+        self._fx[key] = eff
         return eff
 
     def warmup(self):
@@ -112,16 +120,85 @@ class NotePlayer(QObject):
             self._fx[-1] = eff
         eff.play()
 
-    def play_note(self, midi: int):
-        eff = self._effect(midi)
+    def note_on(self, midi: int, velocity: int = 100, channel: int = 0):
+        midi, channel = int(midi), int(channel)
+        velocity = max(0, min(127, int(velocity)))
+        if velocity == 0:
+            self.note_off(midi, channel)
+            return
+        if not 0 <= midi <= 127 or not 0 <= channel <= 17:
+            return
+        key = (channel, midi)
+        self._generation[key] = self._generation.get(key, 0) + 1
+        self._held.add(key)
+        self._sustained.discard(key)
+        self._velocity[key] = velocity
+        eff = self._effect(midi, channel)
         if eff is None:
             return
         if eff.status() == QSoundEffect.Status.Error:   # 로드 실패 → 1회 재시도
-            self._fx.pop(midi, None)
-            eff = self._effect(midi)
+            self._fx.pop(key, None)
+            eff = self._effect(midi, channel)
             if eff is None:
                 return
+        eff.stop()
+        eff.setVolume(self._volume * velocity / 127.0)
         eff.play()
+
+    def note_off(self, midi: int, channel: int = 0):
+        key = (int(channel), int(midi))
+        self._held.discard(key)
+        if key not in self._velocity:
+            return
+        if channel in self._pedal:
+            self._sustained.add(key)
+        else:
+            self._release(key)
+
+    def _release(self, key):
+        self._sustained.discard(key)
+        self._velocity.pop(key, None)
+        eff = self._fx.get(key)
+        if eff is not None:
+            eff.stop()
+
+    def set_pedal(self, down: bool, channel: int = 0):
+        channel = int(channel)
+        if down:
+            self._pedal.add(channel)
+        else:
+            self._pedal.discard(channel)
+            for key in tuple(self._sustained):
+                if key[0] == channel and key not in self._held:
+                    self._release(key)
+
+    def stop_all(self):
+        for key in tuple(self._velocity):
+            self._generation[key] = self._generation.get(key, 0) + 1
+            self._release(key)
+        self._held.clear()
+        self._pedal.clear()
+
+    def set_volume(self, volume: float):
+        self._volume = max(0.0, min(1.0, float(volume)))
+        for key, velocity in self._velocity.items():
+            eff = self._fx.get(key)
+            if eff is not None:
+                eff.setVolume(self._volume * velocity / 127.0)
+
+    def play_note(self, midi: int, duration: float | None = None,
+                  velocity: int = 100, channel: int = 16):
+        """리프용 한 음. 이전 타이머가 재타건한 새 음을 끄지 않게 한다."""
+        self.note_on(midi, velocity, channel)
+        key = (int(channel), int(midi))
+        generation = self._generation.get(key)
+        duration = DEFAULT_NOTE_DUR if duration is None else max(0.0, float(duration))
+        QTimer.singleShot(round(duration * 1000),
+                          lambda: self._finish_note(key, generation))
+
+    def _finish_note(self, key, generation):
+        if self._generation.get(key) == generation:
+            self.note_off(key[1], key[0])
 
 
 _shared: NotePlayer | None = None

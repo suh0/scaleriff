@@ -1,5 +1,5 @@
-# 즉흥연주 트레이너 — 앱 런타임 의존성 (Python 3.11 고정)
-# ML 학습용 의존성(torch 등)은 ml/train/requirements.txt 참고 (Colab 오프라인)
+# 즉흥연주 트레이너 — Windows / Python 3.12 런타임 의존성
+# 검증 버전 제약: requirements-tested.txt. Markov 학습/평가도 같은 의존성 사용.
 
 # GUI
 PyQt6>=6.6
@@ -13,11 +13,11 @@ librosa>=0.10
 soundfile>=0.12
 audioread>=3.0
 
-# (선택·강력 권장) madmom — 학습 모델 기반 코드 인식 + 비트·다운비트 트래킹.
-#   설치되면 get_backend()가 자동으로 MadmomBackend 사용(코드/다운비트 동시 개선).
+# (선택·현재 환경 미검증) madmom — 학습 모델 기반 코드 인식 + 비트·다운비트 트래킹.
+#   설치되면 get_backend()가 자동으로 MadmomBackend 사용. 정확도는 별도 평가 필요.
 #   미설치 시 librosa 크로마 백엔드로 폴백(코드 변경 불필요).
 #   madmom 0.16.1은 옛 numpy/Python API를 써서 셰임(ingest/_madmom_compat.py)으로 보정.
-#   Windows 설치(Python 3.11, numpy 2.0 환경에서 검증):
+#   과거 Windows 설치 메모(Python 3.11, numpy 2.0; 현재 Python 3.12 검증 대상 아님):
 #     1) "Microsoft C++ Build Tools"(MSVC) 설치
 #     2) pip install "setuptools<81" wheel Cython   # pkg_resources 제공 + 빌드 도구
 #     3) MSVC 환경에서:  set DISTUTILS_USE_SDK=1 && pip install madmom --no-build-isolation

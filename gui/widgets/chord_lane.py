@@ -22,7 +22,9 @@ class ChordLane(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setFixedHeight(92)
+        self.setFixedHeight(84)
+        self.setCursor(Qt.CursorShape.OpenHandCursor)
+        self.setToolTip("코드를 클릭하면 해당 구간으로 이동합니다. 드래그하면 재생 위치를 옮깁니다.")
         self._timeline = None
         self._pos = 0.0
         self._press_x: float | None = None
@@ -66,6 +68,7 @@ class ChordLane(QWidget):
         if not self._dragging and abs(dx) < DRAG_PX:
             return
         self._dragging = True      # 레인 내용을 끄는 방향(오른쪽 드래그=과거로)
+        self.setCursor(Qt.CursorShape.ClosedHandCursor)
         sec = self._press_sec - dx / self._pps()
         self.seekRequested.emit(max(0.0, min(self._timeline.total_sec(), sec)))
 
@@ -75,6 +78,7 @@ class ChordLane(QWidget):
         was_drag, x = self._dragging, e.position().x()
         self._press_x = None
         self._dragging = False
+        self.setCursor(Qt.CursorShape.OpenHandCursor)
         if was_drag or not self._timeline:
             return
         seg = self._timeline.segment_at(self._x_to_sec(x))   # 클릭 → 구간 점프
@@ -101,8 +105,8 @@ class ChordLane(QWidget):
         for lp in getattr(tl, "loops", []) or []:
             if not lp.get("on") or lp["end_bar"] + 1 >= len(bars):
                 continue
-            x0 = self._sec_to_x(bars[lp["start_bar"]])
-            x1 = self._sec_to_x(bars[lp["end_bar"] + 1])
+            x0 = self._sec_to_x(lp.get("start_sec", bars[lp["start_bar"]]))
+            x1 = self._sec_to_x(lp.get("end_sec", bars[lp["end_bar"] + 1]))
             p.setBrush(QColor(255, 255, 255, 14))
             p.setPen(Qt.PenStyle.NoPen)
             p.drawRect(QRectF(x0, 1, x1 - x0, h - 2))
@@ -122,6 +126,8 @@ class ChordLane(QWidget):
                 p.setBrush(QColor(T.BG_SURFACE))
                 p.setPen(Qt.PenStyle.NoPen)
                 p.drawRect(QRectF(x0, 1, x1 - x0, h - 2))
+                p.setBrush(QColor(T.BORDER_ACTIVE))
+                p.drawRect(QRectF(x0, h - 4, x1 - x0, 3))
             # 경계선 — 비다이아토닉 진입은 빨강(기존 스크럽 규약)
             detour = getattr(seg, "is_detour", False)
             p.setPen(QPen(QColor(T.BADGE_OUT if detour else T.BORDER_SUBTLE),
@@ -145,12 +151,15 @@ class ChordLane(QWidget):
             p.setFont(name_f)
             p.setPen(QColor(name_c))
             tx = x0 + 12
+            p.save()
+            p.setClipRect(QRectF(x0 + 2, 2, max(0, x1 - x0 - 4), h - 4), Qt.ClipOperation.IntersectClip)
             p.drawText(QPointF(tx, text_y + name_metrics.ascent()), seg.chord.name)
             if has_scale:
                 p.setFont(kind_f)
                 p.setPen(QColor(kind_c))
                 kind_y = text_y + name_metrics.height() + 2
                 p.drawText(QPointF(tx, kind_y + kind_metrics.ascent()), seg.scale.kind)
+            p.restore()
 
         # 고정 플레이헤드(세로선 + 위 삼각형)
         hx = self._head_x()

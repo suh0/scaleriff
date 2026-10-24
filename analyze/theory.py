@@ -43,6 +43,8 @@ SCALE_INTERVALS = {
     "aeolian":    [0, 2, 3, 5, 7, 8, 10],   # = natural minor
     "minor":      [0, 2, 3, 5, 7, 8, 10],
     "locrian":    [0, 1, 3, 5, 6, 8, 10],
+    "diminished": [0, 2, 3, 5, 6, 8, 9, 11],
+    "whole_tone": [0, 2, 4, 6, 8, 10],
 }
 
 # 코드 quality → 구성 음정(코드톤) & 어울리는 코드-스케일(모드 이름)
@@ -57,10 +59,10 @@ CHORD_SPECS = {
     "m6":    ([0, 3, 7, 9],     "dorian"),
     "m7b5":  ([0, 3, 6, 10],    "locrian"),
     "dim":   ([0, 3, 6],        "locrian"),
-    "dim7":  ([0, 3, 6, 9],     "locrian"),
+    "dim7":  ([0, 3, 6, 9],     "diminished"),
     "dom7":  ([0, 4, 7, 10],    "mixolydian"),   # 도미넌트 → 믹솔리디안
     "7":     ([0, 4, 7, 10],    "mixolydian"),
-    "aug":   ([0, 4, 8],        "lydian"),
+    "aug":   ([0, 4, 8],        "whole_tone"),
     "sus4":  ([0, 5, 7],        "mixolydian"),
     "sus2":  ([0, 2, 7],        "mixolydian"),
 }
@@ -186,6 +188,7 @@ MODE_KR = {
     "dorian": "도리안", "phrygian": "프리지안", "lydian": "리디안",
     "mixolydian": "믹솔리디안", "aeolian": "에올리안", "minor": "에올리안",
     "locrian": "로크리안",
+    "diminished": "디미니시드", "whole_tone": "온음",
 }
 
 
@@ -218,7 +221,7 @@ def diatonic_option(chord: Chord, home_root: int, home_mode: str,
     """코드에 배정되는 **단일** 다이아토닉 스케일 후보(§3).
 
     7다이아토닉 모드 중 코드의 키-도수가 결정하는 정확히 하나(시작음=코드 근음).
-    음악적으로 한 코드엔 한 스케일이므로 후보는 항상 1개 — 선택 여지 없음.
+    교육용 기본 추천 하나를 사용한다. 음악적으로 가능한 유일한 스케일이라는 뜻은 아니다.
     각 항목: {kind, root, name, note_set}. root는 코드 근음(도수 계산용).
     """
     return {

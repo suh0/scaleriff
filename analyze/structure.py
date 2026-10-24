@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import bisect
 
 from ingest.mir_extract import MirResult
 
@@ -53,6 +54,9 @@ def _build_bar_grid(mir: MirResult, beats_per_bar: int) -> list[float]:
     dbs = [t for t in (mir.downbeat_times or []) if 0 <= t <= duration + 1e-3]
     if len(dbs) >= 2:
         bars = sorted(dbs)
+        content_start, content_end = mir.content_span
+        if content_end > content_start and 0 <= content_start < bars[0] - 1e-3:
+            bars.insert(0, content_start)  # 첫 다운비트 이전의 실제 음악(불완전 마디) 보존
         if bars[-1] < duration - 1e-3:
             bars = bars + [duration]
         return bars
@@ -174,20 +178,22 @@ def structure_from_grid(bar_times: list[float], chords, duration: float,
         end = bar_times[b + 1] if b + 1 < len(bar_times) else duration
         per_bar_chord.append(_chord_for_bar(start, end, chords))
 
-    # 코드 지속 구간 병합
+    # 루프 감지는 마디 요약을 사용하지만 연주용 구간은 원래 코드 시점을 보존한다.
     segments: list[RawSegment] = []
-    b = 0
-    while b < n_bars:
-        j = b
-        while j + 1 < n_bars and per_bar_chord[j + 1] == per_bar_chord[b]:
-            j += 1
-        segments.append(RawSegment(
-            start_bar=b, end_bar=j + 1,
-            start_sec=bar_times[b],
-            end_sec=bar_times[j + 1] if j + 1 < len(bar_times) else duration,
-            chord_name=per_bar_chord[b],
-        ))
-        b = j + 1
+    lo, hi = bar_times[0], min(bar_times[-1], duration)
+    bounds = sorted({lo, hi} | {max(lo, min(hi, t)) for c in chords
+                                for t in (c.start_sec, c.end_sec)})
+    for start, end in zip(bounds, bounds[1:]):
+        if end <= start:
+            continue
+        name = _chord_for_bar(start, end, chords)
+        first = max(0, bisect.bisect_right(bar_times, start + 1e-7) - 1)
+        last = min(n_bars, bisect.bisect_left(bar_times, end - 1e-7))
+        last = max(first + 1, last)
+        if segments and segments[-1].chord_name == name:
+            segments[-1].end_sec, segments[-1].end_bar = end, last
+        else:
+            segments.append(RawSegment(first, last, start, end, name))
 
     loop_len = _detect_loop(per_bar_chord)
     loop_phase, loop_instances, is_loop_bar = _detect_loop_instances(per_bar_chord, loop_len)

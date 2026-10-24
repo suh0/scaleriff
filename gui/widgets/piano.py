@@ -208,7 +208,7 @@ class PianoWidget(QWidget):
                 fill = (T.BADGE_ROOT if self._degrees.get(midi % 12) == "1"
                         else T.KEY_PRESSED_CHORD)
             elif cst == "SCALE":
-                fill = T.BORDER_DEFAULT       # 회색 (#555555)
+                fill = T.KEY_SCALE_PRESSED_FILL
             else:
                 fill = T.KEY_WP_FILL          # 기본 미세 변화
         else:
@@ -243,7 +243,7 @@ class PianoWidget(QWidget):
                 fill = (T.BADGE_ROOT if self._degrees.get(midi % 12) == "1"
                         else T.KEY_PRESSED_CHORD)
             elif cst == "SCALE":
-                fill = T.BORDER_DEFAULT       # 밝은 회색 (#555555)
+                fill = T.KEY_SCALE_PRESSED_FILL
             else:
                 fill = T.KEY_BP_FILL          # 기본 미세 변화
         else:

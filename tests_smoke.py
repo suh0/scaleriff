@@ -14,7 +14,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from PyQt6.QtWidgets import QApplication, QLabel, QTextEdit, QWidget
 from PyQt6.QtGui import QImage, QColor
-from PyQt6.QtCore import QPoint
+from PyQt6.QtCore import QPoint, QSettings
 from gui.app import AppWindow
 from player.dummy_timeline import build_dummy_timeline
 
@@ -30,7 +30,12 @@ def main():
             "PATH 갱신 전 WinGet Deno를 찾지 못함"
 
     app = QApplication(sys.argv)
-    win = AppWindow()
+    test_settings_dir = tempfile.TemporaryDirectory()
+    test_settings = QSettings(os.path.join(test_settings_dir.name, "settings.ini"), QSettings.Format.IniFormat)
+    test_settings.setValue("save_dir", os.path.join(test_settings_dir.name, "sessions"))
+    with patch("gui.app.QSettings", return_value=test_settings), patch.object(AppWindow, "_try_start_midi"):
+        win = AppWindow()
+    win.main_screen.note_player.set_volume(0)
     assert not win.analyzing.findChildren(QTextEdit), "분석 진행 로그 박스가 남아 있음"
     win.analyzing._on_failed("HTTP Error 403: Forbidden\n\ntraceback")
     assert "403" in win.analyzing.msg.text() and "Forbidden" in win.analyzing.msg.text(), \
@@ -45,9 +50,11 @@ def main():
         assert content is not None, f"{type(page).__name__} 콘텐츠 프레임 없음"
         wr = content.width() / page.width()
         hr = content.height() / page.height()
-        assert 0.73 <= wr <= 0.77, f"{type(page).__name__} 가로 비율: {wr:.3f}"
-        expected_hr = 0.875 if page is win.main_screen else 0.75
-        assert abs(hr - expected_hr) <= 0.02, f"{type(page).__name__} 세로 비율: {hr:.3f}"
+        if page in (win.link_screen, win.analyzing):
+            assert content.width() <= 860, "준비 화면은 읽기 좋은 폭으로 제한"
+        else:
+            assert wr >= .95, f"{type(page).__name__} 작업 영역이 좁음: {wr:.3f}"
+        assert hr >= .95, f"{type(page).__name__} 세로 공간이 낭비됨: {hr:.3f}"
     win.stack.setCurrentWidget(win.link_screen)
     win.resize(1040, 740)
     win.link_screen.stack.setCurrentWidget(win.link_screen._input)
@@ -368,6 +375,7 @@ def main():
     win.beat.set_timeline(tl, ms._ml_model)
     s0 = tl.segments[0]                      # Dm7 → Fmaj7로 수정
     win.beat._apply_chord(s0, "Fmaj7")
+    s0 = tl.segment_at(s0.start_sec)  # 편집은 시간 구간을 다시 구성하므로 현재 객체를 조회
     assert s0.chord.name == "Fmaj7" and s0.scale_name == "F 리디안", \
         f"수동 수정 실패: {s0.chord.name}/{s0.scale_name}"
     assert s0.example, "수정 후 리프 미생성"
@@ -424,7 +432,9 @@ def main():
 
     # §3.5 2차: 박자 조정 화면 — 좌(시작박)/우(BPM) 드래그 반응형 → 확정 시 재격자화
     from build.real_builder import regrid_timeline
-    assert not regrid_timeline(tl, ms._ml_model, 1.0), "원자료 없이 재격자화됨"
+    assert tl.chord_overrides, "수동 코드의 원본 시간 기록이 없음"
+    assert regrid_timeline(tl, ms._ml_model, 1.0), "수정 시 보존한 원자료로 재격자화 실패"
+    assert tl.segment_at(1.2).chord.name == "Fmaj7", "재격자화 후 수동 코드 유실"
     tl3 = _TL(audio_ref="", bpm=120, time_sig="4/4", key="C major", key_root=0,
               loop_len=0, segments=[], content_span=(0.0, 8.0),
               bar_times=[0.0, 2.0, 4.0, 6.0, 8.0],
@@ -438,8 +448,8 @@ def main():
     assert abs(bs.anchor - 0.7) < 1e-9
     bs._on_drag(4, 8.5)               # 끝박 드래그 → BPM 불변, 시작박만 당겨짐(0.5s)
     assert abs(bs.anchor - 0.5) < 1e-9 and abs(bs.bar_len - 2.0) < 1e-9
-    bs._on_drag(0, -0.7)              # 0초 앞으로 나가면 한 마디 안으로 되접기
-    assert abs(bs.anchor - 1.3) < 1e-9
+    bs._on_drag(0, -0.7)              # 오디오 이전까지 격자 확장(되접기 없음)
+    assert abs(bs.anchor + 0.7) < 1e-9
     bs._on_drag(1, 2.5)               # 시작박 0.5s로 복귀
     # BPM(간격) 직접 입력 — 시작박 유지
     bs.bpm_edit.setText("96")
@@ -462,7 +472,8 @@ def main():
     assert tl3.bpm == 120.0 and tl3.bar_times == [0.5, 2.5, 4.5, 6.5, 8.0], \
         (tl3.bpm, tl3.bar_times)
     assert [s.chord.name for s in tl3.segments] == ["C", "F"]
-    assert tl3.segments[1].start_sec == 4.5 and tl3.segments[1].scale_name == "F 리디안"
+    assert tl3.segments[1].start_sec == 4.0 and tl3.segments[1].scale_name == "F 리디안", \
+        "원본 F 코드의 4초 진입 시점을 마디선으로 옮기면 안 됨"
     assert all(s.example for s in tl3.segments), "재격자화 후 리프 미굽기"
     assert bs.grid.count() > 0, "확정 후 코드 목록 미갱신"
     bs.back_to_beat_btn.click()
@@ -489,7 +500,8 @@ def main():
     bs._loop_release()
     assert bs._drag_start is None              # release 즉시 상태 초기화
     app.processEvents()                        # 이름 입력은 mouse 이벤트 후(지연 모달)
-    assert tl3.loops == [{"name": "인트로", "start_bar": 0, "end_bar": 2, "on": True}]
+    assert tl3.loops == [{"name": "인트로", "start_bar": 0, "end_bar": 2, "on": True,
+                         "start_sec": .5, "end_sec": 6.5}]
     assert bs.loops_row.count() == 1
     bs._loop_press(1)                         # 1마디 루프: 나갔다 복귀
     bs._loop_drag_to(0)
@@ -497,7 +509,8 @@ def main():
     assert bs._drag_loop and bs._highlight_bars() == {1}
     bs._loop_release()
     app.processEvents()
-    assert tl3.loops[1] == {"name": "인트로", "start_bar": 1, "end_bar": 1, "on": True}
+    assert tl3.loops[1] == {"name": "인트로", "start_bar": 1, "end_bar": 1, "on": True,
+                           "start_sec": 2.5, "end_sec": 4.5}
     bs._del_loop(1)
     bs._loop_press(2)                         # 드래그 없이 release → 루프 미생성
     bs._loop_release()                        # (seg=None — 코드 메뉴 생략)
@@ -598,8 +611,8 @@ def main():
 
     # §6 연습하며 기다리기: 분석은 백그라운드, 링크 화면은 세션 열기만 활성
     win.analyzing._set_steps(50)                          # 단계 체크리스트 매핑
-    st = [l.text()[0] for l in win.analyzing._step_lbls]
-    assert st == ["✓", "●", "○", "○"], st
+    st = [l.text().split()[0] for l in win.analyzing._step_lbls]
+    assert st == ["완료", "진행", "대기", "대기"], st
     win.analyzing.backgroundRequested.emit()
     assert win._bg_wait and win.stack.currentWidget() is win.link_screen
     assert not win._pill.isHidden() and win._pill.play_btn.isHidden()
@@ -623,6 +636,8 @@ def main():
     _stagger([ms.play_btn, ms.lane])
 
     print("\nSMOKE OK — 스케일/악보+수동수정/리프동기재생/리프불변식(1마디·스케일안·밀도·해결·음역)/보정/난이도/마디선+확정잠금/루프정의·사이드바/건반간격/파형·세션/애니메이션 정상")
+    win.close()
+    test_settings_dir.cleanup()
 
 
 if __name__ == "__main__":

@@ -1,17 +1,22 @@
 """학습 데이터 준비 — WJazzD sqlite → 토큰 jsonl(2마디 그리드).
 
-출력 한 줄 = {"grid":[32], "qfam":[32], "scale":[32]}  (train_markov 입력)
+출력 한 줄 = grid/qfam/scale + solo_id/tune_id/title/performer/instrument.
 멜로디 onset/duration/pitch + beats.chord 사용, 16분 그리드 양자화.
 
 WJazzD 주의: 컬럼명은 표준 배포 기준. 버전이 다르면 _read_wjazzd의 쿼리만 맞추면 됨.
 실행 예:
-  venv\\Scripts\\python.exe -m ml.train.prepare_phrases --wjazzd data/wjazzd.db --out data/phrases.jsonl
+  .venv/Scripts/python.exe -m ml.train.prepare_phrases --wjazzd data/wjazzd.db --out cache/phrases_identified.jsonl
 """
 from __future__ import annotations
 import argparse
 import bisect
 import json
 import os
+import re
+from pathlib import Path
+
+
+PREPARATION_VERSION = "wjazzd-tune-v2"
 
 from analyze.theory import parse_chord
 from ml.representation import (
@@ -35,36 +40,70 @@ def _scale_for(qfam: str, region_degs) -> str:
 
 
 # ── WJazzD sqlite → 예제 ─────────────────────────────────────────
+def _wjazzd_chord(name):
+    """Reduce WJazzD's j7/o/- notation and extensions to supported chord qualities."""
+    root = re.match(r"^([A-G](?:#|b)?)(.*)$", name.strip())
+    if not root:
+        return parse_chord(name)
+    pitch, suffix = root.groups()
+    suffix = suffix.split("/")[0]
+    if suffix.startswith("j"):
+        suffix = "maj7"
+    elif suffix.startswith("o"):
+        suffix = "dim7" if "7" in suffix else "dim"
+    elif suffix.startswith("-"):
+        suffix = "m7" if any(n in suffix for n in ("7", "9", "11", "13")) else (
+            "m6" if "6" in suffix else "min")
+    elif suffix.startswith("+"):
+        suffix = "aug"
+    return parse_chord(pitch + suffix)
+
+
 def _read_wjazzd(db_path):
     import sqlite3
-    con = sqlite3.connect(db_path)
+    con = sqlite3.connect(Path(db_path).resolve().as_uri() + "?mode=ro", uri=True)
     con.row_factory = sqlite3.Row
     examples = []
-    melids = [r[0] for r in con.execute("SELECT DISTINCT melid FROM melody")]
+    info = {r["melid"]: dict(r) for r in con.execute("SELECT * FROM solo_info")}
+    melids = [r[0] for r in con.execute("SELECT DISTINCT melid FROM melody ORDER BY melid")]
     for melid in melids:
         notes = con.execute(
             "SELECT onset, duration, pitch, bar, beat FROM melody "
             "WHERE melid=? ORDER BY onset", (melid,)).fetchall()
         beats = con.execute(
-            "SELECT bar, beat, onset, chord FROM beats "
+            "SELECT bar, beat, onset, chord, signature FROM beats "
             "WHERE melid=? ORDER BY onset", (melid,)).fetchall()
         if not notes or not beats:
             continue
-        examples.extend(_solo_to_examples(notes, beats))
+        metadata = info.get(melid, {})
+        if metadata.get("compid") is None:
+            raise ValueError(f"composition ID missing for solo {melid}; tune_id cannot be inferred safely")
+        examples.extend(_solo_to_examples(notes, beats, {
+            "solo_id": melid, "tune_id": f"wjazzd:composition:{metadata['compid']}",
+            "title": metadata.get("title", ""), "performer": metadata.get("performer", ""),
+            "instrument": metadata.get("instrument", ""), "source": "WJazzD",
+            "preparation_version": PREPARATION_VERSION,
+        }))
     con.close()
     return examples
 
 
-def _solo_to_examples(notes, beats):
+def _solo_to_examples(notes, beats, metadata=None):
     # 마디 시작 시각(beat==1) + 비트별 코드(직전 코드 이월) 수집
     bar_start = {}
+    bar_beats, bar_signatures = {}, {}
     beat_onsets, beat_chords = [], []
     cur_chord = "C"
+    signature = "4/4"
     for b in beats:
         if b["chord"]:
             cur_chord = b["chord"]
         beat_onsets.append(b["onset"])
         beat_chords.append(cur_chord)
+        if "signature" in b.keys() and b["signature"]:
+            signature = b["signature"]
+        bar_beats.setdefault(b["bar"], set()).add(b["beat"])
+        bar_signatures.setdefault(b["bar"], set()).add(signature)
         if b["beat"] == 1:
             bar_start[b["bar"]] = b["onset"]
     bars = sorted(bar_start)
@@ -80,14 +119,23 @@ def _solo_to_examples(notes, beats):
     def chord_at(onset):
         # onset 이하의 가장 최근 비트의 코드 — 마디 중간 코드 체인지 반영
         i = bisect.bisect_right(beat_onsets, onset) - 1
-        return beat_chords[i] if i >= 0 else "C"
+        return _wjazzd_chord(beat_chords[i] if i >= 0 else "C")
 
     examples = []
     for k in range(0, len(bars) - 1, 2):           # 2마디 윈도우(비겹침)
         wb = [bars[k], bars[k + 1]]
         if any(bar_len(b) in (None, 0) for b in wb):
             continue
-        win_notes, roots, qfams, degs_region = [], [0] * PHRASE_STEPS, ["maj"] * PHRASE_STEPS, []
+        # The artifact uses 16 steps/bar. Do not relabel other meters as 4/4 training data.
+        if wb[1] != wb[0] + 1 or any(bar_beats[b] != {1, 2, 3, 4} or
+                                    bar_signatures[b] != {"4/4"} for b in wb):
+            continue
+        chords = [chord_at(bar_start[wb[s // STEPS_PER_BAR]] +
+                           (s % STEPS_PER_BAR) * bar_len(wb[s // STEPS_PER_BAR]) / STEPS_PER_BAR)
+                  for s in range(PHRASE_STEPS)]
+        roots = [c.root for c in chords]
+        qfams = [quality_family(c.quality) for c in chords]
+        win_notes, degs_region = [], {}
         for ni, nt in enumerate(notes):
             if nt["bar"] not in wb:
                 continue
@@ -98,17 +146,17 @@ def _solo_to_examples(notes, beats):
             if not (0 <= step < PHRASE_STEPS):
                 continue
             dur_steps = max(1, int(round(nt["duration"] / blen * STEPS_PER_BAR)))
-            ch = parse_chord(chord_at(nt["onset"]))
+            ch = chord_at(nt["onset"])
             win_notes.append((step, dur_steps, nt["pitch"]))
-            for s in range(step, min(PHRASE_STEPS, step + dur_steps)):
-                roots[s] = ch.root
-                qfams[s] = quality_family(ch.quality)
-            degs_region.append((nt["pitch"] - ch.root) % 12)
+            degs_region.setdefault((ch.root, ch.quality), []).append((nt["pitch"] - ch.root) % 12)
         if len(win_notes) < 4:
             continue
         grid = encode(win_notes, roots, PHRASE_STEPS)
-        scales = [_scale_for(qfams[i], degs_region) for i in range(PHRASE_STEPS)]
-        examples.append({"grid": grid, "qfam": qfams, "scale": scales})
+        scales = ["디미니시드" if c.quality == "dim7" else "온음" if c.quality == "aug"
+                  else _scale_for(qfams[i], degs_region.get((c.root, c.quality), []))
+                  for i, c in enumerate(chords)]
+        examples.append({"grid": grid, "qfam": qfams, "scale": scales,
+                         "start_bar": wb[0], **(metadata or {})})
     return examples
 
 

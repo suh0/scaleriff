@@ -10,6 +10,10 @@
 from __future__ import annotations
 from dataclasses import dataclass, field
 import json
+import bisect
+import os
+import tempfile
+import math
 
 from analyze.theory import Chord
 
@@ -130,6 +134,64 @@ class Timeline:
     beat_times: list[float] = field(default_factory=list)   # 비트 시각
     chord_spans: list = field(default_factory=list)         # [[start,end,name], …]
     wav_ref: str = ""          # 분석용 모노 WAV 경로(파형 표시용, 캐시)
+    key_override: bool = False  # 직접 선택한 키는 재격자화에서 자동 변경하지 않음
+    chord_overrides: list = field(default_factory=list)  # [원본 시작초, 끝초, 수동 코드]
+    timing_override: bool = False  # BPM 직접 보정 시에는 균등 격자 사용
+    analysis_info: dict = field(default_factory=dict)
+    model_info: dict = field(default_factory=dict)
+    practice_history: list = field(default_factory=list)
+
+    def beat_grid(self) -> list[float]:
+        """마디 앵커와 검출 비트를 함께 쓰는 원본 오디오 시간축."""
+        if len(self.bar_times) < 2:
+            return []
+        out = []
+        beats = self.time_sig_beats()
+        raw = [] if self.timing_override else self.beat_times
+        for start, end in zip(self.bar_times, self.bar_times[1:]):
+            inner = [t for t in raw if start + 1e-5 < t < end - 1e-5]
+            out.extend([start] + (inner if len(inner) == beats - 1 else
+                                  [start + (end - start) * i / beats
+                                   for i in range(1, beats)]))
+        return out + [self.bar_times[-1]]
+
+    def beat_at(self, sec: float) -> float:
+        grid = self.beat_grid()
+        if len(grid) < 2:
+            return sec / self.beat_sec()
+        i = max(0, min(len(grid) - 2, bisect.bisect_right(grid, sec) - 1))
+        return i + (sec - grid[i]) / (grid[i + 1] - grid[i])
+
+    def time_at_beat(self, beat: float) -> float:
+        grid = self.beat_grid()
+        if len(grid) < 2:
+            return beat * self.beat_sec()
+        i = max(0, min(len(grid) - 2, int(beat // 1)))
+        return grid[i] + (beat - i) * (grid[i + 1] - grid[i])
+
+    def beats_between(self, start: float, end: float) -> float:
+        return self.beat_at(end) - self.beat_at(start)
+
+    def effective_chord_spans(self) -> list:
+        base = self.chord_spans or [[s.start_sec, s.end_sec, s.chord.name]
+                                    for s in self.segments]
+        if not base:
+            return []
+        lo, hi = base[0][0], base[-1][1]
+        bounds = sorted({lo, hi} | {max(lo, min(hi, t))
+                                   for row in base + self.chord_overrides for t in row[:2]})
+        out = []
+        for start, end in zip(bounds, bounds[1:]):
+            mid = (start + end) / 2
+            name = next((r[2] for r in reversed(self.chord_overrides)
+                         if r[0] <= mid < r[1]), None)
+            if name is None:
+                name = next((r[2] for r in base if r[0] <= mid < r[1]), "N")
+            if out and out[-1][2] == name:
+                out[-1][1] = end
+            else:
+                out.append([start, end, name])
+        return out
 
     # ── 재생 중 룩업 ─────────────────────────────────────────────
     def beat_sec(self) -> float:
@@ -148,13 +210,15 @@ class Timeline:
                 return seg
         if self.segments and t >= self.segments[-1].end_sec:
             return self.segments[-1]
-        return self.segments[0] if self.segments else None
+        return None
 
     def segment_index_at(self, t: float) -> int:
         for i, seg in enumerate(self.segments):
             if seg.start_sec <= t < seg.end_sec:
                 return i
-        return len(self.segments) - 1 if self.segments else -1
+        if self.segments and t >= self.segments[-1].end_sec:
+            return len(self.segments) - 1
+        return -1
 
     def next_segment(self, seg: Segment | None) -> Segment | None:
         if seg is None:
@@ -181,6 +245,7 @@ class Timeline:
     # ── 직렬화 ───────────────────────────────────────────────────
     def to_dict(self):
         return {
+            "schema_version": 2,
             "audio_ref": self.audio_ref, "bpm": self.bpm, "time_sig": self.time_sig,
             "key": self.key, "key_root": self.key_root, "loop_len": self.loop_len,
             "title": self.title, "content_span": list(self.content_span),
@@ -193,11 +258,33 @@ class Timeline:
             "beat_times": list(self.beat_times),
             "chord_spans": [list(c) for c in self.chord_spans],
             "wav_ref": self.wav_ref,
+            "key_override": self.key_override,
+            "chord_overrides": [list(row) for row in self.chord_overrides],
+            "timing_override": self.timing_override,
+            "analysis_info": dict(self.analysis_info), "model_info": dict(self.model_info),
+            "practice_history": list(self.practice_history),
             "segments": [s.to_dict() for s in self.segments],
         }
 
     @staticmethod
     def from_dict(d):
+        if not isinstance(d, dict):
+            raise ValueError("세션은 JSON 객체여야 합니다")
+        if d.get("schema_version", 1) not in (1, 2):
+            raise ValueError("지원하지 않는 세션 버전입니다")
+        if not math.isfinite(float(d["bpm"])) or float(d["bpm"]) <= 0:
+            raise ValueError("세션 BPM이 올바르지 않습니다")
+        for key in ("bar_times", "beat_times"):
+            times = d.get(key, [])
+            if (not isinstance(times, list) or any(not isinstance(t, (int, float))
+                    or not math.isfinite(t) for t in times)
+                    or any(a >= b for a, b in zip(times, times[1:]))):
+                raise ValueError(f"{key}는 유한하고 증가하는 시간 목록이어야 합니다")
+        for seg in d.get("segments", []):
+            if (not isinstance(seg, dict) or not all(isinstance(seg.get(k), (int, float))
+                    and math.isfinite(seg[k]) for k in ("start_sec", "end_sec"))
+                    or seg["end_sec"] <= seg["start_sec"]):
+                raise ValueError("코드 구간의 시작/끝이 올바르지 않습니다")
         tl = Timeline(
             audio_ref=d["audio_ref"], bpm=d["bpm"], time_sig=d["time_sig"],
             key=d["key"], key_root=d["key_root"], loop_len=d["loop_len"],
@@ -212,15 +299,48 @@ class Timeline:
             beat_times=list(d.get("beat_times", [])),
             chord_spans=[list(c) for c in d.get("chord_spans", [])],
             wav_ref=d.get("wav_ref", ""),
+            key_override=d.get("key_override", False),
+            chord_overrides=[list(row) for row in d.get("chord_overrides", [])],
+            timing_override=d.get("timing_override", False),
+            analysis_info=dict(d.get("analysis_info", {})),
+            model_info=dict(d.get("model_info", {})),
+            practice_history=list(d.get("practice_history", [])),
         )
         tl.segments = [Segment.from_dict(s) for s in d["segments"]]
         return tl
 
     def save_json(self, path: str):
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(self.to_dict(), f, ensure_ascii=False, indent=2)
+        path = os.path.abspath(path)
+        folder = os.path.dirname(path)
+        payload = self.to_dict()
+        payload["media_refs"] = {}
+        for name in ("audio_ref", "wav_ref"):
+            value = getattr(self, name)
+            if value:
+                try:
+                    payload["media_refs"][name] = os.path.relpath(value, folder)
+                except ValueError:  # Windows 다른 드라이브
+                    pass
+        fd, temporary = tempfile.mkstemp(prefix=".session_", suffix=".tmp", dir=folder)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(payload, f, ensure_ascii=False, indent=2, allow_nan=False)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temporary, path)
+        finally:
+            if os.path.exists(temporary):
+                os.remove(temporary)
 
     @staticmethod
     def load_json(path: str) -> "Timeline":
         with open(path, "r", encoding="utf-8") as f:
-            return Timeline.from_dict(json.load(f))
+            payload = json.load(f)
+        if not isinstance(payload, dict):
+            raise ValueError("세션은 JSON 객체여야 합니다")
+        for name, relative in payload.get("media_refs", {}).items():
+            if name in ("audio_ref", "wav_ref") and not os.path.isfile(payload.get(name, "")):
+                candidate = os.path.abspath(os.path.join(os.path.dirname(path), relative))
+                if os.path.isfile(candidate):
+                    payload[name] = candidate
+        return Timeline.from_dict(payload)

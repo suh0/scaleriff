@@ -8,6 +8,7 @@
 - 리듬은 16칸 직선 그대로 재생(스윙 보정 없음).
 """
 from __future__ import annotations
+from analyze.theory import SCALE_INTERVALS
 
 STEPS_PER_BAR = 16
 STEPS_PER_BEAT = 4
@@ -37,6 +38,8 @@ SCALE_DEGREES = {
     "에올리안":   [0, 2, 3, 5, 7, 8, 10],
     "마이너":     [0, 2, 3, 5, 7, 8, 10],
     "로크리안":   [0, 1, 3, 5, 6, 8, 10],
+    "디미니시드": SCALE_INTERVALS["diminished"],
+    "온음": SCALE_INTERVALS["whole_tone"],
 }
 # 코드 품질군 → 코드톤 도수(루트 상대)
 QFAM_CHORD_TONES = {

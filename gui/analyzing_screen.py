@@ -24,6 +24,7 @@ from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
 
 from gui import theme as T
 from gui.anim import stagger
+from gui.widgets.flow_header import FlowHeader
 
 _ESTIMATED_SECONDS = 10 * 60  # 일반 곡의 다운로드·분석에 여유를 둔 예상 시간
 
@@ -140,38 +141,42 @@ class AnalyzingScreen(QWidget):
         self._progress_timer = QTimer(self)
         self._progress_timer.setInterval(100)
         self._progress_timer.timeout.connect(self._tick_progress)
-        content = T.compact_content(self)
+        content = T.compact_content(self, max_width=860)
         lay = QVBoxLayout(content)
-        lay.setContentsMargins(60, 0, 60, 0)
+        lay.setContentsMargins(T.PAD_H, T.PAD_V, T.PAD_H, T.PAD_V)
+        lay.addWidget(FlowHeader(1))
         lay.addStretch(1)
 
         self.title = QLabel("분석 중…")
         self.title.setStyleSheet(
             f"color:{T.TEXT_PRIMARY};font-family:'{T.FONT_SANS}';"
             "font-size:24px;font-weight:700;")
-        self.title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.title.setAlignment(Qt.AlignmentFlag.AlignLeft)
         lay.addWidget(self.title)
 
         self.msg = QLabel("준비 중")
         self.msg.setStyleSheet(
-            f"color:{T.TEXT_DIM};font-family:'{T.FONT_MONO}';"
-            "font-size:12px;letter-spacing:2px;")
-        self.msg.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            f"color:{T.TEXT_MUTED};font-size:13px;")
+        self.msg.setAlignment(Qt.AlignmentFlag.AlignLeft)
+        self.msg.setTextFormat(Qt.TextFormat.PlainText)
+        self.msg.setWordWrap(True)
+        self.msg.setMinimumWidth(0)
+        self.msg.setMaximumHeight(76)
         lay.addWidget(self.msg)
         lay.addSpacing(20)
 
         # ── 단계 체크리스트 ──────────────────────────────────────
-        steps_row = QHBoxLayout()
-        steps_row.addStretch(1)
+        steps_row = QVBoxLayout()
+        steps_row.setContentsMargins(0, 0, 0, 0)
+        steps_row.setSpacing(12)
         self._step_lbls = []
         for name, _ in _STEPS:
-            sl = QLabel(f"○ {name}")
+            sl = QLabel(f"대기   {name}")
             sl.setStyleSheet(
                 f"color:{T.TEXT_DIM};font-family:'{T.FONT_MONO}';font-size:12px;")
             steps_row.addWidget(sl)
-            steps_row.addSpacing(18)
+            sl.setMinimumHeight(24)
             self._step_lbls.append(sl)
-        steps_row.addStretch(1)
         self._steps_wrap = QWidget()
         self._steps_wrap.setLayout(steps_row)
         lay.addWidget(self._steps_wrap)
@@ -183,13 +188,13 @@ class AnalyzingScreen(QWidget):
         self.bar.setFixedHeight(10)
         self.bar.setStyleSheet(
             f"QProgressBar{{background:{T.BG_SURFACE};border:none;border-radius:5px;}}"
-            f"QProgressBar::chunk{{background:{T.WHITE};border-radius:5px;}}")
+            f"QProgressBar::chunk{{background:{T.BORDER_ACTIVE};border-radius:5px;}}")
         self.percent_label = QLabel("0.0%")
-        self.percent_label.setFixedWidth(64)
+        self.percent_label.setFixedWidth(86)
         self.percent_label.setAlignment(Qt.AlignmentFlag.AlignRight |
                                         Qt.AlignmentFlag.AlignVCenter)
         self.percent_label.setStyleSheet(
-            f"color:{T.TEXT_BODY};font-family:'{T.FONT_MONO}';font-size:12px;")
+            f"color:{T.TEXT_PRIMARY};font-family:'{T.FONT_MONO}';font-size:20px;")
         self.percent_label.setToolTip("예상 진행률 — 실제 분석 완료 시 100%")
         self._progress_wrap = QWidget()
         progress_row = QHBoxLayout(self._progress_wrap)
@@ -198,6 +203,10 @@ class AnalyzingScreen(QWidget):
         progress_row.addWidget(self.bar, 1)
         progress_row.addWidget(self.percent_label)
         lay.addWidget(self._progress_wrap)
+        estimate = QLabel("예상 진행률 · 곡 길이와 분석 단계에 따라 진행 속도가 달라집니다.")
+        estimate.setStyleSheet(f"color:{T.TEXT_DIM};font-size:11px;")
+        estimate.setWordWrap(True)
+        lay.addWidget(estimate)
 
         bg_row = QHBoxLayout()
         bg_row.addStretch(1)
@@ -205,7 +214,7 @@ class AnalyzingScreen(QWidget):
         self.bg_btn.setStyleSheet(T.qss_ghost_btn())
         self.bg_btn.clicked.connect(self.backgroundRequested.emit)
         bg_row.addWidget(self.bg_btn)
-        self.cancel_btn = QPushButton("분석중단하기")
+        self.cancel_btn = QPushButton("분석 중단")
         self.cancel_btn.setStyleSheet(T.qss_ghost_btn())
         self.cancel_btn.clicked.connect(self.cancel)
         bg_row.addWidget(self.cancel_btn)
@@ -214,7 +223,7 @@ class AnalyzingScreen(QWidget):
         lay.addLayout(bg_row)
 
         self.err_btn = QPushButton("← 돌아가기")
-        self.err_btn.setStyleSheet(f"color:{T.TEXT_MUTED};border:none;")
+        self.err_btn.setStyleSheet(T.qss_ghost_btn())
         self.err_btn.clicked.connect(self.backRequested.emit)
         self.err_btn.hide()
         lay.addWidget(self.err_btn)
@@ -292,16 +301,16 @@ class AnalyzingScreen(QWidget):
         prev_end = 0
         for (name, end), sl in zip(_STEPS, self._step_lbls):
             if pct >= end:          # 완료
-                sl.setText(f"✓ {name}")
+                sl.setText(f"완료   {name}")
                 sl.setStyleSheet(
                     f"color:{T.TEXT_MUTED};font-family:'{T.FONT_MONO}';font-size:12px;")
             elif pct >= prev_end:   # 진행 중
-                sl.setText(f"● {name}")
+                sl.setText(f"진행   {name}")
                 sl.setStyleSheet(
-                    f"color:{T.TEXT_PRIMARY};font-family:'{T.FONT_MONO}';"
+                    f"color:{T.BORDER_ACTIVE};font-family:'{T.FONT_MONO}';"
                     "font-size:12px;font-weight:700;")
             else:                   # 대기
-                sl.setText(f"○ {name}")
+                sl.setText(f"대기   {name}")
                 sl.setStyleSheet(
                     f"color:{T.TEXT_DIM};font-family:'{T.FONT_MONO}';font-size:12px;")
             prev_end = end

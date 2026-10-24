@@ -50,7 +50,7 @@ def _best_key_for_chords(chords: list[Chord], prefer: tuple[int, str] | None = N
 
 
 def analyze_harmony(segments: list[RawSegment], key_root: int, key_mode: str,
-                    loop_len: int) -> list[HarmonizedSegment]:
+                    loop_len: int, fixed_key: bool = False) -> list[HarmonizedSegment]:
     chords = [parse_chord(s.chord_name) for s in segments]
 
     # 루프 단위로 홈 키 재평가 (§5.3 전조)
@@ -65,7 +65,8 @@ def analyze_harmony(segments: list[RawSegment], key_root: int, key_mode: str,
         if not idxs:
             continue
         loop_chords = [chords[i] for i in idxs]
-        current_key = _best_key_for_chords(loop_chords, prefer=current_key)
+        if not fixed_key:
+            current_key = _best_key_for_chords(loop_chords, prefer=current_key)
         for i in idxs:
             seg_home[i] = current_key
     # 매핑 안 된 세그먼트 보정

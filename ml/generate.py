@@ -13,6 +13,8 @@ ml.representation.decode 로 example_phrase({midi, beat_pos, dur_beats})로 변�
 from __future__ import annotations
 import math
 import random
+import hashlib
+import json
 
 from ml.representation import (
     BOS, REST, HOLD, ONSET0, VOCAB, onset_token, is_onset, token_degree, decode,
@@ -20,6 +22,7 @@ from ml.representation import (
     STEPS_PER_BAR, quality_family,
 )
 from ml.model import is_trained
+from analyze.theory import Chord, CHORD_SPECS
 
 
 # ── 칸별 코드 계획 만들기 ────────────────────────────────────────
@@ -126,7 +129,7 @@ def _bar_cells(rng: random.Random, beats: int, onset_probs=None):
     for b in range(half):
         p4 = onset_probs[b * 4:(b + 1) * 4] if onset_probs else None
         motif.append(_pick_cell(rng, must_start=(b == 0), p4=p4))
-    return (motif + motif)[:beats]
+    return (motif * ((beats + half - 1) // half))[:beats]
 
 
 # ── 멜로디 층: 컨투어 목표선(스케일 인덱스 0~6 공간) ────────────
@@ -159,15 +162,16 @@ def _query_scale(model, scale_kind: str) -> str:
     return _SCALE_QUERY_FALLBACK.get(scale_kind, scale_kind)
 
 
-def melodic_grid(model, qfams, scale_kind, n_steps, rng):
+def melodic_grid(model, qfams, scale_kind, n_steps, rng, beats_per_bar=4):
     """구조 생성기 — 리듬 셀+AA' 모티프+컨투어 라인+정박 코드톤 앵커.
 
     모델(있으면)은 blended(보간 백오프) 분포를 도수 사전분포로만 곱한다.
     """
     deg_pool = sorted(SCALE_DEGREES.get(scale_kind, SCALE_DEGREES["메이저"]))
     npool = len(deg_pool)
-    beats = STEPS_PER_BAR // 4                 # 16분 4칸 = 1박
-    n_bars = max(1, n_steps // STEPS_PER_BAR)
+    beats = beats_per_bar
+    bar_steps = beats * 4
+    n_bars = max(1, (n_steps + bar_steps - 1) // bar_steps)
     trained = is_trained(model)
     probs = _onset_probs(model) if trained else None
     cells = _bar_cells(rng, beats, probs)      # 리듬은 모든 마디 공유(반복 학습)
@@ -175,7 +179,7 @@ def melodic_grid(model, qfams, scale_kind, n_steps, rng):
     empty_zones: set[int] = set()
     for bar in range(n_bars):
         for b, cell in enumerate(cells):
-            st = bar * STEPS_PER_BAR + b * 4
+            st = bar * bar_steps + b * 4
             if not cell:
                 empty_zones.update(range(st, min(n_steps, st + 4)))
             for off in cell:
@@ -299,12 +303,12 @@ def rule_based_grid(qfams, scale_kind, n_steps, rng):
 
 
 # ── 공개 API ─────────────────────────────────────────────────────
-def generate_phrase(model, chord_events, scale_kind, n_bars=2, seed=None):
+def generate_phrase(model, chord_events, scale_kind, n_bars=2, seed=None, beats_per_bar=4):
     """chord_events: [(start_step, root_pc, quality)]. 반환 {notes, grid}."""
     rng = random.Random(seed)
-    n_steps = n_bars * STEPS_PER_BAR
+    n_steps = n_bars * beats_per_bar * 4
     roots, qfams = build_step_plan(chord_events, n_steps)
-    grid = melodic_grid(model, qfams, scale_kind, n_steps, rng)
+    grid = melodic_grid(model, qfams, scale_kind, n_steps, rng, beats_per_bar)
     notes = decode(grid, roots)
     return {"notes": notes, "grid": grid}
 
@@ -314,6 +318,7 @@ _KIND_QUALITY = {
     "아이오니안": "maj7", "메이저": "maj7", "리디안": "maj7",
     "도리안": "m7", "프리지안": "m7", "에올리안": "m7", "마이너": "m7",
     "믹솔리디안": "dom7", "로크리안": "m7b5",
+    "디미니시드": "dim7", "온음": "aug",
 }
 
 
@@ -355,7 +360,7 @@ def _kind_seed(kind: str) -> int:
     return sum((i + 1) * ord(c) for i, c in enumerate(kind))
 
 
-def generate_scale_riff(model, scale_kind: str, n_bars=1, variant=0) -> list[dict]:
+def generate_scale_riff(model, scale_kind: str, n_bars=1, variant=0, beats_per_bar=4) -> list[dict]:
     """스케일 종류당 1개 리프(루트 0 상대값).
 
     음악적 파이프라인(generate_phrase)에 위임 — 학습 분포(있으면) 기반
@@ -369,8 +374,9 @@ def generate_scale_riff(model, scale_kind: str, n_bars=1, variant=0) -> list[dic
     # 후보 24개 생성 → 밀도 하한(<3음/마디) 기각 후 랭킹 점수 argmax 채택.
     # 결정적(같은 종류=같은 결과). 전부 밀도 미달이면 가장 음 많은 후보.
     min_notes = 3 * max(1, n_bars)
-    _, qfams = build_step_plan(events, n_bars * STEPS_PER_BAR)
-    cands = [generate_phrase(model, events, scale_kind, n_bars=n_bars, seed=base + off)
+    _, qfams = build_step_plan(events, n_bars * beats_per_bar * 4)
+    cands = [generate_phrase(model, events, scale_kind, n_bars=n_bars, seed=base + off,
+                             beats_per_bar=beats_per_bar)
              for off in range(24)]
     ok = [c for c in cands if len(c["notes"]) >= min_notes]
     if not ok:
@@ -378,14 +384,15 @@ def generate_scale_riff(model, scale_kind: str, n_bars=1, variant=0) -> list[dic
     return max(ok, key=lambda c: _riff_score(c["grid"], model, qfams, scale_kind))["notes"]
 
 
-def _make_riff(model, kind: str, max_bars: int, variant: int = 0) -> dict:
+def _make_riff(model, kind: str, max_bars: int, variant: int = 0, beats_per_bar=4) -> dict:
     """스케일 종류 1개의 리프 dict(상대값 + note_set/chord_tones/quality)."""
     quality = _KIND_QUALITY.get(kind, "maj7")
     qfam = quality_family(quality)
     return {
-        "notes": generate_scale_riff(model, kind, n_bars=max_bars, variant=variant),
+        "notes": generate_scale_riff(model, kind, n_bars=max_bars, variant=variant,
+                                      beats_per_bar=beats_per_bar),
         "note_set": sorted(SCALE_DEGREES.get(kind, SCALE_DEGREES["메이저"])),
-        "chord_tones": sorted(QFAM_CHORD_TONES.get(qfam, QFAM_CHORD_TONES["maj"])),
+        "chord_tones": Chord("", 0, quality).chord_tones(),
         "quality": quality,
         "n_bars": max_bars,
         "variant": variant,
@@ -403,14 +410,14 @@ def _tile_segment(timeline, seg) -> None:
     rel = data["notes"]
     riff_beats = max(1, data["n_bars"]) * bpb
     shift = seg.chord.root if seg.chord.root <= 6 else seg.chord.root - 12
-    seg_beats = max(1, seg.end_bar - seg.start_bar) * bpb
+    seg_beats = timeline.beats_between(seg.start_sec, seg.end_sec)
     ex, t = [], 0.0
     while t < seg_beats - 1e-6:
         for n in rel:
             if n["beat_pos"] < riff_beats and t + n["beat_pos"] < seg_beats:
                 ex.append({"midi": n["midi"] + shift,
                            "beat_pos": round(t + n["beat_pos"], 4),
-                           "dur_beats": n["dur_beats"]})
+                           "dur_beats": min(n["dur_beats"], seg_beats - t - n["beat_pos"])})
         t += riff_beats
     seg.example = ex
 
@@ -424,17 +431,20 @@ def bake_examples(timeline, model, max_bars=1):
     for seg in timeline.segments:
         kind = seg.scale.kind if seg.scale else "메이저"
         if kind not in riffs:
-            riffs[kind] = _make_riff(model, kind, max_bars)
+            riffs[kind] = _make_riff(model, kind, max_bars, beats_per_bar=timeline.time_sig_beats())
     timeline.scale_riffs = riffs
     for seg in timeline.segments:
         _tile_segment(timeline, seg)
+    timeline.model_info = model.identity() if model is not None else {
+        "source": "rule", "phrases": 0, "artifact": None, "sha256": None}
     return timeline
 
 
 def rebake_kind(timeline, model, kind: str, max_bars=1) -> dict:
     """리프 재생성 — 같은 종류의 다른 변주(시드 변경) + 그 종류 구간 전부 재타일링."""
     v = (timeline.scale_riffs.get(kind) or {}).get("variant", 0) + 1
-    timeline.scale_riffs[kind] = _make_riff(model, kind, max_bars, variant=v)
+    timeline.scale_riffs[kind] = _make_riff(model, kind, max_bars, variant=v,
+                                          beats_per_bar=timeline.time_sig_beats())
     for seg in timeline.segments:
         if seg.scale and seg.scale.kind == kind:
             _tile_segment(timeline, seg)
@@ -448,9 +458,150 @@ def bake_segment(timeline, seg, model, max_bars=1):
     """
     kind = seg.scale.kind if seg.scale else "메이저"
     if kind not in timeline.scale_riffs:
-        timeline.scale_riffs[kind] = _make_riff(model, kind, max_bars)
+        timeline.scale_riffs[kind] = _make_riff(model, kind, max_bars,
+                                              beats_per_bar=timeline.time_sig_beats())
     _tile_segment(timeline, seg)
     return timeline
+
+
+def _landing_pc(seg, goal):
+    intervals = CHORD_SPECS.get(seg.chord.quality, ([], ""))[0]
+    if goal == "third":
+        degrees = [d for d in intervals if d in (3, 4)]
+    elif goal == "seventh":
+        degree = {"maj7": 11, "m7": 10, "dom7": 10, "7": 10,
+                  "m7b5": 10, "dim7": 9}.get(seg.chord.quality)
+        degrees = [] if degree is None else [degree]
+    elif goal == "root":
+        degrees = [0] if intervals else []
+    else:
+        degrees = intervals
+    return next(((seg.chord.root + d) % 12 for d in degrees
+                 if (seg.chord.root + d) % 12 in seg.note_set), None)
+
+
+def bake_progression(timeline, model, start_sec, end_sec, goal="third", variant=0, density=1.0):
+    """Bake the selected source interval using its actual chords and assigned note sets.
+
+    Returns {notes, start_sec, end_sec, goal, variant, density, landings, model_info}.
+    notes are {midi, start_sec, duration_sec, velocity} in absolute source seconds.
+    landings describe each internal chord entry and the final note, with target_pc=None
+    and supported=False when that chord/assigned scale cannot support the requested goal.
+    seg.example remains in segment-relative beats; examples outside the selection survive.
+    Call during preparation or an explicit user action, never from a playback tick.
+    """
+    if goal not in ("third", "seventh", "root", "chord_tone"):
+        raise ValueError("goal must be third, seventh, root or chord_tone")
+    if not all(math.isfinite(x) for x in (start_sec, end_sec, density)) or density <= 0:
+        raise ValueError("finite source times and positive density are required")
+    if end_sec <= start_sec:
+        raise ValueError("end_sec must follow start_sec")
+    parts = [(s, max(start_sec, s.start_sec), min(end_sec, s.end_sec))
+             for s in timeline.segments if s.start_sec < end_sec and s.end_sec > start_sec]
+    info = model.identity() if model is not None else {
+        "source": "rule", "phrases": 0, "artifact": None, "sha256": None}
+    result = {"notes": [], "start_sec": start_sec, "end_sec": end_sec, "goal": goal,
+              "variant": variant, "density": density, "landings": [], "model_info": info}
+    if not parts:
+        return result
+    if any(not seg.note_set for seg, _, _ in parts):
+        raise ValueError("each selected chord needs an assigned note_set")
+    b0, b1 = timeline.beat_at(start_sec), timeline.beat_at(end_sec)
+    plan = [(seg.chord.name, seg.chord.root, seg.chord.quality, a, b, sorted(seg.note_set))
+            for seg, a, b in parts]
+    seed = int.from_bytes(hashlib.sha256(json.dumps(
+        [plan, goal, variant], ensure_ascii=False).encode("utf-8")).digest()[:8], "big")
+    rng = random.Random(seed)
+    bpb = timeline.time_sig_beats()
+    trained = is_trained(model)
+    probs = _onset_probs(model) if trained else None
+    cells = _bar_cells(rng, bpb, probs)
+    mandatory = {a for _, a, _ in parts}
+    boundaries = sorted({start_sec, end_sec} | {t for _, a, b in parts for t in (a, b)})
+    candidates = set(mandatory)
+    preferred = []
+    for step in range(int(math.ceil((b1 - b0) * 4))):
+        beat = b0 + step / 4
+        sec = timeline.time_at_beat(beat)
+        # Beat interpolation can differ from a manual chord boundary by one float ULP.
+        sec = next((t for t in boundaries if abs(sec - t) < 1e-9), sec)
+        if any(a <= sec < b for _, a, b in parts):
+            candidates.add(sec)
+            if step % 4 in cells[(step // 4) % bpb]:
+                preferred.append(sec)
+    extra = sorted(candidates - mandatory - set(preferred))
+    preferred = sorted(set(preferred) - mandatory)
+    rng.shuffle(preferred)
+    rng.shuffle(extra)
+    count = max(len(mandatory), min(len(candidates), int(round((b1 - b0) * 1.5 * density))))
+    onsets = sorted(mandatory | set((preferred + extra)[:count - len(mandatory)]))
+    shape = rng.choice(("arch", "asc", "desc", "wave"))
+    prev_midi, prev_tokens, previous_end = 71, [BOS, BOS], b0
+    for i, sec in enumerate(onsets):
+        seg, _, boundary = next(p for p in parts if p[1] <= sec < p[2])
+        beat = timeline.beat_at(sec)
+        target = _landing_pc(seg, goal)
+        landing_kind = "final" if i == len(onsets) - 1 else (
+            "change" if sec in mandatory and sec > start_sec else None)
+        pool = [m for m in range(60, 84) if m % 12 in seg.note_set]
+        chord_pool = [m for m in pool if m % 12 in seg.chord_tones()]
+        if landing_kind:
+            pool = [m for m in pool if m % 12 == target] if target is not None else (chord_pool or pool)
+        gap = max(0, int(round((beat - previous_end) * 4)))
+        prev_tokens.extend([REST] * min(2, gap))
+        prior = {}
+        if trained:
+            kind = seg.scale.kind if seg.scale else "메이저"
+            prior = model.blended(quality_family(seg.chord.quality), _query_scale(model, kind),
+                                  int(round(beat * 4)) % (bpb * 4), tuple(prev_tokens[-2:]))
+        mass = sum(prior.get(onset_token((m - seg.chord.root) % 12), 0) for m in pool)
+        contour = 62 + 2 * _contour_target(shape, i / max(1, len(onsets) - 1))
+        weights = []
+        for midi in pool:
+            p = prior.get(onset_token((midi - seg.chord.root) % 12), 0) / mass if mass else 0
+            weight = (.03 + p) / (1 + abs(midi - prev_midi)) ** 1.5
+            weight /= 1 + abs(midi - contour) * .15
+            if midi == prev_midi:
+                weight *= .2
+            if abs(beat - round(beat)) < 1e-7 and midi % 12 in seg.chord_tones():
+                weight *= 2.5
+            weights.append(weight)
+        midi = rng.choices(pool, weights=weights)[0]
+        next_sec = onsets[i + 1] if i + 1 < len(onsets) else end_sec
+        end_beat = min(timeline.beat_at(min(next_sec, boundary, end_sec)), beat + 1)
+        note_end = min(boundary, end_sec, timeline.time_at_beat(beat + .9 * (end_beat - beat)))
+        note = {"midi": midi, "start_sec": sec, "duration_sec": note_end - sec,
+                "velocity": 86 if abs(beat - round(beat)) < 1e-7 else 74}
+        result["notes"].append(note)
+        if landing_kind:
+            result["landings"].append({"at_sec": sec, "chord": seg.chord.name,
+                                       "kind": landing_kind, "target_pc": target,
+                                       "supported": target is not None, "actual_pc": midi % 12})
+        prev_midi = midi
+        prev_tokens.append(onset_token((midi - seg.chord.root) % 12))
+        prev_tokens.extend([HOLD] * min(2, max(0, int(timeline.beats_between(sec, note_end) * 4) - 1)))
+        previous_end = timeline.beat_at(note_end)
+    for seg, a, b in parts:
+        segment_beat = timeline.beat_at(seg.start_sec)
+        kept = []
+        for n in seg.example:
+            ns = timeline.time_at_beat(segment_beat + n["beat_pos"])
+            ne = timeline.time_at_beat(segment_beat + n["beat_pos"] + n["dur_beats"])
+            if ne <= a or ns >= b:
+                kept.append(n)
+            else:
+                for left, right in ((ns, min(ne, a)), (max(ns, b), ne)):
+                    if right > left:
+                        kept.append({**n, "beat_pos": timeline.beat_at(left) - segment_beat,
+                                     "dur_beats": timeline.beats_between(left, right)})
+        for n in result["notes"]:
+            if a <= n["start_sec"] < b:
+                kept.append({"midi": n["midi"], "beat_pos": timeline.beat_at(n["start_sec"]) - segment_beat,
+                             "dur_beats": timeline.beats_between(n["start_sec"], n["start_sec"] + n["duration_sec"]),
+                             "velocity": n["velocity"]})
+        seg.example = sorted(kept, key=lambda n: n["beat_pos"])
+    timeline.model_info = info
+    return result
 
 
 if __name__ == "__main__":

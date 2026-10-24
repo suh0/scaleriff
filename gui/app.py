@@ -10,7 +10,7 @@ import hashlib
 import os
 
 from PyQt6.QtWidgets import (
-    QMainWindow, QStackedWidget, QFrame, QHBoxLayout, QLabel, QPushButton
+    QMainWindow, QStackedWidget, QFrame, QHBoxLayout, QLabel, QPushButton, QFileDialog, QApplication
 )
 from PyQt6.QtGui import QFont
 from PyQt6.QtCore import QSettings, pyqtSignal
@@ -77,9 +77,11 @@ class AppWindow(QMainWindow):
         self.setFont(base)
         self.setWindowTitle("ScaleRiff")
         self.resize(1040, 740)
-        self.setStyleSheet(f"QMainWindow{{background:{T.BG_BASE};}}")
+        self.setMinimumSize(960, 700)
+        self.setStyleSheet(T.qss_app())
 
         self._settings = QSettings("graduation-project", "ScaleRiff")
+        QApplication.instance().setProperty("reduceMotion", self._settings.value("reduce_motion", False, type=bool))
         seen_onboarding = self._settings.value("seen_onboarding", False, type=bool)
 
         self.stack = QStackedWidget()
@@ -114,6 +116,9 @@ class AppWindow(QMainWindow):
             lambda: self.stack.setCurrentWidget(self.beat))
         self.main_screen.backToLinkRequested.connect(self._go_link)
         self.main_screen.backToScoreRequested.connect(self._go_score)
+        self.main_screen.sessionChanged.connect(
+            lambda: self._save_session(self._timeline) if self._timeline else None)
+        self.main_screen.midiPortRequested.connect(self._connect_midi)
 
         self._timeline = None
         self._midi = None
@@ -127,10 +132,20 @@ class AppWindow(QMainWindow):
         # 저장된 세션(.json) → 분석 생략, 즉시 로드(§4: 한 번 구운 건 다시 안 굽는다)
         if source.lower().endswith(".json") and os.path.exists(source):
             try:
-                self._open_timeline(Timeline.load_json(source))
+                timeline = Timeline.load_json(source)
+                if timeline.audio_ref and not os.path.isfile(timeline.audio_ref):
+                    audio, _ = QFileDialog.getOpenFileName(self, "세션의 원본 오디오 다시 연결", "",
+                        "오디오 (*.mp3 *.wav *.m4a *.flac *.ogg *.webm);;모든 파일 (*.*)")
+                    if not audio:
+                        self.statusBar().showMessage("원본 오디오를 다시 연결해야 이 세션을 재생할 수 있습니다")
+                        return
+                    from ingest.audio_source import to_wav
+                    timeline.audio_ref, timeline.wav_ref = audio, to_wav(audio)
+                self._open_timeline(timeline)
                 return
-            except (OSError, KeyError, ValueError):
-                pass    # 세션 파일이 아니면 일반 분석으로
+            except (OSError, KeyError, ValueError, TypeError) as error:
+                self.statusBar().showMessage(f"세션을 열지 못했어요: {error}")
+                return
         if self._bg_wait:
             return      # 백그라운드 분석 중엔 새 분석 시작 안 함(세션 열기만)
         self._pill.hide()    # 이전 실패 알약 정리
@@ -178,8 +193,11 @@ class AppWindow(QMainWindow):
             os.makedirs(d, exist_ok=True)
             self._settings.setValue("save_dir", d)   # 다음 실행에도 유지
             tl.save_json(self._session_path(tl))
-        except OSError:
-            pass    # 저장 실패는 치명적이지 않음
+            self.statusBar().showMessage("세션 저장 완료", 3000)
+            return True
+        except (OSError, ValueError) as error:
+            self.statusBar().showMessage(f"세션 저장 실패: {error}")
+            return False
 
     def _on_timeline_ready(self, timeline):
         if self._bg_wait:               # 연습하며 기다리는 중 — 화면 전환 없이 보관
@@ -258,6 +276,8 @@ class AppWindow(QMainWindow):
     def _go_link(self):
         self.main_screen.pause()
         self.beat.pause()
+        if self._timeline is not None:
+            self._save_session(self._timeline)
         self.stack.setCurrentWidget(self.link_screen)
 
     def _go_score(self):
@@ -269,14 +289,27 @@ class AppWindow(QMainWindow):
 
     # ── MIDI ─────────────────────────────────────────────────────
     def _try_start_midi(self):
+        self._connect_midi("")
+
+    def _connect_midi(self, name=""):
         try:
             from player.midi_input import MidiInput
-            self._midi = MidiInput()
-            if self._midi.open_first_available():
-                self._midi.note_received.connect(self.main_screen.on_midi_note)
+            self.main_screen.pause()
+            if self._midi:
+                self._midi.stop()
+                self._midi.deleteLater()
+            self._midi = MidiInput(self)
+            self._midi.note_event.connect(self.main_screen.on_midi_event)
+            self._midi.errorOccurred.connect(lambda error: self.main_screen.set_midi_status(
+                MidiInput.list_ports(), self._midi.port_name, error))
+            self._midi.connectionChanged.connect(lambda _: self.main_screen.set_midi_status(
+                MidiInput.list_ports(), self._midi.port_name))
+            if self._midi.open_port(name or None):
                 self._midi.start()
-        except Exception:
+            self.main_screen.set_midi_status(MidiInput.list_ports(), self._midi.port_name)
+        except Exception as error:
             self._midi = None
+            self.main_screen.set_midi_status([], error=str(error))
 
     def closeEvent(self, e):
         self.analyzing.shutdown()
@@ -285,4 +318,6 @@ class AppWindow(QMainWindow):
         if self.main_screen.playhead:
             self.main_screen.playhead.pause()
         self.beat.pause()
+        if self._timeline is not None:
+            self._save_session(self._timeline)
         super().closeEvent(e)

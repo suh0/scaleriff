@@ -7,6 +7,8 @@ JSON 직렬화(가중치=카운트 테이블). 추론은 ml/generate.py.
 from __future__ import annotations
 import json
 import os
+import hashlib
+from pathlib import Path
 
 from ml.representation import BOS, STEPS_PER_BAR
 
@@ -21,6 +23,8 @@ class MarkovModel:
         self.table: dict[str, dict[str, int]] = {}
         self.meta = {"source": "empty", "order": order,
                      "steps_per_bar": steps_per_bar, "phrases": 0}
+        self._artifact_path = None
+        self._artifact_sha256 = None
 
     # ── 컨텍스트 키 ──────────────────────────────────────────────
     @staticmethod
@@ -42,6 +46,7 @@ class MarkovModel:
     # ── 학습 ─────────────────────────────────────────────────────
     def fit(self, examples):
         """examples: [{grid:[tok], qfam:[per-step], scale:str|[per-step]}]."""
+        self._artifact_path = self._artifact_sha256 = None
         o = self.order
         for ex in examples:
             grid, qf, sc = ex["grid"], ex["qfam"], ex["scale"]
@@ -78,6 +83,12 @@ class MarkovModel:
     def to_dict(self):
         return {"meta": self.meta, "table": self.table}
 
+    def identity(self) -> dict:
+        """Loaded file bytes identify an artifact; unsaved models hash their contents."""
+        digest = self._artifact_sha256 or hashlib.sha256(json.dumps(
+            self.to_dict(), sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
+        return {**self.meta, "artifact": self._artifact_path, "sha256": digest}
+
     @staticmethod
     def from_dict(d):
         m = MarkovModel(order=d["meta"].get("order", 2),
@@ -92,8 +103,11 @@ class MarkovModel:
 
     @staticmethod
     def load_json(path: str) -> "MarkovModel":
-        with open(path, "r", encoding="utf-8") as f:
-            return MarkovModel.from_dict(json.load(f))
+        raw = Path(path).read_bytes()
+        model = MarkovModel.from_dict(json.loads(raw.decode("utf-8")))
+        model._artifact_path = str(Path(path).resolve())
+        model._artifact_sha256 = hashlib.sha256(raw).hexdigest()
+        return model
 
 
 def is_trained(model: MarkovModel) -> bool:

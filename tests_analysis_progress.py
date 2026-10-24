@@ -29,7 +29,7 @@ def main():
                 assert screen.bar.value() > previous, "진행 알림이 없는 구간에서 로딩바가 멈춤"
             assert screen._display_progress < 100
             previous = screen.bar.value()
-        assert screen._step_lbls[0].text().startswith("●"), "예상 진행률만으로 실제 단계를 완료 처리함"
+        assert screen._step_lbls[0].text().startswith("진행"), "예상 진행률만으로 실제 단계를 완료 처리함"
         before = screen._display_progress
         screen._on_progress(20, "늦은 단계 알림")
         assert screen._display_progress >= before, "진행률이 후퇴함"

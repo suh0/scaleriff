@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import wave
+import math
 from array import array
 
 from PyQt6.QtWidgets import (
@@ -20,13 +21,14 @@ from PyQt6.QtCore import Qt, QRectF, pyqtSignal, QTimer
 
 from gui import theme as T
 from gui.anim import stagger
+from gui.widgets.flow_header import FlowHeader
 from analyze.theory import (
     parse_chord, scale_pcs, degree_for, diatonic_option, pc_name,
 )
 from player.timeline import ScaleOption
 from player.playhead import Playhead
 from build.real_builder import regrid_timeline
-from ml.generate import bake_segment
+from ml.generate import bake_segment, bake_examples
 
 ZOOM_SEC = 10.0      # 확대 창 길이
 WAVE_BUCKETS = 300   # 확대 창 파형 해상도(컬럼 수)
@@ -68,11 +70,17 @@ class ZoomBar(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setMinimumHeight(96)
+        self.setCursor(Qt.CursorShape.SizeHorCursor)
+        self.setToolTip("마디선을 드래그해 시작박을 맞추세요. 놓으면 해당 위치부터 재생합니다.")
         self._t0, self._t1 = 0.0, ZOOM_SEC
         self._anchor, self._bar_len, self._beats = 0.0, 2.0, 4
-        self._pos = -1.0
+        self._pos = None
         self._drag_k: int | None = None
+        self._drag_x = 0.0
+        self._drag_sec = 0.0
+        self._drag_sec_per_px = 0.0
         self._peaks: list[tuple[float, float]] = []
+        self._wave_t0, self._wave_t1 = 0.0, ZOOM_SEC
 
     def set_window(self, t0: float, t1: float):
         self._t0, self._t1 = t0, max(t1, t0 + 0.1)
@@ -86,8 +94,9 @@ class ZoomBar(QWidget):
         self._pos = sec
         self.update()
 
-    def set_wave(self, peaks: list[tuple[float, float]]):
+    def set_wave(self, peaks: list[tuple[float, float]], t0=0.0, t1=ZOOM_SEC):
         self._peaks = peaks
+        self._wave_t0, self._wave_t1 = t0, t1
         self.update()
 
     # ── 좌표 변환 ────────────────────────────────────────────────
@@ -102,11 +111,16 @@ class ZoomBar(QWidget):
         if self._bar_len <= 0:
             return
         sec = self._x_to_sec(e.position().x())
-        self._drag_k = max(0, round((sec - self._anchor) / self._bar_len))
+        self._drag_k = max(-1, round((sec - self._anchor) / self._bar_len))
+        self._drag_x = e.position().x()
+        self._drag_sec = self._anchor + self._drag_k * self._bar_len
+        self._drag_sec_per_px = (self._t1 - self._t0) / max(1, self.width())
 
     def mouseMoveEvent(self, e):
         if self._drag_k is not None:
-            self.barDragged.emit(self._drag_k, self._x_to_sec(e.position().x()))
+            # 창이 왼쪽으로 이동해도 드래그 시작 시점의 축척/좌표를 유지한다.
+            sec = self._drag_sec + (e.position().x() - self._drag_x) * self._drag_sec_per_px
+            self.barDragged.emit(self._drag_k, sec)
 
     def mouseReleaseEvent(self, e):
         if self._drag_k is not None:
@@ -124,10 +138,11 @@ class ZoomBar(QWidget):
         # 파형(피크) — 격자 아래에 깔림
         if self._peaks:
             mid, amp = h / 2, h / 2 - 12
-            bw = w / len(self._peaks)
             p.setPen(QPen(QColor(T.BORDER_DEFAULT), 1))
             for i, (lo, hi) in enumerate(self._peaks):
-                x = int((i + 0.5) * bw)
+                t = self._wave_t0 + (i + 0.5) / len(self._peaks) * (
+                    self._wave_t1 - self._wave_t0)
+                x = int(self._sec_to_x(t))
                 p.drawLine(x, int(mid - hi * amp), x, int(mid - lo * amp))
         if self._bar_len <= 0:
             return
@@ -136,7 +151,7 @@ class ZoomBar(QWidget):
         f.setPixelSize(10)
         p.setFont(f)
         # 창 안의 박(선명)·마디선(진함+번호)
-        i = max(0, int((self._t0 - self._anchor) / beat_len) - 1)
+        i = max(-self._beats, math.floor((self._t0 - self._anchor) / beat_len) - 1)
         while True:
             t = self._anchor + i * beat_len
             if t > self._t1:
@@ -153,7 +168,7 @@ class ZoomBar(QWidget):
                     p.drawLine(int(x), 14, int(x), h - 14)
             i += 1
         # 재생 헤드
-        if self._t0 <= self._pos <= self._t1:
+        if self._pos is not None and self._t0 <= self._pos <= self._t1:
             x = self._sec_to_x(self._pos)
             p.setPen(QPen(QColor(T.SCRUB_HEAD), 2))
             p.drawLine(int(x), 4, int(x), h - 4)
@@ -183,6 +198,8 @@ class BeatScreen(QWidget):
         outer = QVBoxLayout(content)
         outer.setContentsMargins(T.PAD_H, T.PAD_V, T.PAD_H, T.PAD_V)
         outer.setSpacing(10)
+        self.flow = FlowHeader(2)
+        outer.addWidget(self.flow)
         self.pages = QStackedWidget()
         outer.addWidget(self.pages)
         self.beat_page = QWidget()
@@ -208,12 +225,15 @@ class BeatScreen(QWidget):
         root.addLayout(top)
 
         self.hint_lbl = QLabel(
-            "마디선을 드래그하면 격자 전체가 함께 이동하고(BPM 불변), 놓으면 "
-            "그 위치부터 재생됩니다. 확인을 누르면 변경한 박자를 반영한 "
-            "코드 편집 화면으로 이동합니다. 코드 편집 후 박자를 다시 변경하면 "
-            "코드 수정이 초기화됩니다. 박자를 변경하지 않으면 코드 수정은 유지됩니다.")
+            "마디선을 드래그해 첫박을 맞추고, BPM과 박자를 확인하세요. "
+            "확인을 누르면 코드 편집으로 이동합니다.")
+        self.hint_lbl.setToolTip(
+            "0마디는 빈 코드의 카운팅 구간입니다. 오디오 시작 이전은 무음이며 최대 10초 전까지 확장합니다.\n"
+            "드래그는 BPM을 유지하며 전체 격자를 이동합니다. 놓으면 그 위치부터 재생합니다.\n"
+            "코드 수정과 루프는 원본 시간 기준으로 보존됩니다. 자동 코드는 장·단 3화음 추정입니다.")
         self.hint_lbl.setStyleSheet(f"color:{T.TEXT_MUTED};font-size:12px;")
         self.hint_lbl.setWordWrap(True)
+        self._base_hint = self.hint_lbl.text()
         root.addWidget(self.hint_lbl)
 
         # 확대바 두 개를 한 줄에 배치(처음 10초 왼쪽, 마지막 10초 오른쪽)
@@ -248,7 +268,8 @@ class BeatScreen(QWidget):
         self.sig_box.currentIndexChanged.connect(lambda _: self._refresh())
         ctrl.addWidget(self.sig_box)
         self.bpm_edit = QLineEdit()   # BPM(간격) 직접 입력 — 드래그로는 안 바뀜
-        self.bpm_edit.setFixedWidth(70)
+        self.bpm_edit.setFixedWidth(90)
+        self.bpm_edit.setAccessibleName("곡 BPM")
         self.bpm_edit.setAlignment(Qt.AlignmentFlag.AlignRight)
         self.bpm_edit.setStyleSheet(
             f"QLineEdit{{background:{T.BG_SURFACE_ALT};color:{T.TEXT_PRIMARY};"
@@ -266,11 +287,8 @@ class BeatScreen(QWidget):
 
         # 확정은 두 박자 조정바 오른쪽에 고정
         self.confirm_btn = QPushButton("확인")
-        self.confirm_btn.setStyleSheet(
-            f"QPushButton{{background:{T.BG_SURFACE_ALT};color:{T.TEXT_PRIMARY};"
-            f"border:1px solid {T.BORDER_ACTIVE};border-radius:8px;"
-            "padding:6px 18px;font-size:13px;font-weight:700;}"
-            f"QPushButton:hover{{border:1px solid {T.WHITE};}}")
+        self.confirm_btn.setStyleSheet(T.qss_primary_btn())
+        self.confirm_btn.setToolTip("변경한 박자를 반영하고 코드 편집으로 이동")
         self.confirm_btn.clicked.connect(self._on_confirm)
         edit_row.addWidget(
             self.confirm_btn, 0, Qt.AlignmentFlag.AlignVCenter)
@@ -290,7 +308,19 @@ class BeatScreen(QWidget):
         chord_title.setStyleSheet(title.styleSheet())
         chord_top.addWidget(chord_title)
         chord_top.addStretch(1)
+        self.key_box = QComboBox()
+        for r in range(12):
+            for mode, label in (("major", "장조"), ("minor", "단조")):
+                self.key_box.addItem(f"키: {pc_name(r)} {label}", f"{pc_name(r)} {mode}")
+        self.key_box.setStyleSheet(combo_qss)
+        self.key_box.setToolTip("분석된 키를 확인하거나 직접 선택합니다. 코드와 박자는 유지됩니다.")
+        self.key_box.currentIndexChanged.connect(self._on_key_changed)
+        chord_top.addWidget(self.key_box)
         root.addLayout(chord_top)
+        chord_hint = QLabel("분석된 코드를 확인하세요. 칸을 클릭하면 수정, 여러 칸을 드래그하면 루프를 만듭니다. 자동 인식은 장·단 3화음 추정입니다.")
+        chord_hint.setStyleSheet(f"color:{T.TEXT_MUTED};font-size:12px;")
+        chord_hint.setWordWrap(True)
+        root.addWidget(chord_hint)
 
         # ── 아래: 루프 리스트 + 마디별 코드표(세로 스크롤) ───────
         right = QVBoxLayout()
@@ -301,9 +331,18 @@ class BeatScreen(QWidget):
         loop_row.addWidget(grid_lbl)
         self.loops_row = QHBoxLayout()
         self.loops_row.setSpacing(6)
+        self.loops_row.setContentsMargins(0, 0, 0, 0)
+        loops_host = QWidget()
+        loops_host.setObjectName("loopChips")
+        loops_host.setStyleSheet(f"QWidget#loopChips{{background:{T.BG_BASE};}}")
+        loops_host.setLayout(self.loops_row)
+        self.loops_scroll = QScrollArea()
+        self.loops_scroll.setWidgetResizable(True)
+        self.loops_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.loops_scroll.setFixedHeight(54)
+        self.loops_scroll.setWidget(loops_host)
         loop_row.addSpacing(12)
-        loop_row.addLayout(self.loops_row)
-        loop_row.addStretch(1)
+        loop_row.addWidget(self.loops_scroll, 1)
         self._loop_wrap = QWidget()
         self._loop_wrap.setLayout(loop_row)
         right.addWidget(self._loop_wrap)
@@ -335,7 +374,7 @@ class BeatScreen(QWidget):
         # ── 조정 완료 → 다음 화면 ────────────────────────────────
         done_row = QHBoxLayout()
         done_row.addStretch(1)
-        self.done_btn = QPushButton("편집 완료 → 코드·스케일 ▶")
+        self.done_btn = QPushButton("리프 확인으로")
         self.done_btn.setStyleSheet(T.qss_primary_btn())
         self.done_btn.clicked.connect(self._on_done)
         done_row.addWidget(self.done_btn)
@@ -356,6 +395,9 @@ class BeatScreen(QWidget):
         return self._beats() * self.beat_len
 
     def _refresh(self):
+        self.anchor = max(self.anchor, self.bar_len - 10.0)
+        start = min(0.0, self.anchor - self.bar_len)
+        self.zoom_l.set_window(start, start + min(ZOOM_SEC, self._dur))
         for z in (self.zoom_l, self.zoom_r):
             z.set_grid(self.anchor, self.bar_len, self._beats())
 
@@ -364,7 +406,14 @@ class BeatScreen(QWidget):
         if self.playhead:
             self.playhead.pause()
         self.tl = tl
+        warning = (" 비트 검출이 부족해 기본 격자를 사용했습니다. BPM과 시작박을 직접 확인해 주세요."
+                   if tl.analysis_info.get("beat_detected") is False else "")
+        self.hint_lbl.setText(self._base_hint + warning)
         self._model = model
+        mode = "minor" if "minor" in (tl.key or "").lower() else "major"
+        self.key_box.blockSignals(True)
+        self.key_box.setCurrentIndex(self.key_box.findData(f"{pc_name(tl.key_root)} {mode}"))
+        self.key_box.blockSignals(False)
         self.anchor = tl.bar_times[0] if tl.bar_times else 0.0
         self.beat_len = tl.beat_sec()
         self._dur = (tl.bar_times[-1] if tl.bar_times else tl.total_sec()) or ZOOM_SEC
@@ -375,8 +424,10 @@ class BeatScreen(QWidget):
         self.zoom_l.set_window(0.0, min(ZOOM_SEC, self._dur))
         self.zoom_r.set_window(max(0.0, self._dur - ZOOM_SEC), self._dur)
         wav = getattr(tl, "wav_ref", "")
-        self.zoom_l.set_wave(_wave_peaks(wav, 0.0, min(ZOOM_SEC, self._dur)))
-        self.zoom_r.set_wave(_wave_peaks(wav, max(0.0, self._dur - ZOOM_SEC), self._dur))
+        self.zoom_l.set_wave(_wave_peaks(wav, 0.0, min(ZOOM_SEC, self._dur)),
+                             0.0, min(ZOOM_SEC, self._dur))
+        self.zoom_r.set_wave(_wave_peaks(wav, max(0.0, self._dur - ZOOM_SEC), self._dur),
+                             max(0.0, self._dur - ZOOM_SEC), self._dur)
         self.bpm_edit.setText(f"{tl.bpm:.1f}")
         self.playhead = Playhead(self._dur, tl.audio_ref, self)
         self.playhead.positionChanged.connect(self._on_tick)
@@ -394,10 +445,7 @@ class BeatScreen(QWidget):
     # ── 드래그 = 격자 평행이동(BPM 불변, 재격자화는 확정 시) ────
     def _on_drag(self, k: int, sec: float):
         """마디 k 선을 sec로 — 시작박이 그만큼 밀리거나 당겨진다(끝박도 동일)."""
-        a = sec - k * self.bar_len
-        if a < 0:
-            a %= self.bar_len       # 시작박이 0초 앞으로 나가면 한 마디 안으로 되접기
-        self.anchor = a
+        self.anchor = sec - k * self.bar_len
         self._refresh()
 
     def _on_drag_end(self, k: int):
@@ -442,7 +490,8 @@ class BeatScreen(QWidget):
             return
         self.tl.time_sig = state[0] or self.tl.time_sig
         self.tl.bpm = state[1]
-        if regrid_timeline(self.tl, self._model, anchor_sec=self.anchor):
+        preserve = bool(self._applied and state[:2] == self._applied[:2])
+        if regrid_timeline(self.tl, self._model, anchor_sec=self.anchor, preserve_tempo=preserve):
             self._build_grid()
         self._applied = state
 
@@ -459,6 +508,7 @@ class BeatScreen(QWidget):
     def _set_locked(self, locked: bool):
         """확정 상태 토글 — 확정 전엔 코드표가, 확정 후엔 박자 편집부가 잠긴다."""
         self._locked = locked
+        self.flow.set_stage(3 if locked else 2)
         for w in (self.zoom_l, self.zoom_r, self.sig_box, self.bpm_edit):
             self._dim(w, locked)
         for w in (self._loop_wrap, self.holder):   # 미확정 격자의 코드표는 잠금
@@ -491,19 +541,22 @@ class BeatScreen(QWidget):
         if not self.tl or not self.tl.segments:
             return
         total = self.tl.total_bars()
+        self.grid.addWidget(self._make_cell(-1, None, False), 0, 0)
         prev_seg = None
         last_row = 0
         for bar in range(total):
             seg = self.tl.segment_for_bar(bar)
             cell = self._make_cell(bar, seg, seg is not prev_seg)
-            last_row = bar // BARS_PER_ROW
-            self.grid.addWidget(cell, last_row, bar % BARS_PER_ROW)
+            last_row = (bar + 1) // BARS_PER_ROW
+            self.grid.addWidget(cell, last_row, (bar + 1) % BARS_PER_ROW)
             prev_seg = seg
         self.grid.setRowStretch(last_row + 1, 1)
 
     def _make_cell(self, bar: int, seg, is_new_chord: bool) -> QWidget:
         detour = bool(seg and seg.is_detour)   # 비다이아토닉(§3) — 빨강으로만 표시
-        chord_txt = seg.chord.name if (seg and is_new_chord) else "／"
+        parts = [s for s in self.tl.segments if s.start_bar <= bar < s.end_bar] if bar >= 0 else []
+        chord_txt = ("→".join(s.chord.name for s in parts) if len(parts) > 1 else
+                     (seg.chord.name if is_new_chord else "／")) if seg else ""
         # 종류만(근음 생략). 반복 마디(／)엔 스케일도 생략
         scale_txt = seg.scale.kind if (seg and seg.scale and is_new_chord) else ""
 
@@ -513,7 +566,8 @@ class BeatScreen(QWidget):
         else:
             border, bg = T.BORDER_DEFAULT, T.BG_INSET
         cell._base_qss = (
-            f"QFrame{{background:{bg};border:2px solid {border};border-radius:8px;}}")
+            f"QFrame{{background:{bg};border:1px solid {border};border-radius:8px;}}"
+            f"QFrame:hover{{background:{T.BG_SURFACE_ALT};border-color:{T.TEXT_MUTED};}}")
         cell._hl_qss = (                        # 루프 지정 선택/범위 하이라이트
             f"QFrame{{background:{T.BG_SURFACE_ALT};"
             f"border:2px solid {T.BORDER_ACTIVE};border-radius:8px;}}")
@@ -555,7 +609,7 @@ class BeatScreen(QWidget):
         home = set(scale_pcs(self.tl.key_root, mode))
         return all(pc in home for pc in parse_chord(name).chord_tones())
 
-    def _edit_chord(self, seg):
+    def _edit_chord(self, seg, bar=None):
         """코드박스 클릭 → 그 자리에서 바로 선택 리스트(루트 ▸ 종류).
 
         다이아토닉 코드는 굵게 강조만(별도 창·섹션 없음).
@@ -579,17 +633,16 @@ class BeatScreen(QWidget):
                     root_dia = True
                     f = act.font(); f.setBold(True); act.setFont(f)
                 act.triggered.connect(
-                    lambda _, n=nm, sg=seg:
-                        n != sg.chord.name and self._apply_chord(sg, n))
+                    lambda _, n=nm, sg=seg, b=bar:
+                        n != sg.chord.name and self._apply_chord(sg, n, b))
             if root_dia:                           # 스케일 안 루트도 굵게
                 f = sub.menuAction().font(); f.setBold(True)
                 sub.menuAction().setFont(f)
         menu.aboutToHide.connect(menu.deleteLater)
         menu.popup(QCursor.pos())
 
-    def _apply_chord(self, seg, name: str):
-        """수동 선택 코드로 구간의 코드·스케일·리프를 재계산."""
-        chord = parse_chord(name)
+    def _set_chord_harmony(self, seg, chord):
+        """현재 키에 맞춰 코드의 스케일과 도수를 갱신(시간/마디는 유지)."""
         key_root = self.tl.key_root
         key_mode = "minor" if "minor" in (self.tl.key or "").lower() else "major"
         home = set(scale_pcs(key_root, key_mode))
@@ -601,13 +654,40 @@ class BeatScreen(QWidget):
         seg.candidates = [ScaleOption(o["kind"], o["root"], o["name"], o["note_set"])]
         seg.degree = degree_for(chord, key_root)
         seg.is_detour = is_detour
-        bake_segment(self.tl, seg, self._model)   # 새 종류 리프 생성 + example 갱신
+
+    def _on_key_changed(self, index: int):
+        if self.tl is None or index < 0:
+            return
+        key = self.key_box.currentData()
+        if key == self.tl.key:
+            return
+        self.pause()
+        self.tl.key = key
+        self.tl.key_root = index // 2
+        self.tl.key_override = True
+        for seg in self.tl.segments:
+            self._set_chord_harmony(seg, seg.chord)
+        self.tl.available_scales = list(dict.fromkeys(
+            seg.scale.kind for seg in self.tl.segments if seg.scale))
+        bake_examples(self.tl, self._model)
+        self._build_grid()
+
+    def _apply_chord(self, seg, name: str, bar=None):
+        """수동 선택 코드로 구간의 코드·스케일·리프를 재계산."""
+        from build.real_builder import apply_chord_edit
+        start, end = seg.start_sec, seg.end_sec
+        if bar is not None and len(self.tl.bar_times) > bar + 1:
+            start = max(start, self.tl.bar_times[bar])
+            end = min(end, self.tl.bar_times[bar + 1])
+        apply_chord_edit(self.tl, start, end, name, self._model)
         self._build_grid()
 
     # ── 사용자 루프(§6): 칸 클릭=코드 수정 · 칸 드래그=루프 지정 ──
     def _bar_at_global(self, gp) -> int | None:
         """글로벌 좌표 아래의 마디 칸 — 드래그가 어느 칸 위인지 판정."""
         for b, c in self._cells.items():
+            if b < 0:
+                continue
             try:
                 if c.rect().contains(c.mapFromGlobal(gp)):
                     return b
@@ -621,7 +701,7 @@ class BeatScreen(QWidget):
         self._drag_loop = False
 
     def _loop_drag_to(self, bar: int | None):
-        if self._drag_start is None or bar is None:
+        if self._drag_start is None or bar is None or bar < 0:
             return
         if bar != self._drag_start or self._drag_loop:
             self._drag_loop = True    # 시작 칸을 벗어나면 루프 모드(복귀=1마디)
@@ -639,7 +719,16 @@ class BeatScreen(QWidget):
             # 이벤트가 끝난 뒤에 연다.
             QTimer.singleShot(0, lambda: self._ask_loop_name(s, e))
         elif seg is not None:                       # 제자리 클릭 → 코드 수정
-            self._edit_chord(seg)
+            parts = [s for s in self.tl.segments if s.start_bar <= start < s.end_bar]
+            if len(parts) > 1:
+                menu = QMenu(self)
+                for part in parts:
+                    action = menu.addAction(f"{part.chord.name} · {part.start_sec:.2f}–{part.end_sec:.2f}초")
+                    action.triggered.connect(lambda _, p=part, b=start: self._edit_chord(p, b))
+                menu.aboutToHide.connect(menu.deleteLater)
+                menu.popup(QCursor.pos())
+            else:
+                self._edit_chord(seg, start)
 
     def _highlight_bars(self) -> set[int]:
         if not self._drag_loop or self._drag_start is None:
@@ -668,6 +757,8 @@ class BeatScreen(QWidget):
         if ok and name.strip():
             self.tl.loops.append({"name": name.strip(), "start_bar": s,
                                   "end_bar": e, "on": True})
+            if len(self.tl.bar_times) > e + 1:
+                self.tl.loops[-1].update(start_sec=self.tl.bar_times[s], end_sec=self.tl.bar_times[e + 1])
             self._build_loops()
 
     def _build_loops(self):
@@ -678,7 +769,9 @@ class BeatScreen(QWidget):
         for i, lp in enumerate(self.tl.loops if self.tl else []):
             chip = QPushButton(
                 f"{lp['name']}  {lp['start_bar'] + 1}–{lp['end_bar'] + 1}마디  ✕")
-            chip.setToolTip("클릭하면 삭제")
+            chip.setToolTip(f"{lp['name']} · 클릭하면 삭제")
+            chip.setMaximumWidth(240)
+            chip.setText(chip.fontMetrics().elidedText(chip.text(), Qt.TextElideMode.ElideRight, 210))
             chip.setStyleSheet(T.qss_ghost_btn())
             chip.clicked.connect(lambda _, k=i: self._del_loop(k))
             self.loops_row.addWidget(chip)

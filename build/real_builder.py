@@ -10,6 +10,7 @@ regrid)이 Timeline 완성 직후 1회 수행한다.
 from __future__ import annotations
 
 from collections import namedtuple
+import bisect
 
 from ingest.audio_source import resolve_audio
 from ingest.mir_extract import get_backend
@@ -21,9 +22,9 @@ from player.timeline import Timeline, Segment, ScaleOption
 _Span = namedtuple("_Span", "start_sec end_sec name")
 
 
-def _segments_from_structure(st, key_root: int, key_mode: str):
+def _segments_from_structure(st, key_root: int, key_mode: str, fixed_key: bool = False):
     """구조분석 결과 → 화성분석 → Segment 목록 + 등장 스케일 종류(§3)."""
-    harm = analyze_harmony(st.segments, key_root, key_mode, st.loop_len)
+    harm = analyze_harmony(st.segments, key_root, key_mode, st.loop_len, fixed_key)
     segments: list[Segment] = []
     available: list[str] = []
     for i, h in enumerate(harm):
@@ -38,6 +39,19 @@ def _segments_from_structure(st, key_root: int, key_mode: str):
             degree=degree_for(h.chord, key_root), is_detour=h.is_detour,
         ))
     return segments, available
+
+
+def _structure_with_preroll(bars, spans, duration, beats):
+    """음수 마디는 번호만 남기고 코드/리프 구간에서는 제외한다."""
+    first = next(i for i in range(len(bars) - 1) if bars[i + 1] > 0)
+    st = structure_from_grid(bars[first:], spans, duration, beats)
+    for seg in st.segments:
+        seg.start_bar += first
+        seg.end_bar += first
+        seg.start_sec = max(0.0, seg.start_sec)
+    st.bar_times = bars
+    st.loop_phase += first
+    return st
 
 
 def build_real_timeline(source: str, progress_cb=None) -> Timeline:
@@ -73,45 +87,79 @@ def build_real_timeline(source: str, progress_cb=None) -> Timeline:
         beat_times=list(mir.beat_times),   # 마디선 보정(§3.5 2차) 재료
         chord_spans=[[c.start_sec, c.end_sec, c.name] for c in mir.chords],
         wav_ref=wav,                       # 파형 표시용(박자 조정 화면)
+        analysis_info={"beat_backend": mir.beat_source,
+                       "beat_detected": mir.beat_detected,
+                       "chord_backend": "madmom" if backend.use_madmom else "librosa",
+                       "chord_vocabulary": "maj/min", "estimated": True},
     )
     cb(100, "완료")
     return tl
 
 
 # ── 마디선 보정 (§3.5 2차) — 저장된 코드 스팬으로 재격자화 ──────────────
-def regrid_timeline(tl: Timeline, model=None, anchor_sec: float | None = None) -> bool:
+def regrid_timeline(tl: Timeline, model=None, anchor_sec: float | None = None,
+                    preserve_tempo: bool = False) -> bool:
     """마디선 보정 — MIR 재실행 없이 구조 재계산만(§3.5 원칙).
 
     사용자가 드래그로 정한 시작박(anchor_sec)부터 BPM 기반 균등 마디 격자를 깐다
     (마디 길이 = 박자 분자 × 60/BPM). anchor_sec=None이면 현재 첫 마디선 유지
-    (박자 전환만 적용). 구조→화성→Segment→리프를 다시 구우므로 수동 코드 수정은
-    유실된다. 반환 False = 원자료 없는 구 캐시(보정 불가).
-
-    ponytail: 균등 BPM 격자 — 템포가 흔들리는 곡은 madmom 가변 마디 정보 유실.
-    필요해지면 anchor에서 beat_times 스냅으로 업그레이드.
+    (박자 전환만 적용). 수동 코드는 원본 시간 기반 오버라이드로 재적용한다.
+    preserve_tempo=True는 시작점만 옮길 때 가변 마디 간격을 보존한다.
     """
     if not tl.chord_spans or len(tl.bar_times) < 2:
         return False
     duration = tl.bar_times[-1]
     bar_len = tl.time_sig_beats() * tl.beat_sec()
-    a = tl.bar_times[0] if anchor_sec is None else max(0.0, anchor_sec)
+    a = tl.bar_times[0] if anchor_sec is None else anchor_sec
     if bar_len <= 0 or a >= duration - 1e-3:
         return False
+    for lp in tl.loops:
+        if "start_sec" not in lp and 0 <= lp["start_bar"] < lp["end_bar"] + 1 < len(tl.bar_times):
+            lp["start_sec"] = tl.bar_times[lp["start_bar"]]
+            lp["end_sec"] = tl.bar_times[lp["end_bar"] + 1]
     bars = []
-    b = a
-    while b < duration - 1e-3:
-        bars.append(b)
-        b += bar_len
+    if preserve_tempo:
+        delta = a - tl.bar_times[0]
+        bars = [t + delta for t in tl.bar_times[:-1] if t + delta < duration - 1e-3]
+    else:
+        b = a
+        while b < duration - 1e-3:
+            bars.append(b)
+            b += bar_len
+        tl.timing_override = True
     bars.append(duration)
 
-    spans = [_Span(*c) for c in tl.chord_spans]
-    st = structure_from_grid(bars, spans, duration, tl.time_sig_beats())
+    spans = [_Span(*c) for c in tl.effective_chord_spans()]
+    # 오디오 이전의 마디에는 코드/리프를 만들지 않는다. 마디 번호는 유지한다.
+    st = _structure_with_preroll(bars, spans, duration, tl.time_sig_beats())
     key_mode = "minor" if "minor" in (tl.key or "").lower() else "major"
     tl.segments, tl.available_scales = _segments_from_structure(
-        st, tl.key_root, key_mode)
+        st, tl.key_root, key_mode, fixed_key=tl.key_override)
     tl.bar_times = st.bar_times
     tl.loop_len = st.loop_len
     tl.loop_phase = st.loop_phase
+    for lp in tl.loops:
+        if "start_sec" in lp:
+            lp["start_bar"] = max(0, bisect.bisect_right(bars, lp["start_sec"]) - 1)
+            lp["end_bar"] = min(len(bars) - 2, max(lp["start_bar"],
+                                                  bisect.bisect_left(bars, lp["end_sec"]) - 1))
     from ml.generate import bake_examples   # 지역 import: 무거운 ml 로딩을 보정 시점까지 지연
     bake_examples(tl, model)                 # 새 격자 기준 리프/예시 재굽기(§8)
     return True
+
+
+def apply_chord_edit(tl: Timeline, start: float, end: float, name: str, model=None):
+    """선택한 실제 시간 구간만 보정하고 원시 MIR 결과는 유지한다."""
+    if not tl.chord_spans:
+        tl.chord_spans = [[s.start_sec, s.end_sec, s.chord.name] for s in tl.segments]
+    if len(tl.bar_times) < 2:
+        length = tl.beat_sec() * tl.time_sig_beats()
+        tl.bar_times = [i * length for i in range(tl.total_bars() + 1)]
+    tl.chord_overrides.append([start, end, name])
+    st = _structure_with_preroll(tl.bar_times, [_Span(*c) for c in tl.effective_chord_spans()],
+                               tl.bar_times[-1], tl.time_sig_beats())
+    mode = "minor" if "minor" in tl.key.lower() else "major"
+    tl.segments, tl.available_scales = _segments_from_structure(st, tl.key_root, mode, True)
+    from ml.generate import bake_segment
+    for seg in tl.segments:
+        bake_segment(tl, seg, model)

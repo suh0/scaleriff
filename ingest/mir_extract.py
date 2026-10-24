@@ -46,6 +46,7 @@ class MirResult:
     downbeat_times: list[float] = field(default_factory=list)  # 마디선 앵커(다운비트)
     beats_per_bar: int = 4
     beat_source: str = "librosa"  # "madmom" | "librosa"
+    beat_detected: bool = True  # False이면 부족한 검출을 기본 균등 격자로 보완한 것
     content_span: tuple[float, float] = (0.0, 0.0)  # 무음 인트로/아웃트로 제외 구간
 
 
@@ -201,7 +202,8 @@ def detect_content_span(y, sr, duration: float, downbeat_times=None,
         if above.size:
             end = float(rtimes[min(above[-1] + 1, len(rtimes) - 1)])
 
-    start = max(0.0, start)
+    # 다운비트/안정 코드가 늦게 잡혀도 이미 관측한 실제 화성 어택을 버리지 않는다.
+    start = max(0.0, min(start, onset_sec))
     end = min(duration, end)
     if start >= end:
         start, end = harm_db, duration
@@ -300,7 +302,8 @@ class MirBackend:
         cb(48, "비트·다운비트 트래킹…")
         beat_times, downbeat_times, beats_per_bar, bpm, source = \
             track_beats_downbeats(wav_path, y, sr)
-        if len(beat_times) < 2:
+        beat_detected = len(beat_times) >= 2
+        if not beat_detected:
             step = 60.0 / (bpm if bpm > 0 else 100.0)
             beat_times = list(np.arange(0, duration, step))
             downbeat_times = beat_times[::beats_per_bar]
@@ -335,6 +338,7 @@ class MirBackend:
                          chords=chords, duration=duration,
                          downbeat_times=downbeat_times,
                          beats_per_bar=beats_per_bar, beat_source=source,
+                         beat_detected=beat_detected,
                          content_span=content_span)
 
     # ── 키 추정 ──────────────────────────────────────────────────
