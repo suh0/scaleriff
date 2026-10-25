@@ -59,13 +59,11 @@ class EndToEndTest(unittest.TestCase):
                     self.assertEqual(timeline.segment_at(3.0).chord.name, "G7")
                     window._enter_score()
                     window._enter_main()
-                    screen.range_combo.setCurrentIndex(screen.range_combo.findData(0))
-                    screen.lesson_combo.setCurrentIndex(screen.lesson_combo.findData("copy"))
-                    self.assertEqual(screen._lesson_span, (0, 4.8))
+                    screen._select_practice("riff")
                     self.assertTrue(screen.playhead.set_rate(.75))
                     slowed = screen.playhead._prepared[.75]
                     self.assertAlmostEqual(sf.info(slowed).duration, len(audio) / SR / .75, delta=.1)
-                    start, end = screen._lesson_span
+                    start, end = timeline.loops[0]["start_sec"], timeline.loops[0]["end_sec"]
                     reference = reference_notes(timeline, start, end)
                     self.assertGreater(len(reference), 3)
                     screen._start_take(start)
@@ -88,9 +86,6 @@ class EndToEndTest(unittest.TestCase):
                     self.assertEqual(saved.practice_history[0]["notes"][0]["velocity"], 83)
                     self.assertEqual(saved.model_info["sha256"], screen._ml_model.identity()["sha256"])
                     screen.set_timeline(saved)
-                    screen.range_combo.setCurrentIndex(screen.range_combo.findData(0))
-                    screen.lesson_combo.setCurrentIndex(screen.lesson_combo.findData("review"))
-                    self.assertTrue(screen._review_events)
                     self.assertFalse(screen.recorder.active)
                 finally:
                     window.main_screen.pause()

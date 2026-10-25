@@ -69,7 +69,7 @@ def main():
             win.main_screen._select_practice("free")
             win.main_screen._render_at(1)
             capture("play", win.main_screen)
-            win.main_screen.lesson_combo.setCurrentIndex(win.main_screen.lesson_combo.findData("copy"))
+            win.main_screen._select_practice("riff")
             win.main_screen._render_at(1)
             capture("copy", win.main_screen)
             win.main_screen.loop_btn.setChecked(True)

@@ -68,15 +68,7 @@ class MainScreen(QWidget):
         self._riff_durations = []
         self.recorder = PerformanceRecorder()
         self._held_keys = set()
-        self._lesson_stage = "manual"
-        self._lesson_span = (0.0, 0.0)
         self._take_start = 0.0
-        self._review_events = []
-        self._review_take = None
-        self._review_idx = 0
-        self._phrase_variant = 0
-        self._phrase_context = None
-        self._density = 1.0
         self._riff_volume = .8
         self._input_volume = .8
         self._audio_volume = .8
@@ -84,7 +76,6 @@ class MainScreen(QWidget):
         self._midi_ports = []
         self._midi_name = ""
         self._last_tick = 0.0
-        self._setting_stage = False
         self._seeking = False
 
         self.content = T.compact_content(self)
@@ -114,34 +105,13 @@ class MainScreen(QWidget):
         self.bpm_lbl.setStyleSheet(
             f"color:{T.TEXT_MUTED};font-family:'{T.FONT_MONO}';font-size:12px;")
         top.addWidget(self.bpm_lbl)
+        top.addSpacing(12)
+        self.settings_btn = QPushButton("입력·소리")
+        self.settings_btn.setStyleSheet(T.qss_ghost_btn())
+        top.addWidget(self.settings_btn)
         root.addLayout(top)
 
-        lesson_row = QHBoxLayout()
-        self.lesson_combo = QComboBox()
-        for text, key in (("자유 재생", "manual"), ("① 리프 듣기", "listen"),
-                          ("② 따라 치기", "copy"), ("③ 변주하기", "vary"),
-                          ("④ 자유 즉흥", "free"), ("⑤ 내 연주 듣기", "review")):
-            self.lesson_combo.addItem(text, key)
-        self.range_combo = QComboBox()
-        self.range_combo.addItem("현재 2마디", "auto")
-        self.range_combo.addItem("곡 전체", "all")
-        self.goal_combo = QComboBox()
-        for text, key in (("3도에 착지", "third"), ("7도에 착지", "seventh"),
-                          ("코드톤에 착지", "chord_tone"), ("근음에 착지", "root")):
-            self.goal_combo.addItem(text, key)
-        self.next_lesson_btn = QPushButton("다음 단계 →")
-        self.settings_btn = QPushButton("입력·소리")
-        for w in (self.lesson_combo, self.range_combo, self.goal_combo):
-            lesson_row.addWidget(w)
-        self.lesson_combo.setAccessibleName("연습 단계")
-        self.range_combo.setAccessibleName("연습 구간")
-        self.goal_combo.setAccessibleName("착지 목표")
-        lesson_row.addStretch(1)
-        for w in (self.next_lesson_btn, self.settings_btn):
-            w.setStyleSheet(T.qss_ghost_btn())
-            lesson_row.addWidget(w)
-        root.addLayout(lesson_row)
-        self.feedback_lbl = QLabel("짧은 구간을 듣고 따라 친 뒤, 끝음과 리듬을 바꾸며 연습하세요.")
+        self.feedback_lbl = QLabel("하단에서 연습 모드를 고른 뒤 재생하며 연주하세요.")
         self.feedback_lbl.setStyleSheet(
             f"color:{T.TEXT_BODY};background:{T.BG_SURFACE};border-left:3px solid {T.BORDER_ACTIVE};"
             "border-radius:4px;padding:6px 10px;font-size:12px;")
@@ -154,10 +124,6 @@ class MainScreen(QWidget):
         self.feedback_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.feedback_scroll.setWidget(self.feedback_lbl)
         root.addWidget(self.feedback_scroll)
-        self.lesson_combo.currentIndexChanged.connect(self._lesson_changed)
-        self.range_combo.currentIndexChanged.connect(self._lesson_changed)
-        self.goal_combo.currentIndexChanged.connect(self._lesson_changed)
-        self.next_lesson_btn.clicked.connect(self._next_lesson)
         self.settings_btn.clicked.connect(self._show_settings)
 
         # ── 코드 레인 — HUD+다음 미리보기 통합(고정 플레이헤드) ──
@@ -459,10 +425,6 @@ class MainScreen(QWidget):
         if self.playhead:
             self.playhead.pause()
             self.playhead.deleteLater()
-        self._lesson_stage = "manual"
-        self.lesson_combo.blockSignals(True)
-        self.lesson_combo.setCurrentIndex(0)
-        self.lesson_combo.blockSignals(False)
         self._select_practice("free")
         self.tl = tl
         self._last_idx = -1
@@ -476,20 +438,9 @@ class MainScreen(QWidget):
         self.playhead.stateChanged.connect(self._on_state)
         self.playhead.errorOccurred.connect(self.feedback_lbl.setText)
         self.playhead.set_volume(self._audio_volume)
-        self._phrase_context = None
-        self._lesson_span = (max(0, tl.content_span[0]), tl.content_end())
-        self.range_combo.blockSignals(True)
-        while self.range_combo.count() > 2:
-            self.range_combo.removeItem(2)
-        for i, lp in enumerate(tl.loops):
-            self.range_combo.addItem(lp["name"], i)
-        self.range_combo.setCurrentIndex(0)
-        self.range_combo.blockSignals(False)
-        self._review_events = []
-        self._review_take = None
         self._held_keys.clear()
         self._last_tick = 0.0
-        self.feedback_lbl.setText("분석은 추정입니다. 코드·키를 확인한 뒤 듣기 → 모방 → 변주 → 즉흥을 진행하세요.")
+        self.feedback_lbl.setText("분석은 추정입니다. 코드·키를 확인한 뒤 하단에서 연습 모드를 고르세요.")
 
         self.song_lbl.setText(tl.title or tl.audio_ref or "내 곡")
         self.bpm_lbl.setText(f"{tl.key}  ·  {tl.bpm:.0f} BPM")
@@ -511,18 +462,13 @@ class MainScreen(QWidget):
     # ── 연습 / 도전 모드 선택 ───────────────────────────────────
     def _select_practice(self, mode: str, level: int = 0):
         self.recorder.cancel()
-        if not self._setting_stage:
-            self._lesson_stage = "manual"
-            self.lesson_combo.blockSignals(True)
-            self.lesson_combo.setCurrentIndex(0)
-            self.lesson_combo.blockSignals(False)
-            instructions = {
-                "free": "원곡과 함께 자유롭게 연주하세요. 정지하면 연주 기록과 선택 목표의 참고 점수를 확인할 수 있어요.",
-                "riff": "낙하 가이드의 음높이와 리듬을 확인하며 리프를 연습하세요.",
-                "scale_challenge": "선택 난이도의 목표음을 연주하세요. 도전 버튼을 누르면 시작합니다.",
-                "riff_challenge": "낙하 가이드의 음높이와 리듬을 따라 치세요. 도전 버튼을 누르면 시작합니다.",
-            }
-            self.feedback_lbl.setText(instructions[mode])
+        instructions = {
+            "free": "원곡과 함께 자유롭게 연주하세요. 정지하면 연주 기록과 참고 점수를 확인할 수 있어요.",
+            "riff": "낙하 가이드의 음높이와 리듬을 확인하며 리프를 연습하세요.",
+            "scale_challenge": "선택 난이도의 목표음을 연주하세요. 도전 버튼을 누르면 시작합니다.",
+            "riff_challenge": "낙하 가이드의 음높이와 리듬을 따라 치세요. 도전 버튼을 누르면 시작합니다.",
+        }
+        self.feedback_lbl.setText(instructions[mode])
         challenge = mode in ("scale_challenge", "riff_challenge")
         if challenge or self._challenge_active:
             self.pause()
@@ -571,16 +517,6 @@ class MainScreen(QWidget):
     # ── 재생 제어 ────────────────────────────────────────────────
     def _toggle_play(self):
         if self.playhead:
-            if self._lesson_stage != "manual":
-                if self.playhead.is_playing():
-                    self.playhead.pause()
-                else:
-                    if not self._lesson_span[0] <= self.playhead.position_sec() < self._lesson_span[1] - .01:
-                        self._seek_to(self._lesson_span[0])
-                    self._review_idx = bisect.bisect_left(
-                        [n["start_sec"] for n in self._review_events], self.playhead.position_sec())
-                    self.playhead.play()
-                return
             if self._challenge_active:
                 if self.playhead.is_playing():
                     self._reset_challenge()
@@ -619,7 +555,6 @@ class MainScreen(QWidget):
             self.note_player.stop_all()
             self._held_keys.clear()
             self._seek_riff_idx(sec)
-            self._review_idx = bisect.bisect_left([n["start_sec"] for n in self._review_events], sec)
             self._seeking = True
             try:
                 self.playhead.seek(sec)
@@ -639,14 +574,8 @@ class MainScreen(QWidget):
         if self._seeking:
             self._render_at(sec)
             return
-        if (self.playhead and self.playhead.is_playing() and self._lesson_stage != "manual"
-                and sec >= self._lesson_span[1]):
-            self._finish_take(self._lesson_span[1])
-            self.playhead.pause()
-            self._seek_to(self._lesson_span[1])
-            return
         # 사용자 루프(§6): 켜진 루프 끝에 닿으면 시작으로
-        if self.playhead and self.playhead.is_playing() and self._lesson_stage == "manual":
+        if self.playhead and self.playhead.is_playing():
             for s0, e0 in self._loop_spans():
                 if self._last_tick < e0 <= sec:
                     self._finish_take(e0)
@@ -657,14 +586,7 @@ class MainScreen(QWidget):
         self._last_tick = sec
         self._render_at(sec + SYNC_LOOKAHEAD_SEC)   # 구간 변경 시 무거운 갱신
         # 리프를 재생 헤드에 맞춰 트리거(재생 중일 때만 → 일시정지 시 함께 멈춤, §2)
-        if self._lesson_stage == "review" and self.playhead and self.playhead.is_playing():
-            while self._review_idx < len(self._review_events) and self._review_events[self._review_idx]["start_sec"] <= sec:
-                n = self._review_events[self._review_idx]
-                self.note_player.play_note(n["midi"], n["duration_sec"] / self.playhead.rate,
-                                           round(n.get("velocity", 100) * self._riff_volume), channel=17)
-                self._review_idx += 1
-        elif (self._mode == "practice" and self._lesson_stage in ("manual", "listen")
-              and self.playhead and self.playhead.is_playing()):
+        if self._mode == "practice" and self.playhead and self.playhead.is_playing():
             ev = self._riff_events
             while self._riff_idx < len(ev) and ev[self._riff_idx][0] <= sec:
                 duration = self._riff_durations[self._riff_idx] if self._riff_idx < len(self._riff_durations) else .25
@@ -687,18 +609,14 @@ class MainScreen(QWidget):
             return
         self._last_idx = idx
         seg = self.tl.segments[idx]
-        hidden = self._lesson_stage in ("vary", "free", "review")
-        self.piano.set_scale([] if hidden else seg.note_set, [] if hidden else seg.chord_tones())
-        self.piano.set_degrees({} if hidden else
-                              {pc: degree_number(pc, seg.scale_root) for pc in seg.note_set})
+        self.piano.set_scale(seg.note_set, seg.chord_tones())
+        self.piano.set_degrees({pc: degree_number(pc, seg.scale_root) for pc in seg.note_set})
         self.piano.set_pressed({m for _, m in self._held_keys})
         self._apply_targets()              # 난이도 목표음 필터(구간별, §7.5)
         # 현재/다음 코드·스케일은 코드 레인이 스스로 그림(set_position)
 
     def _update_scale_preview(self, sec: float, idx: int):
         self.piano.set_preview()
-        if self._lesson_stage in ("vary", "free", "review"):
-            return
         if self._mode == "practice":
             self._place_falling_notes()
             self.riff.set_position(sec, self._loop_spans())
@@ -753,10 +671,10 @@ class MainScreen(QWidget):
         self.piano.set_pressed({m for _, m in self._held_keys})
 
     def _start_take(self, start):
-        if not self.tl or self._lesson_stage in ("listen", "review"):
+        if not self.tl:
             return
         self._take_start = start
-        self._take_mode = ("riff" if self._lesson_stage == "copy" or self._mode == "practice"
+        self._take_mode = ("riff" if self._mode == "practice"
                            else "scale" if self._selected_mode == "scale_challenge" else "free")
         self.recorder.begin(start)
 
@@ -767,103 +685,15 @@ class MainScreen(QWidget):
         if end <= self._take_start:
             return None
         summary = score_performance(self.tl, notes, self._take_mode, self._difficulty,
-                                    self._take_start, end, self.goal_combo.currentData())
+                                    self._take_start, end)
         self.feedback_lbl.setText(summary["feedback"] + f" · 연주 {summary['sample_count']}음")
         if notes:
             self.tl.practice_history.append({"created_at": datetime.now(timezone.utc).isoformat(),
-                "notes": notes, "summary": summary, "stage": self._lesson_stage,
+                "notes": notes, "summary": summary,
                 "start_sec": self._take_start, "end_sec": end,
                 "model_info": dict(self.tl.model_info)})
             self.sessionChanged.emit()
         return summary
-
-    def _practice_span(self):
-        lo, hi = max(0.0, self.tl.content_span[0]), self.tl.content_end()
-        selected = self.range_combo.currentData()
-        if isinstance(selected, int) and 0 <= selected < len(self.tl.loops):
-            lp = self.tl.loops[selected]
-            if "start_sec" in lp:
-                return max(lo, lp["start_sec"]), min(hi, lp["end_sec"])
-            bpb = self.tl.time_sig_beats()
-            return max(lo, self.tl.time_at_beat(lp["start_bar"] * bpb)), min(
-                hi, self.tl.time_at_beat((lp["end_bar"] + 1) * bpb))
-        if selected == "all":
-            return lo, hi
-        pos = max(lo, min(self.playhead.position_sec(), hi - 1e-5))
-        bpb = self.tl.time_sig_beats()
-        beat = max(0, int(self.tl.beat_at(pos) // bpb) * bpb)
-        return max(lo, self.tl.time_at_beat(beat)), min(hi, self.tl.time_at_beat(beat + 2 * bpb))
-
-    def _prepare_phrase(self):
-        from ml.generate import bake_progression
-        context = (self._lesson_span, self.goal_combo.currentData(), self._phrase_variant, self._density)
-        if context != self._phrase_context:
-            bake_progression(self.tl, self._ml_model, *self._lesson_span,
-                             goal=context[1], variant=self._phrase_variant, density=self._density)
-            self._phrase_context = context
-            self._build_riff_events()
-            self.sessionChanged.emit()
-
-    def _lesson_changed(self, _index=0):
-        if not self.tl or not self.playhead:
-            return
-        stage = self.lesson_combo.currentData()
-        previous_stage = self._lesson_stage
-        self.pause()
-        self._setting_stage = True
-        self._select_practice("riff" if stage in ("listen", "copy") else "free")
-        self._setting_stage = False
-        self._lesson_stage = stage
-        if previous_stage == "manual" or self.sender() is self.range_combo or stage == "manual":
-            self._lesson_span = self._practice_span()
-        self._review_events = []
-        self._review_take = None
-        if stage == "review":
-            lo, hi = self._lesson_span
-            history = [take for take in self.tl.practice_history
-                       if take["start_sec"] < hi and take["end_sec"] > lo]
-            if not history:
-                self.feedback_lbl.setText("선택한 구간에는 저장된 연주가 없습니다. 이 구간에서 먼저 연주하세요.")
-                self._seek_to(lo)
-                return
-            take = history[-1]
-            self._review_take = take
-            for n in take["notes"]:
-                start = max(lo, n["start_sec"])
-                end = min(hi, n["start_sec"] + n["duration_sec"])
-                if end > start:
-                    self._review_events.append(dict(n, start_sec=start, duration_sec=end - start))
-            self._review_events.sort(key=lambda n: n["start_sec"])
-            self.note_player.preload({n["midi"] for n in self._review_events}, channel=17)
-        elif stage != "manual":
-            if stage == "vary":
-                self._phrase_variant += 1
-            self._prepare_phrase()
-        self._seek_to(self._lesson_span[0])
-        if stage in ("vary", "free"):
-            self.piano.set_scale([], [])
-            self.piano.set_degrees({})
-        text = {"manual": "재생 중 연주는 기록됩니다. 정지하면 선택 목표의 참고 점수를 확인할 수 있어요.",
-                "listen": "먼저 예시의 리듬과 끝음을 들어보세요. 다음 단계에서 직접 연주합니다.",
-                "copy": "낙하 가이드를 보며 따라 치세요. 예시 소리는 쉬고 내 연주를 기록합니다.",
-                "vary": "리듬은 유지하고 끝음을 바꾸세요. 경과음은 감점하지 않습니다.",
-                "free": "가이드 없이 같은 진행에서 즉흥연주하세요. 선택한 착지 목표를 확인합니다.",
-                "review": "가장 최근 내 연주를 원곡과 함께 다시 듣습니다. 다시 채점하지 않습니다."}
-        self.feedback_lbl.setText(text[stage])
-
-    def _next_lesson(self):
-        stages = ["listen", "copy", "vary", "free", "review"]
-        stage = self._lesson_stage
-        if stage == "review" and self._review_take is not None:
-            summary = self._review_take["summary"]
-            self._density = summary.get("suggested_density", 1.0)
-            goal = summary.get("next_goal", "third")
-            self.goal_combo.blockSignals(True)
-            self.goal_combo.setCurrentIndex(max(0, self.goal_combo.findData(goal)))
-            self.goal_combo.blockSignals(False)
-            self._phrase_variant += 1
-        next_stage = stages[(stages.index(stage) + 1) % len(stages)] if stage in stages else "listen"
-        self.lesson_combo.setCurrentIndex(self.lesson_combo.findData(next_stage))
 
     def set_midi_status(self, ports, name="", error=""):
         self._midi_ports, self._midi_name = list(ports), name

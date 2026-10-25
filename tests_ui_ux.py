@@ -197,16 +197,6 @@ class UIUXTest(unittest.TestCase):
         y = 80 * (1 - (first + 1.2 - 2.2) / screen.riff._lead)
         self.assertTrue(any(abs(v - y) < 1e-6 for v in screen.riff._beat_lines()))
 
-    def test_manual_mode_switch_replaces_previous_lesson_instruction(self):
-        screen = MainScreen()
-        screen.set_timeline(build_dummy_timeline())
-        screen.lesson_combo.setCurrentIndex(screen.lesson_combo.findData("copy"))
-        self.assertIn("낙하", screen.feedback_lbl.text())
-        screen._select_practice("free")
-        self.assertEqual(screen.lesson_combo.currentData(), "manual")
-        self.assertIn("자유롭게", screen.feedback_lbl.text())
-        self.assertNotIn("낙하", screen.feedback_lbl.text())
-
 
 if __name__ == "__main__":
     unittest.main()
