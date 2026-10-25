@@ -138,10 +138,10 @@ class MainScreen(QWidget):
         self.loop_btn.setStyleSheet(T.qss_ghost_btn())
         self.loop_btn.clicked.connect(self._toggle_loop_panel)
         rrow.addWidget(self.loop_btn)
-        self.riff_btn = QPushButton("리프학습모드")
+        self.riff_btn = QPushButton("리프모드")
         self.riff_btn.setFixedHeight(36)
         self.riff_btn.setStyleSheet(T.qss_ghost_btn())
-        self.riff_btn.clicked.connect(self._open_riff_dialog)
+        self.riff_btn.clicked.connect(self._toggle_riff_mode)
         rrow.addWidget(self.riff_btn)
         rrow.addStretch(1)
         # 재생/일시정지 (흰 원형, §6.1)
@@ -372,6 +372,7 @@ class MainScreen(QWidget):
     def _select_practice(self, mode: str):
         self._mode = "practice" if mode == "riff" else "guide"
         practice = (self._mode == "practice")
+        self.riff_btn.setText("리프모드 해제" if practice else "리프모드")
         self.riff.setVisible(practice)
         self._place_falling_notes()
         self.riff.raise_()
@@ -385,27 +386,24 @@ class MainScreen(QWidget):
         self._render_at(self.playhead.position_sec() if self.playhead else 0.0)
         self._on_state(self.playhead.is_playing() if self.playhead else False)
 
-    # ── 리프학습모드: 학습 설정 조건으로 구간 리프 생성 → 확정 시 리프연습 ──
-    def _riff_span(self) -> tuple[float, float]:
-        """켜진 루프가 있으면 그 루프, 아니면 현재 마디부터 4마디."""
-        spans = self._loop_spans()
-        if spans:
-            return spans[0]
-        pos = max(0.0, self.playhead.position_sec() if self.playhead else 0.0)
-        bars = self.tl.bar_times
-        if len(bars) < 2:
-            bar = self.tl.beat_sec() * self.tl.time_sig_beats()
-            return pos, pos + 4 * bar
-        i = min(max(0, bisect.bisect_right(bars, pos) - 1), len(bars) - 2)
-        return bars[i], bars[min(i + 4, len(bars) - 1)]
+    # ── 리프모드: 학습 설정 조건으로 곡 전체 2마디 패턴 리프 생성 → 확정 시 리프연습 ──
+    def _toggle_riff_mode(self):
+        """켜기 = 리프 생성 창(확정 시 진입), 해제 = 자유연습 — 둘 다 곡 처음(예비박)으로."""
+        if self._mode == "practice":
+            self.pause()
+            self._select_practice("free")
+            self._seek_to(self.tl.count_in_start())
+        else:
+            self._open_riff_dialog()
 
     def _open_riff_dialog(self):
         if not self.tl:
             return
         self.pause()
-        dialog = RiffDialog(self.tl, self._ml_model, *self._riff_span(), self)
+        dialog = RiffDialog(self.tl, self._ml_model, self)
         if dialog.exec() == QDialog.DialogCode.Accepted:
             self._select_practice("riff")
+            self._seek_to(self.tl.count_in_start())
 
     # ── 재생 제어 ────────────────────────────────────────────────
     def _toggle_play(self):

@@ -194,7 +194,7 @@ def main():
     assert all(s.note_set == pent["note_set"] for s in tl.segments if not s.is_detour)
     assert not any(s.example for s in tl.segments), "스케일 변경 후 이전 리프가 남음"
     assert win.stack.currentWidget() is win.main_screen
-    # 리프학습모드: 조건대로 생성 → 다시 만들기 → 확정 시 리프연습
+    # 리프모드: 조건대로 생성 → 다시 만들기 → 확정 시 리프연습
     from PyQt6.QtCore import QTimer
     from gui.riff_dialog import RiffDialog
     from gui import theme as _T
@@ -203,13 +203,33 @@ def main():
     def _accept_dialog():
         d = next(w for w in app.topLevelWidgets() if isinstance(w, RiffDialog) and w.isVisible())
         assert d.roll._notes and all(n["midi"] % 12 in pent["note_set"] for n in d.roll._notes)
-        d.regenerate()
-        assert d.variant == 1
+        assert d.count_spin.minimum() == len(d.patterns) == d.list.count()
+        d.count_spin.setValue(d.count_spin.maximum())
+        d.make_riffs()
+        assert d.list.count() == d.count_spin.value()
+        d.list.setCurrentRow(d.list.count() - 1)   # 패턴 클릭 → 롤 음표만 교체
+        d.toggle_listen()
+        assert d.listen_btn.text() == "정지 ■"
+        before = d._current()["variant"]
+        d.regenerate()   # 다시 만들기는 듣기를 멈춘다
+        assert d._current()["variant"] != before and d.listen_btn.text() == "듣기 ▶"
+        d.toggle_listen()
         dialogs.append(d)
         d.accept()
     QTimer.singleShot(0, _accept_dialog)
-    win.main_screen._open_riff_dialog()
+    win.main_screen.playhead.seek(3.0)
+    win.main_screen.riff_btn.click()
     assert dialogs and win.main_screen._mode == "practice" and win.main_screen._riff_events
+    assert win.main_screen.riff_btn.text() == "리프모드 해제"
+    assert win.main_screen.playhead.position_sec() == tl.count_in_start(), "리프모드 진입 시 곡 처음 아님"
+    win.main_screen.playhead.seek(3.0)
+    win.main_screen.riff_btn.click()   # 해제 → 자유연습 + 처음으로
+    assert win.main_screen._mode == "guide" and win.main_screen.riff_btn.text() == "리프모드"
+    assert win.main_screen.playhead.position_sec() == tl.count_in_start(), "리프모드 해제 시 곡 처음 아님"
+    win.main_screen._select_practice("riff")
+    covered = [seg for seg in tl.segments if seg.example]
+    assert covered and all(n["midi"] % 12 in seg.note_set for seg in covered for n in seg.example)
+    assert covered[0] is tl.segments[0] and covered[-1] is tl.segments[-1], "곡 처음~끝을 덮지 않음"
     win.setup.practiceRequested.emit()
     assert win.stack.currentWidget() is win.main_screen
 

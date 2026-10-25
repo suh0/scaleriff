@@ -169,7 +169,7 @@ class SetupScreen(QWidget):
         root.addStretch(1)
 
         bottom = QHBoxLayout()
-        note = QLabel("메인 화면의 '리프학습모드'에서 이 조건으로 리프를 만들어 연습할 수 있어요.")
+        note = QLabel("메인 화면의 '리프모드'에서 이 조건으로 리프를 만들어 연습할 수 있어요.")
         note.setWordWrap(True)
         note.setStyleSheet(f"color:{T.TEXT_MUTED};font-size:12px;")
         bottom.addWidget(note, 1)

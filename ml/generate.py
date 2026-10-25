@@ -571,6 +571,15 @@ def bake_progression(timeline, model, start_sec, end_sec, goal="third", variant=
         prev_tokens.append(onset_token((midi - seg.chord.root) % 12))
         prev_tokens.extend([HOLD] * min(2, max(0, int(timeline.beats_between(sec, note_end) * 4) - 1)))
         previous_end = timeline.beat_at(note_end)
+    write_examples(timeline, start_sec, end_sec, result["notes"])
+    timeline.model_info = info
+    return result
+
+
+def write_examples(timeline, start_sec, end_sec, notes):
+    """[start, end) 구간의 seg.example을 notes(절대초)로 교체 — 구간 밖 예시는 보존."""
+    parts = [(s, max(start_sec, s.start_sec), min(end_sec, s.end_sec))
+             for s in timeline.segments if s.start_sec < end_sec and s.end_sec > start_sec]
     for seg, a, b in parts:
         segment_beat = timeline.beat_at(seg.start_sec)
         kept = []
@@ -584,14 +593,92 @@ def bake_progression(timeline, model, start_sec, end_sec, goal="third", variant=
                     if right > left:
                         kept.append({**n, "beat_pos": timeline.beat_at(left) - segment_beat,
                                      "dur_beats": timeline.beats_between(left, right)})
-        for n in result["notes"]:
+        for n in notes:
             if a <= n["start_sec"] < b:
                 kept.append({"midi": n["midi"], "beat_pos": timeline.beat_at(n["start_sec"]) - segment_beat,
                              "dur_beats": timeline.beats_between(n["start_sec"], n["start_sec"] + n["duration_sec"]),
                              "velocity": n["velocity"]})
         seg.example = sorted(kept, key=lambda n: n["beat_pos"])
-    timeline.model_info = info
-    return result
+
+
+def chord_patterns(timeline, bars_per_riff=2):
+    """곡을 2마디 창으로 나눠 같은 스케일 흐름(바뀌는 박 위치·note_set)끼리 묶는다 — 많이 나오는 순.
+
+    코드는 보지 않는다 — 다른 코드 구간에는 transpose_riff로 도수 이동. 패턴 수 = 최소 리프 수.
+    """
+    bars = list(timeline.bar_times)
+    if len(bars) < 2:
+        bar = timeline.beat_sec() * timeline.time_sig_beats()
+        bars = [i * bar for i in range(int(math.ceil(timeline.total_sec() / bar)) + 1)]
+    groups = {}
+    for i in range(0, len(bars) - 1, bars_per_riff):
+        a, b = bars[i], bars[min(i + bars_per_riff, len(bars) - 1)]
+        segs = [s for s in timeline.segments if s.start_sec < b and s.end_sec > a]
+        if not segs:
+            continue
+        b0 = timeline.beat_at(a)
+        runs = []   # (상대 박, note_set, 이름) — 같은 스케일이 이어지면 하나로
+        for s in segs:
+            ns = tuple(sorted(s.note_set))
+            if not runs or runs[-1][1] != ns:
+                runs.append((round(timeline.beat_at(max(a, s.start_sec)) - b0, 3), ns,
+                             s.scale.name if s.scale else s.chord.name))
+        key = (round(timeline.beats_between(a, b), 3),) + tuple(r[:2] for r in runs)
+        groups.setdefault(key, {"label": "→".join(r[2] for r in runs),
+                                "spans": []})["spans"].append((a, b))
+    return sorted(groups.values(), key=lambda p: -len(p["spans"]))
+
+
+def _degree(note_set, pc):
+    """정렬된 note_set에서 pc의 스케일 번호 — 없으면 바로 아래 도수."""
+    return max((i for i, x in enumerate(note_set) if x <= pc), default=len(note_set) - 1)
+
+
+def transpose_riff(timeline, notes, src_a, dst_a, goal=None, landing_secs=()):
+    """src_a에서 만든 리프를 dst_a 창으로 — 상대 박 유지, 음은 각 박의 코드 근음 차만큼 스케일 도수 이동.
+
+    같은 스케일이면 근음→근음·3도→3도로 옮겨지고 스케일 밖으로 나가지 않는다.
+    착지음(landing_secs)은 dst 코드의 목표음 중 가장 가까운 음으로 맞춘다(펜타 등 대비).
+    """
+    off = timeline.beat_at(dst_a) - timeline.beat_at(src_a)
+    out = []
+    for n in notes:
+        start = timeline.beat_at(n["start_sec"])
+        s_new = timeline.time_at_beat(start + off)
+        e_new = timeline.time_at_beat(timeline.beat_at(n["start_sec"] + n["duration_sec"]) + off)
+        src, dst = timeline.segment_at(n["start_sec"]), timeline.segment_at(s_new)
+        midi = n["midi"]
+        if src and dst and src.note_set and dst.note_set:
+            sset, dset = sorted(src.note_set), sorted(dst.note_set)
+            octave, pc = divmod(midi, 12)
+            # 스케일 번호(옥타브 포함) — 스케일이 다르면 dst 스케일에서 바로 아래 도수로 읽는다
+            idx = _degree(dset, pc) + len(dset) * octave
+            steps = _degree(dset, dst.chord.root) - _degree(sset, src.chord.root)
+            o, i = divmod(idx + steps, len(dset))
+            midi = 12 * o + dset[i]
+            if any(abs(n["start_sec"] - t) < 1e-9 for t in landing_secs) and goal:
+                targets = ({pc for pc in dst.chord_tones() if pc in dst.note_set}
+                           if goal == "chord_tone" else {_landing_pc(dst, goal)} - {None})
+                if targets:
+                    midi = min((m for m in range(midi - 6, midi + 7) if m % 12 in targets),
+                               key=lambda m: abs(m - midi))
+            while midi < 60:
+                midi += 12
+            while midi > 83:
+                midi -= 12
+        out.append({**n, "midi": midi, "start_sec": s_new, "duration_sec": e_new - s_new})
+    return out
+
+
+def allocate(patterns, n):
+    """리프 n개를 패턴별 변형 수로 배분 — 패턴당 1개 후 '등장/변형'이 큰 패턴부터 하나씩."""
+    counts = [1] * len(patterns)
+    for _ in range(n - len(patterns)):
+        open_ = [i for i, p in enumerate(patterns) if counts[i] < len(p["spans"])]
+        if not open_:
+            break
+        counts[max(open_, key=lambda i: len(patterns[i]["spans"]) / counts[i])] += 1
+    return counts
 
 
 if __name__ == "__main__":

@@ -58,7 +58,7 @@ class EndToEndTest(unittest.TestCase):
                     window._enter_setup()
                     window._enter_main()
                     from gui.riff_dialog import RiffDialog
-                    RiffDialog(timeline, screen._ml_model, 0, 4.8, screen).accept()   # 리프학습모드 확정
+                    RiffDialog(timeline, screen._ml_model, screen).accept()   # 리프학습모드 확정
                     screen._select_practice("riff")
                     window._save_session(timeline)
                     saved = Timeline.load_json(window._session_path(timeline))

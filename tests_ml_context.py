@@ -196,6 +196,38 @@ class ProvenanceTest(unittest.TestCase):
             self.assertEqual(prepare_phrases._wjazzd_chord("D-79").quality, "m7")
 
 
+class PatternTest(unittest.TestCase):
+    def _song(self):
+        tl = Timeline("", 120, "4/4", "C", 0, 2, bar_times=[0, 2, 4, 6, 8, 10, 12])
+        diatonic = [0, 2, 4, 5, 7, 9, 11]
+        for i, (bar, name, detour) in enumerate([(0, "Dm7", 0), (1, "G7", 0), (2, "G7", 0), (3, "Cmaj7", 0),
+                                                 (4, "Dm7", 0), (5, "F#7", 1)]):
+            ch = parse_chord(name)
+            pcs = [1, 3, 4, 6, 8, 10, 11] if detour else diatonic
+            tl.segments.append(Segment(i, bar * 2, bar * 2 + 2, bar, bar + 1, ch,
+                                       [ScaleOption("믹솔리디안" if detour else "메이저", ch.root,
+                                                    "F# 믹솔리디안" if detour else "C 메이저", pcs)],
+                                       is_detour=bool(detour)))
+        return tl
+
+    def test_patterns_follow_scale_changes_not_chords(self):
+        patterns = generate.chord_patterns(self._song())
+        self.assertEqual([(p["label"], len(p["spans"])) for p in patterns],
+                         [("C 메이저", 2), ("C 메이저→F# 믹솔리디안", 1)])   # ii–V·V–I는 같은 패턴
+        self.assertEqual(generate.allocate(patterns, 2), [1, 1])
+        self.assertEqual(generate.allocate(patterns, 3), [2, 1])   # 자주 나오는 패턴부터
+        self.assertEqual(generate.allocate(patterns, 9), [2, 1])   # 등장 횟수 상한
+
+    def test_transpose_moves_by_scale_degree_and_keeps_landings(self):
+        tl = self._song()
+        riff = [{"midi": m, "start_sec": t, "duration_sec": .4, "velocity": 80}
+                for m, t in ((62, 0), (65, .5), (69, 1), (71, 2))]   # Dm7: D F A | G7: B
+        out = generate.transpose_riff(tl, riff, 0, 4, "third", landing_secs=[2])
+        self.assertEqual([n["start_sec"] for n in out], [4, 4.5, 5, 6])
+        self.assertEqual([n["midi"] for n in out], [67, 71, 74, 64])   # G7: G B D | Cmaj7: E
+        self.assertTrue(all(n["midi"] % 12 in tl.segments[0].note_set for n in out))
+
+
 class EvaluationTest(unittest.TestCase):
     def test_fixed_reference_metrics_check_gates_density_and_reproducibility(self):
         from ml import evaluate
