@@ -166,6 +166,22 @@ class Timeline:
     chord_end: float | None = None  # 코드 인식 끝(마디선, 초) — 이후는 재생만, 코드 없음
     analysis_info: dict = field(default_factory=dict)
     model_info: dict = field(default_factory=dict)
+    # 학습 설정 — {scale: ScaleOption dict, method: "free"|"landing",
+    #   goal: "root"|"third"|"seventh"|"chord_tone", count: None | [min, max]}
+    practice: dict = field(default_factory=dict)
+
+    def apply_song_scale(self, option: dict):
+        """곡 전체 스케일을 키 안 구간의 후보로 넣는다(예외 구간은 로컬 스케일 유지).
+
+        구간 리프는 이전 스케일 기준이라 비운다 — 리프학습모드에서 새로 만든다.
+        """
+        # ponytail: 전조 구간도 is_detour가 아니면 곡 스케일을 쓴다. 전조 곡 대응은 README Todo.
+        for seg in self.segments:
+            if not seg.is_detour:
+                seg.candidates = [ScaleOption.from_dict(option)]
+                seg.active = 0
+            seg.example = []
+        self.practice["scale"] = dict(option)
 
     def smoothed_beats(self) -> list[float]:
         """보정 비트(smooth_beats) — 원자료 beat_times는 보존, 결과만 캐시."""
@@ -312,6 +328,7 @@ class Timeline:
             "grid_confirmed": self.grid_confirmed,
             "chord_end": self.chord_end,
             "analysis_info": dict(self.analysis_info), "model_info": dict(self.model_info),
+            "practice": dict(self.practice),
             "segments": [s.to_dict() for s in self.segments],
         }
 
@@ -355,6 +372,7 @@ class Timeline:
             chord_end=d.get("chord_end"),
             analysis_info=dict(d.get("analysis_info", {})),
             model_info=dict(d.get("model_info", {})),
+            practice=dict(d.get("practice", {})),
         )
         tl.segments = [Segment.from_dict(s) for s in d["segments"]]
         return tl

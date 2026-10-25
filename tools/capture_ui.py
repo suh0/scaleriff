@@ -33,7 +33,7 @@ def main():
         win.main_screen.note_player.set_volume(0)
         tl = build_dummy_timeline()
         win._open_timeline(tl)
-        win.score.set_timeline(tl, win.main_screen._ml_model)
+        win.setup.set_timeline(tl)
         win.main_screen.set_timeline(tl)
         win.show()
 
@@ -65,7 +65,7 @@ def main():
             capture("beat", win.beat)
             win.beat._set_locked(True)
             capture("chords", win.beat)
-            capture("riffs", win.score)
+            capture("setup", win.setup)
             win.main_screen._select_practice("free")
             win.main_screen._render_at(1)
             capture("play", win.main_screen)

@@ -538,7 +538,7 @@ class BeatScreen(QWidget):
         # ── 조정 완료 → 다음 화면 ────────────────────────────────
         done_row = QHBoxLayout()
         done_row.addStretch(1)
-        self.done_btn = QPushButton("리프 확인으로")
+        self.done_btn = QPushButton("학습 설정으로")
         self.done_btn.setStyleSheet(T.qss_primary_btn())
         self.done_btn.clicked.connect(self._on_done)
         done_row.addWidget(self.done_btn)
@@ -861,7 +861,7 @@ class BeatScreen(QWidget):
             self._clock.restart()
             return sec
         if self.playhead and self.playhead.is_playing():
-            return sec + min(0.12, self._clock.elapsed() / 1000.0) * self.playhead.rate
+            return sec + min(0.12, self._clock.elapsed() / 1000.0)
         return sec
 
     def _metro_reset(self):

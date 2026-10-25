@@ -36,7 +36,6 @@ class EndToEndTest(unittest.TestCase):
             settings = QSettings(str(root / "settings.ini"), QSettings.Format.IniFormat)
             settings.setValue("save_dir", str(root / "sessions"))
             with patch("ingest.audio_source._CACHE_DIR", str(root)), \
-                    patch("player.audio_stretch._CACHE", root / "practice_audio"), \
                     patch("build.real_builder.get_backend", return_value=get_backend("librosa")), \
                     patch("gui.app.QSettings", return_value=settings), \
                     patch.object(AppWindow, "_try_start_midi"):
@@ -56,12 +55,9 @@ class EndToEndTest(unittest.TestCase):
                     self.assertTrue(regrid_timeline(timeline, screen._ml_model, anchor_sec=0))
                     self.assertEqual(timeline.segment_at(.5).chord.name, "Dm7")
                     self.assertEqual(timeline.segment_at(3.0).chord.name, "G7")
-                    window._enter_score()
+                    window._enter_setup()
                     window._enter_main()
                     screen._select_practice("riff")
-                    self.assertTrue(screen.playhead.set_rate(.75))
-                    slowed = screen.playhead._prepared[.75]
-                    self.assertAlmostEqual(sf.info(slowed).duration, len(audio) / SR / .75, delta=.1)
                     saved = Timeline.load_json(window._session_path(timeline))
                     self.assertEqual(saved.chord_overrides, timeline.chord_overrides)
                     self.assertEqual(saved.loops[0]["end_sec"], 4.8)

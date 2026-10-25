@@ -1,6 +1,6 @@
 """메인 윈도우 — QStackedWidget 화면 흐름 (정의서 §6).
 
-[0] 링크 입력 → [1] 분석 중 → [2a] 박자 조정 → [2] 악보(코드·스케일·루프)
+[0] 링크 입력 → [1] 분석 중 → [2a] 박자 조정 → [2] 학습 설정(곡 스케일·연습 방식)
 → [3] 메인(플레이어)
 """
 from __future__ import annotations
@@ -25,7 +25,7 @@ from gui import theme as T
 from gui.link_screen import LinkScreen
 from gui.analyzing_screen import AnalyzingScreen
 from gui.beat_screen import BeatScreen
-from gui.score_screen import ScoreScreen
+from gui.setup_screen import SetupScreen
 from gui.main_screen import MainScreen
 from gui.widgets.busy_overlay import run_busy
 from build.timeline_builder import build_timeline
@@ -91,10 +91,10 @@ class AppWindow(QMainWindow):
         self.link_screen = LinkScreen(show_onboarding=not seen_onboarding)
         self.analyzing = AnalyzingScreen()
         self.beat = BeatScreen()
-        self.score = ScoreScreen()
+        self.setup = SetupScreen()
         self.main_screen = MainScreen()
 
-        for w in (self.link_screen, self.analyzing, self.beat, self.score,
+        for w in (self.link_screen, self.analyzing, self.beat, self.setup,
                   self.main_screen):
             self.stack.addWidget(w)
 
@@ -110,13 +110,13 @@ class AppWindow(QMainWindow):
         self.analyzing.analysisFailed.connect(self._on_bg_failed)
         self.analyzing.analysisCancelled.connect(self._on_analysis_cancelled)
         self._pill.playRequested.connect(self._play_pending)
-        self.beat.proceedRequested.connect(self._enter_score)
+        self.beat.proceedRequested.connect(self._enter_setup)
         self.beat.backToLinkRequested.connect(self._go_link)
-        self.score.practiceRequested.connect(self._enter_main)
-        self.score.backToBeatRequested.connect(
+        self.setup.practiceRequested.connect(self._enter_main)
+        self.setup.backToBeatRequested.connect(
             lambda: self.stack.setCurrentWidget(self.beat))
         self.main_screen.backToLinkRequested.connect(self._go_link)
-        self.main_screen.backToScoreRequested.connect(self._go_score)
+        self.main_screen.backToSetupRequested.connect(self._go_setup)
         self.main_screen.midiPortRequested.connect(self._connect_midi)
 
         self._timeline = None
@@ -271,10 +271,10 @@ class AppWindow(QMainWindow):
         super().resizeEvent(e)
         self._place_pill()
 
-    def _enter_score(self):
+    def _enter_setup(self):
         self._timeline = self.beat.tl
-        self.score.set_timeline(self._timeline, self.main_screen._ml_model)
-        self.stack.setCurrentWidget(self.score)
+        self.setup.set_timeline(self._timeline)
+        self.stack.setCurrentWidget(self.setup)
 
     def _enter_main(self):
         self._save_session(self._timeline)   # 보정·수정 반영해 세션 갱신
@@ -289,10 +289,10 @@ class AppWindow(QMainWindow):
             self._save_session(self._timeline)
         self.stack.setCurrentWidget(self.link_screen)
 
-    def _go_score(self):
+    def _go_setup(self):
         self.main_screen.pause()
         if self._timeline:
-            self.stack.setCurrentWidget(self.score)
+            self.stack.setCurrentWidget(self.setup)
         else:
             self.stack.setCurrentWidget(self.link_screen)
 

@@ -152,6 +152,7 @@ def _contour_target(shape: str, f: float) -> float:
 _SCALE_QUERY_FALLBACK = {
     "아이오니안": "메이저", "리디안": "메이저", "믹솔리디안": "메이저",
     "에올리안": "마이너", "프리지안": "마이너", "로크리안": "마이너",
+    "메이저 펜타토닉": "메이저", "마이너 펜타토닉": "마이너", "블루스": "마이너",
 }
 
 
@@ -480,7 +481,8 @@ def _landing_pc(seg, goal):
                  if (seg.chord.root + d) % 12 in seg.note_set), None)
 
 
-def bake_progression(timeline, model, start_sec, end_sec, goal="third", variant=0, density=1.0):
+def bake_progression(timeline, model, start_sec, end_sec, goal="third", variant=0, density=1.0,
+                     count=None):
     """Bake the selected source interval using its actual chords and assigned note sets.
 
     Returns {notes, start_sec, end_sec, goal, variant, density, landings, model_info}.
@@ -488,10 +490,14 @@ def bake_progression(timeline, model, start_sec, end_sec, goal="third", variant=
     landings describe each internal chord entry and the final note, with target_pc=None
     and supported=False when that chord/assigned scale cannot support the requested goal.
     seg.example remains in segment-relative beats; examples outside the selection survive.
+    goal=None: no landing constraint (free practice, scale notes only).
+    count=(lo, hi): each chord gets lo..hi notes (its entry included) instead of density.
     Call during preparation or an explicit user action, never from a playback tick.
     """
-    if goal not in ("third", "seventh", "root", "chord_tone"):
-        raise ValueError("goal must be third, seventh, root or chord_tone")
+    if goal not in (None, "third", "seventh", "root", "chord_tone"):
+        raise ValueError("goal must be None, third, seventh, root or chord_tone")
+    if count is not None and not 1 <= count[0] <= count[1]:
+        raise ValueError("count must be (lo, hi) with 1 <= lo <= hi")
     if not all(math.isfinite(x) for x in (start_sec, end_sec, density)) or density <= 0:
         raise ValueError("finite source times and positive density are required")
     if end_sec <= start_sec:
@@ -510,7 +516,7 @@ def bake_progression(timeline, model, start_sec, end_sec, goal="third", variant=
     plan = [(seg.chord.name, seg.chord.root, seg.chord.quality, a, b, sorted(seg.note_set))
             for seg, a, b in parts]
     seed = int.from_bytes(hashlib.sha256(json.dumps(
-        [plan, goal, variant], ensure_ascii=False).encode("utf-8")).digest()[:8], "big")
+        [plan, goal, variant] + ([list(count)] if count else []), ensure_ascii=False).encode("utf-8")).digest()[:8], "big")
     rng = random.Random(seed)
     bpb = timeline.time_sig_beats()
     trained = is_trained(model)
@@ -533,20 +539,28 @@ def bake_progression(timeline, model, start_sec, end_sec, goal="third", variant=
     preferred = sorted(set(preferred) - mandatory)
     rng.shuffle(preferred)
     rng.shuffle(extra)
-    count = max(len(mandatory), min(len(candidates), int(round((b1 - b0) * 1.5 * density))))
-    onsets = sorted(mandatory | set((preferred + extra)[:count - len(mandatory)]))
+    if count:
+        onsets = set(mandatory)
+        for _, a, b in parts:
+            n = rng.randint(*count) - 1
+            onsets |= set([t for t in preferred + extra if a <= t < b][:n])
+        onsets = sorted(onsets)
+    else:
+        total = max(len(mandatory), min(len(candidates), int(round((b1 - b0) * 1.5 * density))))
+        onsets = sorted(mandatory | set((preferred + extra)[:total - len(mandatory)]))
     shape = rng.choice(("arch", "asc", "desc", "wave"))
     prev_midi, prev_tokens, previous_end = 71, [BOS, BOS], b0
     for i, sec in enumerate(onsets):
         seg, _, boundary = next(p for p in parts if p[1] <= sec < p[2])
         beat = timeline.beat_at(sec)
         target = _landing_pc(seg, goal)
-        landing_kind = "final" if i == len(onsets) - 1 else (
+        landing_kind = None if goal is None else "final" if i == len(onsets) - 1 else (
             "change" if sec in mandatory and sec > start_sec else None)
         pool = [m for m in range(60, 84) if m % 12 in seg.note_set]
         chord_pool = [m for m in pool if m % 12 in seg.chord_tones()]
         if landing_kind:
-            pool = [m for m in pool if m % 12 == target] if target is not None else (chord_pool or pool)
+            pool = (chord_pool or pool) if goal == "chord_tone" or target is None else [
+                m for m in pool if m % 12 == target]
         gap = max(0, int(round((beat - previous_end) * 4)))
         prev_tokens.extend([REST] * min(2, gap))
         prior = {}

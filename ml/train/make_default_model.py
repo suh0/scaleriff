@@ -21,6 +21,7 @@ _SCALE_QFAMS = {
     "도리안": ["min"], "프리지안": ["min"],
     "믹솔리디안": ["dom"], "로크리안": ["dim"],
     "디미니시드": ["dim"], "온음": ["maj"],
+    "메이저 펜타토닉": ["maj", "dom"], "마이너 펜타토닉": ["min", "dom"], "블루스": ["dom", "min"],
 }
 _OUT = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))), "models", "default_markov.json")

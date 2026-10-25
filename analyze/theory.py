@@ -45,6 +45,9 @@ SCALE_INTERVALS = {
     "locrian":    [0, 1, 3, 5, 6, 8, 10],
     "diminished": [0, 2, 3, 5, 6, 8, 9, 11],
     "whole_tone": [0, 2, 4, 6, 8, 10],
+    "minor_pentatonic": [0, 3, 5, 7, 10],
+    "major_pentatonic": [0, 2, 4, 7, 9],
+    "blues":      [0, 3, 5, 6, 7, 10],
 }
 
 # 코드 quality → 구성 음정(코드톤) & 어울리는 코드-스케일(모드 이름)
@@ -189,6 +192,8 @@ MODE_KR = {
     "mixolydian": "믹솔리디안", "aeolian": "에올리안", "minor": "에올리안",
     "locrian": "로크리안",
     "diminished": "디미니시드", "whole_tone": "온음",
+    "minor_pentatonic": "마이너 펜타토닉", "major_pentatonic": "메이저 펜타토닉",
+    "blues": "블루스",
 }
 
 
@@ -235,6 +240,22 @@ def diatonic_option(chord: Chord, home_root: int, home_mode: str,
 def degree_for(chord: Chord, key_root: int) -> str:
     """키 기준 단일 코드의 로마숫자 도수(예 'ii')."""
     return roman_degrees([chord], key_root)[0]
+
+
+def song_scale_options(key_root: int, key_mode: str) -> list[dict]:
+    """곡 전체에 하나로 쓰는 스케일 후보 — [펜타토닉(추천), 키 스케일 7음, 블루스].
+
+    메이저 키는 메이저 펜타토닉, 블루스는 나란한조 마이너 근음 기준.
+    """
+    minor_root = key_root if key_mode == "minor" else (key_root + 9) % 12
+    pent = "minor_pentatonic" if key_mode == "minor" else "major_pentatonic"
+    seven = "minor" if key_mode == "minor" else "major"
+    seven_kind = "마이너" if key_mode == "minor" else "메이저"   # ml SCALE_DEGREES 라벨
+    return [{"kind": kind, "root": root, "name": f"{pc_name(root)} {kind}",
+             "note_set": scale_pcs(root, mode)}
+            for root, mode, kind in ((key_root, pent, MODE_KR[pent]),
+                                     (key_root, seven, seven_kind),
+                                     (minor_root, "blues", MODE_KR["blues"]))]
 
 
 # ── 건반 표시용 도수 숫자 (코드/스케일 root 기준) ─────────────────────

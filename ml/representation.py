@@ -40,6 +40,9 @@ SCALE_DEGREES = {
     "로크리안":   [0, 1, 3, 5, 6, 8, 10],
     "디미니시드": SCALE_INTERVALS["diminished"],
     "온음": SCALE_INTERVALS["whole_tone"],
+    "마이너 펜타토닉": SCALE_INTERVALS["minor_pentatonic"],
+    "메이저 펜타토닉": SCALE_INTERVALS["major_pentatonic"],
+    "블루스": SCALE_INTERVALS["blues"],
 }
 # 코드 품질군 → 코드톤 도수(루트 상대)
 QFAM_CHORD_TONES = {

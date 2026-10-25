@@ -5,7 +5,7 @@ from gui import theme as T
 
 
 class FlowHeader(QWidget):
-    steps = ("곡 선택", "분석", "박자 조정", "코드 편집", "리프 확인", "연주")
+    steps = ("곡 선택", "분석", "박자 조정", "코드 편집", "학습 설정", "연주")
 
     def __init__(self, stage=0, parent=None):
         super().__init__(parent)

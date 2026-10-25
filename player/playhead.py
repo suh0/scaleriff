@@ -9,8 +9,7 @@ from __future__ import annotations
 
 import os
 
-from PyQt6.QtCore import QObject, QTimer, QElapsedTimer, QSignalBlocker, pyqtSignal, QUrl
-from player.audio_stretch import prepare_audio_rate, validate_rate
+from PyQt6.QtCore import QObject, QTimer, QElapsedTimer, pyqtSignal, QUrl
 
 try:
     from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
@@ -37,9 +36,6 @@ class Playhead(QObject):
         self._total = max(0.0, total_sec)
         self._audio_ref = audio_ref or ""
         self._playing = False
-        self._rate = 1.0
-        self._media_rate = 1.0
-        self._prepared = {1.0: self._audio_ref}
         self._media_error = ""
         self._media_ready = True
         self._pending_seek = None
@@ -81,60 +77,18 @@ class Playhead(QObject):
     def is_playing(self) -> bool:
         return self._playing
 
-    @property
-    def rate(self) -> float:
-        return self._rate
-
     def position_sec(self) -> float:
         if self._use_audio and not self._preroll:
             if self._pending_seek is not None:
                 return self._pending_seek
             if self._player is not None:
-                return self._player.position() / 1000.0 * self._media_rate
+                return self._player.position() / 1000.0
             return self._virt_base
         if self._playing:
-            return self._virt_base + self._elapsed.elapsed() / 1000.0 * self._rate
+            return self._virt_base + self._elapsed.elapsed() / 1000.0
         return self._virt_base
 
     # ── 제어 ─────────────────────────────────────────────────────
-    def prepare_rate(self, rate: float) -> bool:
-        """속도 음원을 미리 준비한다. 변환은 UI 액션/준비 작업에서만 호출한다."""
-        rate = validate_rate(rate)
-        if not self._use_audio or rate in self._prepared:
-            return True
-        try:
-            self._prepared[rate] = prepare_audio_rate(self._audio_ref, rate)
-            return True
-        except Exception as exc:
-            self.errorOccurred.emit(str(exc))
-            return False
-
-    def set_rate(self, rate: float) -> bool:
-        """속도 변경 전후 위치를 원본 초로 유지한다. 틱에서 호출하지 않는다."""
-        rate = validate_rate(rate)
-        if rate == self._rate:
-            return True
-        position = self.position_sec()
-        if self._use_audio and self._player is not None:
-            self._player.pause()
-        if not self.prepare_rate(rate):
-            if self._playing and not self._preroll and self._player is not None:
-                self._player.play()
-            return False
-        self._rate = rate
-        self._virt_base = position
-        if self._playing:
-            self._elapsed.restart()
-        if self._use_audio and self._player is not None:
-            self._media_rate = rate
-            self._media_ready = False
-            self._pending_seek = max(0.0, position)
-            # setSource 안에서 이전 음원의 LoadedMedia가 동기 발생할 수 있다.
-            with QSignalBlocker(self._player):
-                self._player.setSource(QUrl.fromLocalFile(self._prepared[rate]))
-        self.positionChanged.emit(self.position_sec())
-        return True
-
     def set_volume(self, volume: float):
         if self._audio_out is not None:
             self._audio_out.setVolume(max(0.0, min(1.0, float(volume))))
@@ -178,7 +132,7 @@ class Playhead(QObject):
             if not self._media_ready or self._pending_seek is not None:
                 self._pending_seek = sec
             elif self._player is not None:
-                self._player.setPosition(round(sec / self._media_rate * 1000))
+                self._player.setPosition(round(sec * 1000))
             if self._playing and self._media_ready and self._player is not None:
                 self._player.play()
         else:
@@ -209,7 +163,7 @@ class Playhead(QObject):
 
     def _on_duration(self, ms: int):
         if ms > 0 and self._total <= 0:
-            self._total = ms / 1000.0 * self._media_rate
+            self._total = ms / 1000.0
 
     def _on_media_status(self, status):
         if status in (QMediaPlayer.MediaStatus.LoadedMedia,
@@ -218,7 +172,7 @@ class Playhead(QObject):
             if self._pending_seek is not None:
                 position = self._pending_seek
                 self._pending_seek = None
-                self._player.setPosition(round(position / self._media_rate * 1000))
+                self._player.setPosition(round(position * 1000))
             if (status == QMediaPlayer.MediaStatus.LoadedMedia and self._playing
                     and not self._preroll
                     and self._player.playbackState() != QMediaPlayer.PlaybackState.PlayingState):

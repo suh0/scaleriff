@@ -12,7 +12,7 @@ from gui import anim
 from gui import theme as T
 from gui.link_screen import LinkScreen
 from gui.main_screen import MainScreen
-from gui.score_screen import ScoreScreen
+from gui.setup_screen import SetupScreen
 from gui.beat_screen import BeatScreen
 from gui.widgets.scrub_bar import ScrubBar
 from player.dummy_timeline import build_dummy_timeline
@@ -93,30 +93,16 @@ class UIUXTest(unittest.TestCase):
             geo = screen.piano._geometry()
             self.assertAlmostEqual(screen.riff.y() + screen.riff.height(), screen.piano.y() + geo[2], delta=1)
 
-    def test_many_scales_scroll_without_displacing_practice_button(self):
-        screen = ScoreScreen()
-        tl = build_dummy_timeline()
-        tl.scale_riffs = {f"테스트 스케일 {i}": {"notes": [], "note_set": [0, 2],
-                           "chord_tones": [0], "n_bars": 1} for i in range(30)}
-        screen.set_timeline(tl)
+    def test_setup_screen_fits_and_landing_options_follow_method(self):
+        screen = SetupScreen()
+        screen.set_timeline(build_dummy_timeline())
         screen.resize(1040, 740)
         screen.show()
         self.app.processEvents()
-        self.assertGreater(screen.kinds_scroll.verticalScrollBar().maximum(), 0)
         self.assertTrue(screen.rect().contains(screen.go_btn.mapTo(screen, screen.go_btn.rect().bottomRight())))
-
-    def test_empty_riffs_show_an_action_and_dark_scroll_background(self):
-        screen = ScoreScreen()
-        tl = build_dummy_timeline()
-        tl.scale_riffs = {}
-        screen.set_timeline(tl)
-        screen.resize(1040, 740)
-        screen.show()
-        self.app.processEvents()
-        self.assertTrue(screen.empty_lbl.isVisible())
-        self.assertTrue(screen.go_btn.isVisible())
-        viewport = screen.kinds_scroll.viewport()
-        self.assertEqual(viewport.palette().color(viewport.backgroundRole()).name(), T.BG_BASE)
+        self.assertFalse(screen.landing_box.isVisible())
+        screen._pick_method("landing")
+        self.assertTrue(screen.landing_box.isVisible())
 
     def test_long_feedback_and_loop_lists_stay_within_window(self):
         tl = build_dummy_timeline()
@@ -167,18 +153,6 @@ class UIUXTest(unittest.TestCase):
         for destination in destinations:
             self.assertTrue(os.path.abspath(destination).startswith(os.path.abspath(tempfile.gettempdir()) + os.sep), destination)
 
-    def test_scroll_content_background_is_dark(self):
-        screen = ScoreScreen()
-        tl = build_dummy_timeline()
-        tl.scale_riffs = {"도리안": {"notes": [], "note_set": [0], "chord_tones": [0], "n_bars": 1}}
-        screen.set_timeline(tl)
-        screen.setStyleSheet(T.qss_app())
-        screen.resize(1040, 740)
-        screen.show()
-        self.app.processEvents()
-        host = screen._kinds_wrap
-        color = host.grab().toImage().pixelColor(1, host.height() - 1)
-        self.assertEqual(color.name(), T.BG_BASE)
 
     def test_falling_beat_lines_use_adjusted_and_variable_grid(self):
         screen = MainScreen()

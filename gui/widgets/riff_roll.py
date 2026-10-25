@@ -31,6 +31,7 @@ class RiffRoll(QWidget):
         self._notes: list[dict] = []
         self._note_set: set[int] = set()
         self._chord_tones: set[int] = set()
+        self._root = 0
         self._beats_per_bar = 4
         self._total_beats = 4.0
         self._lo, self._hi = LO, HI
@@ -40,8 +41,9 @@ class RiffRoll(QWidget):
         return self._hi - self._lo + 1
 
     def set_riff(self, notes, note_set, chord_tones,
-                 beats_per_bar: int, n_bars: int):
+                 beats_per_bar: int, n_bars: int, root: int = 0):
         self._notes = list(notes or [])
+        self._root = root
         self._note_set = set(note_set)
         self._chord_tones = set(chord_tones)
         self._beats_per_bar = max(1, beats_per_bar)
@@ -74,7 +76,7 @@ class RiffRoll(QWidget):
         """상태색 — 코드톤 중 근음(도수 1)은 파랑, 나머지 코드톤 초록."""
         st = self._state(pc)
         if st == "CHORD":
-            return QColor(T.BADGE_ROOT if pc == 0 else T.BADGE_CHORD)   # C=근음
+            return QColor(T.BADGE_ROOT if pc == self._root else T.BADGE_CHORD)
         return QColor(T.BADGE_SCALE if st == "SCALE" else T.BADGE_OUT)
 
     def _badge(self, p: QPainter, pc: int, r: QRectF, font: QFont):
@@ -86,7 +88,7 @@ class RiffRoll(QWidget):
         p.setBrush(self._fill(pc))
         p.setPen(Qt.PenStyle.NoPen)
         p.drawEllipse(r)
-        text = degree_number(pc, 0)     # 종류당 리프는 C(root 0) 기준
+        text = degree_number(pc, self._root)
         if text:
             p.setFont(font)
             p.setPen(fg)

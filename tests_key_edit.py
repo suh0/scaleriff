@@ -40,10 +40,9 @@ class KeyEditTest(unittest.TestCase):
         self.assertEqual(tl.segments[2].note_set, [0, 2, 4, 6, 7, 9, 11])
         self.assertNotIn(-1, win.beat._cells)   # 예비박은 코드표에 없음
         win.beat._on_done()
-        self.assertIs(win.stack.currentWidget(), win.score)
-        self.assertIn("G major", win.score.key_lbl.text())
-        self.assertEqual(set(win.score._kind_btns),
-                         {s.scale.kind for s in tl.segments})
+        self.assertIs(win.stack.currentWidget(), win.setup)
+        self.assertIn("G major", win.setup.key_lbl.text())
+        self.assertIn("G 메이저 펜타토닉", win.setup.scale_btns[0].text())
         win.beat._back_to_beat()
         win.beat._on_confirm()
         self.assertEqual(tl.key, "G major")

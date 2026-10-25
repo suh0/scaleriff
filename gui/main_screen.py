@@ -20,7 +20,7 @@ from player.playhead import Playhead
 from player.note_synth import shared_player
 from analyze.theory import degree_number
 from ml.model import load_model
-from ml.generate import bake_examples
+from ml.generate import _landing_pc
 
 from gui import theme as T
 from gui.anim import fade_in, reduced_motion, set_reduced_motion
@@ -30,6 +30,7 @@ from gui.widgets.piano import MIDI_HIGH, MIDI_LOW, PianoWidget
 from gui.widgets.chord_lane import ChordLane
 from gui.widgets.scrub_bar import ScrubBar
 from gui.widgets.falling_notes import FallingNotes
+from gui.riff_dialog import RiffDialog
 
 # 코드/가이드를 재생 위치보다 앞당겨 표시하는 보정값(초). 0 = 보정 없음.
 SYNC_LOOKAHEAD_SEC = 0.0
@@ -41,7 +42,7 @@ def _fmt_sec(sec: float) -> str:
 
 
 class MainScreen(QWidget):
-    backToScoreRequested = pyqtSignal()
+    backToSetupRequested = pyqtSignal()
     backToLinkRequested = pyqtSignal()
     midiPortRequested = pyqtSignal(str)
 
@@ -76,11 +77,11 @@ class MainScreen(QWidget):
         # ── 상단 바 ──
         top = QHBoxLayout()
         self.link_btn = QPushButton("← 링크")
-        self.score_btn = QPushButton("← 리프 확인")
+        self.score_btn = QPushButton("← 학습 설정")
         for b in (self.link_btn, self.score_btn):
             b.setStyleSheet(T.qss_ghost_btn())
         self.link_btn.clicked.connect(self.backToLinkRequested.emit)
-        self.score_btn.clicked.connect(self.backToScoreRequested.emit)
+        self.score_btn.clicked.connect(self.backToSetupRequested.emit)
         top.addWidget(self.link_btn)
         top.addWidget(self.score_btn)
         top.addSpacing(10)
@@ -182,6 +183,11 @@ class MainScreen(QWidget):
         self.loop_btn.setStyleSheet(T.qss_ghost_btn())
         self.loop_btn.clicked.connect(self._toggle_loop_panel)
         rrow.addWidget(self.loop_btn)
+        self.riff_btn = QPushButton("리프학습모드")
+        self.riff_btn.setFixedHeight(36)
+        self.riff_btn.setStyleSheet(T.qss_ghost_btn())
+        self.riff_btn.clicked.connect(self._open_riff_dialog)
+        rrow.addWidget(self.riff_btn)
         rrow.addStretch(1)
         # 재생/일시정지 (흰 원형, §6.1)
         self.play_btn = QPushButton("▶")
@@ -381,8 +387,6 @@ class MainScreen(QWidget):
         self.tl = tl
         self._last_idx = -1
         self._build_loop_rows()            # 사용자 루프 리스트(사이드바) 갱신
-        if not getattr(tl, "scale_riffs", None):   # 아직이면 1회 굽기(§8)
-            bake_examples(tl, self._ml_model)
         self._build_riff_events()          # 리프를 곡에 함께 구움(§2)
         self._riff_idx = 0
         self.playhead = Playhead(tl.content_end(), tl.audio_ref, self)
@@ -434,6 +438,28 @@ class MainScreen(QWidget):
                                self._loop_spans())
         self._render_at(self.playhead.position_sec() if self.playhead else 0.0)
         self._on_state(self.playhead.is_playing() if self.playhead else False)
+
+    # ── 리프학습모드: 학습 설정 조건으로 구간 리프 생성 → 확정 시 리프연습 ──
+    def _riff_span(self) -> tuple[float, float]:
+        """켜진 루프가 있으면 그 루프, 아니면 현재 마디부터 4마디."""
+        spans = self._loop_spans()
+        if spans:
+            return spans[0]
+        pos = max(0.0, self.playhead.position_sec() if self.playhead else 0.0)
+        bars = self.tl.bar_times
+        if len(bars) < 2:
+            bar = self.tl.beat_sec() * self.tl.time_sig_beats()
+            return pos, pos + 4 * bar
+        i = min(max(0, bisect.bisect_right(bars, pos) - 1), len(bars) - 2)
+        return bars[i], bars[min(i + 4, len(bars) - 1)]
+
+    def _open_riff_dialog(self):
+        if not self.tl:
+            return
+        self.pause()
+        dialog = RiffDialog(self.tl, self._ml_model, *self._riff_span(), self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self._select_practice("riff")
 
     # ── 재생 제어 ────────────────────────────────────────────────
     def _toggle_play(self):
@@ -488,7 +514,7 @@ class MainScreen(QWidget):
             ev = self._riff_events
             while self._riff_idx < len(ev) and ev[self._riff_idx][0] <= sec:
                 duration = self._riff_durations[self._riff_idx] if self._riff_idx < len(self._riff_durations) else .25
-                self.note_player.play_note(ev[self._riff_idx][1], duration / self.playhead.rate,
+                self.note_player.play_note(ev[self._riff_idx][1], duration,
                                            round(100 * self._riff_volume))
                 self._riff_idx += 1
 
@@ -507,7 +533,12 @@ class MainScreen(QWidget):
             return
         self._last_idx = idx
         seg = self.tl.segments[idx]
-        self.piano.set_scale(seg.note_set, seg.chord_tones())
+        chord_tones = seg.chord_tones()
+        goal = self.tl.practice.get("goal")
+        if self.tl.practice.get("method") == "landing" and goal != "chord_tone":
+            target = _landing_pc(seg, goal)      # 착지 목표음만 초록으로 강조
+            chord_tones = [target] if target is not None else chord_tones
+        self.piano.set_scale(seg.note_set, chord_tones)
         self.piano.set_degrees({pc: degree_number(pc, seg.scale_root) for pc in seg.note_set})
         self.piano.set_pressed({m for _, m in self._held_keys})
         # 현재/다음 코드·스케일은 코드 레인이 스스로 그림(set_position)
@@ -596,12 +627,6 @@ class MainScreen(QWidget):
             ports.setCurrentIndex(max(0, ports.findData(self._midi_name)))
         reconnect.clicked.connect(reconnect_ports)
         form.addRow(reconnect)
-        rate = QComboBox()
-        for value in (.5, .75, 1.0, 1.25):
-            rate.addItem(f"{value:g}배", value)
-        rate.setCurrentIndex(max(0, rate.findData(self.playhead.rate if self.playhead else 1)))
-        rate.currentIndexChanged.connect(lambda _: self._set_rate(rate.currentData()))
-        form.addRow("음정 유지 속도", rate)
         for text, key in (("원곡 음량", "_audio_volume"), ("리프 음량", "_riff_volume"),
                           ("내 연주 모니터", "_input_volume")):
             slider = QSlider(Qt.Orientation.Horizontal)
@@ -619,13 +644,6 @@ class MainScreen(QWidget):
         close.clicked.connect(dialog.accept)
         form.addRow(close)
         dialog.exec()
-
-    def _set_rate(self, rate):
-        if self.playhead:
-            self.pause()
-            self.feedback_lbl.setText("음정을 유지하는 연습용 오디오를 준비하고 있어요…")
-            if self.playhead.set_rate(rate):
-                self.feedback_lbl.setText(f"음정 유지 {rate:g}배 · 건반 가이드와 연주 시각은 원곡 기준으로 동기화됩니다.")
 
     def _set_volume(self, key, value):
         setattr(self, key, value)

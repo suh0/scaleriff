@@ -3,7 +3,6 @@ import os
 import tempfile
 import time
 import unittest
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -224,24 +223,20 @@ class MidiAudioTest(unittest.TestCase):
             synth.stop_all()
             self.assertTrue(wait_for(lambda: not review.playing))
 
-    def test_virtual_rate_change_preserves_position_and_preroll_pause(self):
-        self.assertTrue(callable(getattr(Playhead, "set_rate", None)), "playback rate missing")
+    def test_virtual_clock_preroll_pause_and_progress(self):
         head = Playhead(3)
-        self.assertTrue(head.set_rate(0.75))
         head.seek(-0.3)
         head.play()
         QTest.qWait(100)
         head.pause()
         paused = head.position_sec()
-        self.assertAlmostEqual(paused, -0.225, delta=0.035)
+        self.assertAlmostEqual(paused, -0.2, delta=0.035)
         QTest.qWait(40)
         self.assertEqual(head.position_sec(), paused)
         head.play()
         before = head.position_sec()
-        head.set_rate(1.5)
-        self.assertAlmostEqual(head.position_sec(), before, delta=0.015)
         QTest.qWait(100)
-        self.assertAlmostEqual(head.position_sec() - before, 0.15, delta=0.04)
+        self.assertAlmostEqual(head.position_sec() - before, 0.1, delta=0.04)
         head.stop()
 
     def test_missing_audio_does_not_run_virtual_clock(self):
@@ -255,8 +250,7 @@ class MidiAudioTest(unittest.TestCase):
         self.assertEqual(head.position_sec(), 0.0)
         self.assertTrue(errors)
 
-    def test_real_three_quarter_audio_preserves_pitch_and_source_seconds(self):
-        self.assertTrue(callable(getattr(Playhead, "prepare_rate", None)), "pitch-preserving preparation missing")
+    def test_real_audio_seek_before_load_is_kept(self):
         with tempfile.TemporaryDirectory() as folder:
             path = os.path.join(folder, "tone.wav")
             rate = 22050
@@ -265,20 +259,7 @@ class MidiAudioTest(unittest.TestCase):
             head = Playhead(3, path)
             errors = []
             head.errorOccurred.connect(errors.append)
-            self.assertTrue(head.prepare_rate(0.75), errors)
-            self.assertTrue(head.set_rate(0.75), errors)
-            self.assertEqual(head.rate, 0.75)
             head.set_volume(0)
-            prepared = head._player.source().toLocalFile()
-            self.assertNotEqual(Path(prepared), Path(path))
-            audio, sample_rate = sf.read(prepared)
-            self.assertAlmostEqual(len(audio) / sample_rate, 4.0, delta=0.08)
-            if audio.ndim == 2:
-                audio = audio.mean(axis=1)
-            middle = audio[sample_rate:sample_rate * 2]
-            peaks = np.fft.rfftfreq(len(middle), 1 / sample_rate)
-            peak = peaks[np.argmax(abs(np.fft.rfft(middle * np.hanning(len(middle)))))]
-            self.assertAlmostEqual(peak, 440, delta=2)
             # 로딩 완료 전 seek도 실제 재생 시작 시 보존되어야 한다.
             head.seek(1.5)
             self.assertAlmostEqual(head.position_sec(), 1.5, delta=0.025)
@@ -297,15 +278,15 @@ class MidiAudioTest(unittest.TestCase):
             self.assertGreaterEqual(started, 1.5, "로딩 뒤 seek가 원점으로 되돌아감")
             QTest.qWait(500)
             progressed = head.position_sec()
-            self.assertGreater(progressed, 1.65, errors)
-            self.assertLess(progressed, 2.05)
-            self.assertAlmostEqual(progressed - started, 0.375, delta=0.10)
+            self.assertGreater(progressed, 1.8, errors)
+            self.assertLess(progressed, 2.2)
+            self.assertAlmostEqual(progressed - started, 0.5, delta=0.10)
             head.pause()
             paused = head.position_sec()
             QTest.qWait(80)
             self.assertAlmostEqual(head.position_sec(), paused, delta=0.02)
             head.seek(1.5)
-            self.assertAlmostEqual(head._player.position() / 1000, 2.0, delta=0.04)
+            self.assertAlmostEqual(head._player.position() / 1000, 1.5, delta=0.04)
             head.stop()
             head._player.setSource(QUrl())
 
@@ -320,7 +301,6 @@ class MidiAudioTest(unittest.TestCase):
             errors = []
             head.errorOccurred.connect(errors.append)
             try:
-                self.assertTrue(head.set_rate(0.75), errors)
                 head.set_volume(0)
                 output = QAudioBufferOutput(head)
                 head._player.setAudioBufferOutput(output)
@@ -340,10 +320,6 @@ class MidiAudioTest(unittest.TestCase):
                     target = (0.15, 0.75, 1.35)[index % 3]
                     received_before = len(decoded)
                     head.pause()
-                    if index in (8, 16):
-                        previous = head.position_sec()
-                        self.assertTrue(head.set_rate(1.0 if index == 8 else 0.75), errors)
-                        self.assertAlmostEqual(head.position_sec(), previous, delta=0.015)
                     head.seek(target)
                     head.play()
                     deadline = time.monotonic() + 0.8
@@ -354,7 +330,7 @@ class MidiAudioTest(unittest.TestCase):
                     self.assertLess(head.position_sec(), target + 0.6, index)
                     tail = decoded[received_before:]
                     self.assertTrue(any(nonzero for _, nonzero in tail), (index, tail, errors))
-                    media_target_us = target / head.rate * 1_000_000
+                    media_target_us = target * 1_000_000
                     self.assertTrue(any(media_target_us - 150_000 <= start <= media_target_us + 600_000
                                         for start, _ in tail), (index, tail))
                     self.assertTrue(head.is_playing())

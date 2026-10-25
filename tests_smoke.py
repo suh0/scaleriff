@@ -41,7 +41,7 @@ def main():
     win.resize(1200, 800)
     win.show()
     for page in (win.link_screen, win.analyzing, win.beat,
-                 win.score, win.main_screen):
+                 win.setup, win.main_screen):
         win.stack.setCurrentWidget(page)
         app.processEvents()
         content = page.findChild(QWidget, "compactContent")
@@ -168,61 +168,51 @@ def main():
     win.beat.confirm_btn.click()
     assert all(a is b for a, b in zip(segments_before, tl.segments)), \
         "박자 변경 없이 돌아오면 코드 편집 내용을 보존해야 함"
-    win.beat.done_btn.click()         # 편집 완료 → 악보 화면
-    assert win.stack.currentWidget() is win.score
-    # 악보 화면: 사용된 스케일 칩이 종류 수만큼 생성 + 첫 스케일이 기본 선택됐는지
-    assert len(win.score._kind_btns) == len(tl.scale_riffs), "스케일 칩 수 불일치"
-    assert win.score._sel_kind in tl.scale_riffs, "기본 선택 스케일 없음"
-    win.score._show_riff(list(tl.scale_riffs)[-1])     # 다른 스케일 선택 → 리프 갱신
-    assert win.score._sel_kind == list(tl.scale_riffs)[-1]
-    # 곡맥락 리스트: 행 텍스트에 사용 코드(마디 범위 제거)
-    assert "Dm7" in win.score._kind_btns["도리안"].text()
-    assert "마디" not in win.score._kind_btns["도리안"].text()
-    # 피아노롤: 오른손 2옥타브(도~시 60~83) 고정 + 위=고음 + 세미톤 선형 y
-    roll = win.score.roll
-    r_notes = tl.scale_riffs[win.score._sel_kind]["notes"]
-    assert roll._notes == r_notes
-    assert (roll._lo, roll._hi) == (60, 83)
-    assert all(60 <= n["midi"] <= 83 for n in r_notes)     # 생성 음역과 일치
-    assert roll._y(roll._hi) < roll._y(roll._lo), "피아노롤 위=고음 아님"
-    assert abs((roll._y(60) - roll._y(72)) - 12 * (roll._y(60) - roll._y(61))) < 1e-6
-    # 근음(도수 1 = C, pc 0)은 파랑, 다른 코드톤은 초록
-    from gui import theme as _T
-    assert roll._fill(0).name() == _T.BADGE_ROOT, "근음 파랑 아님"
-    other_ct = next(pc for pc in roll._chord_tones if pc != 0)
-    assert roll._fill(other_ct).name() == _T.BADGE_CHORD
-    score_content = win.score.findChild(QWidget, "compactContent")
-    for ww, wh in ((1040, 740), (1600, 1000)):
-        win.resize(ww, wh)
-        app.processEvents()
-        for widget in (win.score.title, win.score.riffs_title,
-                       win.score._kinds_wrap, win.score.riff_lbl,
-                       win.score.roll, win.score.go_btn):
-            pos = widget.mapTo(score_content, QPoint(0, 0))
-            assert pos.x() >= 0 and pos.y() >= 0, \
-                f"ScoreScreen {type(widget).__name__} 콘텐츠 밖 시작"
-            assert pos.x() + widget.width() <= score_content.width(), \
-                f"ScoreScreen {type(widget).__name__} 오른쪽 이탈"
-            assert pos.y() + widget.height() <= score_content.height(), \
-                f"ScoreScreen {type(widget).__name__} 아래 이탈"
-    win.resize(1040, 740)
-    app.processEvents()
-    # 리프 재생성: 변주 시드 증가 + 그 종류 구간 재타일링
-    k0 = win.score._sel_kind
-    win.score._regen_riff()
-    assert tl.scale_riffs[k0].get("variant") == 1, "재생성 변주 안 됨"
-    assert all(s.example for s in tl.segments if s.scale and s.scale.kind == k0)
-    # 리프 미리듣기: 노트 수만큼 재생 예약 + 중단
-    win.score._play_riff()
-    assert len(win.score._riff_timers) == len(tl.scale_riffs[k0]["notes"])
-    win.score._stop_riff()
-    assert not win.score._riff_timers
+    win.beat.done_btn.click()         # 편집 완료 → 학습 설정
+    assert win.stack.currentWidget() is win.setup
+    # 학습 설정: 곡 스케일 3후보(첫 = 펜타토닉 추천), 착지음 옵션은 착지 방식에서만
+    su = win.setup
+    assert "추천" in su.scale_btns[0].text() and "펜타토닉" in su.scale_btns[0].text()
+    assert su.landing_box.isHidden()
+    su._pick_method("landing")
+    assert not su.landing_box.isHidden()
+    assert su.goal_btns["chord_tone"].isEnabled()
+    su.count_mode.setCurrentIndex(2)
+    su.count_lo.setValue(2)
+    su.count_hi.setValue(3)
     # ← 코드 편집 버튼 = 확인된 코드 편집 화면으로
-    win.score.backToBeatRequested.emit()
+    su.backToBeatRequested.emit()
     assert win.stack.currentWidget() is win.beat
     assert win.beat.pages.currentWidget() is win.beat.chord_page
-    win._enter_score()
-    win.score.practiceRequested.emit()
+    win._enter_setup()
+    su._pick_method("landing")
+    su._pick_goal("chord_tone")
+    su.count_mode.setCurrentIndex(2)
+    su.count_lo.setValue(2)
+    su.count_hi.setValue(3)
+    su.go_btn.click()
+    pent = su._options[0]
+    assert tl.practice == {"scale": pent, "method": "landing", "goal": "chord_tone", "count": [2, 3]}
+    assert all(s.note_set == pent["note_set"] for s in tl.segments if not s.is_detour)
+    assert not any(s.example for s in tl.segments), "스케일 변경 후 이전 리프가 남음"
+    assert win.stack.currentWidget() is win.main_screen
+    # 리프학습모드: 조건대로 생성 → 다시 만들기 → 확정 시 리프연습
+    from PyQt6.QtCore import QTimer
+    from gui.riff_dialog import RiffDialog
+    from gui import theme as _T
+    dialogs = []
+
+    def _accept_dialog():
+        d = next(w for w in app.topLevelWidgets() if isinstance(w, RiffDialog) and w.isVisible())
+        assert d.roll._notes and all(n["midi"] % 12 in pent["note_set"] for n in d.roll._notes)
+        d.regenerate()
+        assert d.variant == 1
+        dialogs.append(d)
+        d.accept()
+    QTimer.singleShot(0, _accept_dialog)
+    win.main_screen._open_riff_dialog()
+    assert dialogs and win.main_screen._mode == "practice" and win.main_screen._riff_events
+    win.setup.practiceRequested.emit()
     assert win.stack.currentWidget() is win.main_screen
 
     # 렌더 + 입력 + 모드토글
@@ -321,19 +311,21 @@ def main():
     ms._mode_actions["free"].trigger()
     assert ms._mode == "guide" and ms.riff.isHidden()
 
-    # ML 리프: 스케일 '종류당 1개' (코드 등장마다가 아님, §8)
-    assert tl.scale_riffs, "scale_riffs 미생성"
-    assert set(tl.scale_riffs) == set(tl.available_scales), \
-        f"종류당 1개 아님: {set(tl.scale_riffs)} vs {set(tl.available_scales)}"
-    dorian_segs = [s for s in tl.segments if s.scale and s.scale.kind == "도리안"]
+    # ML 리프: 스케일 '종류당 1개' (코드 등장마다가 아님, §8) — 코드별 모드 타임라인 기준
+    from ml.generate import bake_examples as _bake_ml
+    tl_ml = _bake_ml(build_dummy_timeline(), ms._ml_model)
+    assert tl_ml.scale_riffs, "scale_riffs 미생성"
+    assert set(tl_ml.scale_riffs) == set(tl_ml.available_scales), \
+        f"종류당 1개 아님: {set(tl_ml.scale_riffs)} vs {set(tl_ml.available_scales)}"
+    dorian_segs = [s for s in tl_ml.segments if s.scale and s.scale.kind == "도리안"]
     assert len(dorian_segs) >= 2 and dorian_segs[0].example == dorian_segs[1].example, \
         "같은 종류·근음인데 리프가 다름(종류당 1개 위반)"
-    assert all(s.example for s in tl.segments), "구간 이조 example 미생성"
+    assert all(s.example for s in tl_ml.segments), "구간 이조 example 미생성"
 
     # 리프 구성 — 보장 불변식만 검증(나머지는 분포 soft bias, 하드 강제 아님):
     #   1마디 / 스케일 안의 음만 / 밀도 하한(≥3음) / 마지막 음 코드톤 해결 / 음역 안.
     #   (첫박 코드톤·스케일음 3연속 억제·같은음 억제는 soft라 통계적 경향만 — 하드 검증 X)
-    for kind, d in tl.scale_riffs.items():
+    for kind, d in tl_ml.scale_riffs.items():
         assert d["n_bars"] == 1, f"{kind} 1마디 아님"
         cts, ns = set(d["chord_tones"]), set(d["note_set"])
         notes = sorted(d["notes"], key=lambda n: n["beat_pos"])
@@ -394,7 +386,7 @@ def main():
     assert 64 not in ms.piano._pressed
     ms._on_tick(tl.content_end())
     ms.pause()
-    win.score.practiceRequested.emit()
+    win.setup.practiceRequested.emit()
     assert win.stack.currentWidget() is win.main_screen
 
     # 세션 저장/복원과 구 캐시의 기본값 유지.
@@ -515,11 +507,11 @@ def main():
     bs._apply_chord(tl3.segments[0], "Am")
     assert tl3.segments[0].chord.name == "Am"
     bs._on_done()
-    assert win.stack.currentWidget() is win.score
+    assert win.stack.currentWidget() is win.setup
     assert tl3.segments[0].chord.name == "Am", "조정 완료가 코드 수정을 덮어씀"
 
     # 메인 화면 루프 사이드바(§6): 루프 리스트 + 루프별 ON/OFF + 재생 루프백
-    win.score.practiceRequested.emit()
+    win.setup.practiceRequested.emit()
     assert win.stack.currentWidget() is win.main_screen and ms.tl is tl3
     ms.loop_btn.setChecked(True)
     ms._toggle_loop_panel()
@@ -585,9 +577,6 @@ def main():
     assert "wav_ref" not in saved_payload and "wav_ref" not in saved_payload["media_refs"]
     assert saved_payload["wave_peaks"] == migrated.wave_peaks
     _os.remove(wavp); _os.remove(quiet); _os.remove(old_sess)
-    # 속도 변환 결과는 OS 임시 폴더에만(프로젝트 cache에 남기지 않음)
-    from player.audio_stretch import _CACHE as _RATE_DIR
-    assert _RATE_DIR.name.startswith("scaleriff_rate_") and "cache" not in _RATE_DIR.parts[-2:]
 
     # 세션 저장/불러오기 — 분석 1회 결과를 링크 화면 파일입력으로 즉시 로드(재분석 없음)
     fd, sess = _tmp.mkstemp(suffix=".json"); _os.close(fd)
