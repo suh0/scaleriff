@@ -2,16 +2,15 @@
 
 타임라인을 재생하며 위젯을 갱신만 한다(§4: 재분석 없음).
 레이아웃: 상단바(뒤로/곡명/BPM/시간) · 코드 레인(고정 플레이헤드로 블록이 흐름)
-        · 리프 뷰(연습 시) · 피아노 · 하단 컨트롤 한 줄(연습모드·루프·
-        카운트인·재생)
+        · 리프 뷰(연습 시) · 피아노 · 하단 컨트롤 한 줄(루프·리프학습·재생)
 """
 from __future__ import annotations
 
 import bisect
 
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QPushButton, QFrame, QMenu,
-    QComboBox, QDialog, QFormLayout, QSlider, QCheckBox, QScrollArea
+    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QPushButton, QFrame,
+    QComboBox, QDialog, QFormLayout, QSlider, QCheckBox, QScrollArea, QMessageBox
 )
 from PyQt6.QtCore import pyqtSignal, Qt, QEvent
 
@@ -24,7 +23,6 @@ from ml.generate import _landing_pc
 
 from gui import theme as T
 from gui.anim import fade_in, reduced_motion, set_reduced_motion
-from gui.widgets.flow_header import FlowHeader
 from gui.widgets.elided_label import ElidedLabel
 from gui.widgets.piano import MIDI_HIGH, MIDI_LOW, PianoWidget
 from gui.widgets.chord_lane import ChordLane
@@ -72,7 +70,6 @@ class MainScreen(QWidget):
         root = QVBoxLayout(self.content)
         root.setContentsMargins(T.PAD_H, 16, T.PAD_H, 16)
         root.setSpacing(6)
-        root.addWidget(FlowHeader(5))
 
         # ── 상단 바 ──
         top = QHBoxLayout()
@@ -100,20 +97,6 @@ class MainScreen(QWidget):
         self.settings_btn.setStyleSheet(T.qss_ghost_btn())
         top.addWidget(self.settings_btn)
         root.addLayout(top)
-
-        self.feedback_lbl = QLabel("하단에서 연습 모드를 고른 뒤 재생하며 연주하세요.")
-        self.feedback_lbl.setStyleSheet(
-            f"color:{T.TEXT_BODY};background:{T.BG_SURFACE};border-left:3px solid {T.BORDER_ACTIVE};"
-            "border-radius:4px;padding:6px 10px;font-size:12px;")
-        self.feedback_lbl.setTextFormat(Qt.TextFormat.PlainText)
-        self.feedback_lbl.setWordWrap(True)
-        self.feedback_lbl.setToolTip("점수는 선택한 과제의 수행 지표이며 음악적 가치나 창의성 점수가 아닙니다.")
-        self.feedback_scroll = QScrollArea()
-        self.feedback_scroll.setFixedHeight(48)
-        self.feedback_scroll.setWidgetResizable(True)
-        self.feedback_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.feedback_scroll.setWidget(self.feedback_lbl)
-        root.addWidget(self.feedback_scroll)
         self.settings_btn.clicked.connect(self._show_settings)
 
         # ── 코드 레인 — HUD+다음 미리보기 통합(고정 플레이헤드) ──
@@ -123,16 +106,6 @@ class MainScreen(QWidget):
 
         self.guide_space = QWidget()
         self.guide_space.setMinimumHeight(40)
-        guide_row = QHBoxLayout(self.guide_space)
-        guide_row.setContentsMargins(0, 0, 0, 0)
-        legend = QLabel("● 근음   ● 코드톤   ● 스케일음")
-        legend.setText(
-            f"<span style='color:{T.BADGE_ROOT}'>●</span> 근음　"
-            f"<span style='color:{T.BADGE_CHORD}'>●</span> 코드톤　"
-            f"<span style='color:{T.TEXT_DIM}'>●</span> 스케일음")
-        legend.setStyleSheet(f"color:{T.TEXT_MUTED};font-size:11px;")
-        guide_row.addWidget(legend, 0, Qt.AlignmentFlag.AlignTop)
-        guide_row.addStretch(1)
         root.addWidget(self.guide_space, 1)
 
         # ── 피아노 (리프연습과 무관하게 가만히 — 가이드 그대로) ──
@@ -156,26 +129,8 @@ class MainScreen(QWidget):
         scrub_row.addWidget(self.total_time_lbl)
         root.addLayout(scrub_row)
 
-        # ── 하단 컨트롤 한 줄: 연습모드·루프 + 재생 ──
+        # ── 하단 컨트롤 한 줄: 루프·리프학습 + 재생 ──
         rrow = QHBoxLayout()
-        self.mode_btn = QPushButton("자유연습")
-        self.mode_btn.setFixedHeight(36)
-        self.mode_btn.setStyleSheet(T.qss_ghost_btn())
-        self.mode_menu = QMenu(self.mode_btn)
-        self.mode_menu.setStyleSheet(
-            f"QMenu{{background:{T.BG_INSET};color:{T.TEXT_BODY};"
-            f"border:1px solid {T.BORDER_DEFAULT};padding:6px;}}"
-            "QMenu::item{padding:8px 24px;}"
-            f"QMenu::item:selected{{background:{T.BORDER_DEFAULT};}}")
-        self._mode_actions = {}
-        for mode, text in (("free", "자유연습"), ("riff", "리프연습")):
-            action = self.mode_menu.addAction(text)
-            action.setCheckable(True)
-            action.triggered.connect(lambda checked=False, m=mode: self._select_practice(m))
-            self._mode_actions[mode] = action
-        self._mode_actions["free"].setChecked(True)
-        self.mode_btn.setMenu(self.mode_menu)
-        rrow.addWidget(self.mode_btn)
         # 루프 버튼 — 사이드바 토글(생성한 루프 리스트, 루프별 ON/OFF)
         self.loop_btn = QPushButton("루프")
         self.loop_btn.setCheckable(True)
@@ -267,7 +222,7 @@ class MainScreen(QWidget):
     def _place_falling_notes(self):
         geo = self.piano._geometry()
         if geo:
-            top = self.guide_space.y() + 22
+            top = self.guide_space.y()
             bottom = self.piano.y() + geo[2]
             self.riff.setGeometry(self.piano.x(), top, self.piano.width(), max(1, int(bottom - top)))
 
@@ -392,11 +347,10 @@ class MainScreen(QWidget):
         self.playhead = Playhead(tl.content_end(), tl.audio_ref, self)
         self.playhead.positionChanged.connect(self._on_tick)
         self.playhead.stateChanged.connect(self._on_state)
-        self.playhead.errorOccurred.connect(self.feedback_lbl.setText)
+        self.playhead.errorOccurred.connect(lambda msg: QMessageBox.warning(self, "재생 오류", msg))
         self.playhead.set_volume(self._audio_volume)
         self._held_keys.clear()
         self._last_tick = 0.0
-        self.feedback_lbl.setText("분석은 추정입니다. 코드·키를 확인한 뒤 하단에서 연습 모드를 고르세요.")
 
         self.song_lbl.setText(tl.title or tl.audio_ref or "내 곡")
         self.bpm_lbl.setText(f"{tl.key}  ·  {tl.bpm:.0f} BPM")
@@ -416,16 +370,8 @@ class MainScreen(QWidget):
 
     # ── 연습 모드 선택 ──────────────────────────────────────────
     def _select_practice(self, mode: str):
-        instructions = {
-            "free": "원곡과 함께 자유롭게 연주하세요.",
-            "riff": "낙하 가이드의 음높이와 리듬을 확인하며 리프를 연습하세요.",
-        }
-        self.feedback_lbl.setText(instructions[mode])
         self._mode = "practice" if mode == "riff" else "guide"
         practice = (self._mode == "practice")
-        for key, action in self._mode_actions.items():
-            action.setChecked(key == mode)
-        self.mode_btn.setText(self._mode_actions[mode].text())
         self.riff.setVisible(practice)
         self._place_falling_notes()
         self.riff.raise_()

@@ -24,7 +24,6 @@ from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
 
 from gui import theme as T
 from gui.anim import stagger
-from gui.widgets.flow_header import FlowHeader
 
 _ESTIMATED_SECONDS = 10 * 60  # 일반 곡의 다운로드·분석에 여유를 둔 예상 시간
 
@@ -143,7 +142,6 @@ class AnalyzingScreen(QWidget):
         content = T.compact_content(self, max_width=860)
         lay = QVBoxLayout(content)
         lay.setContentsMargins(T.PAD_H, T.PAD_V, T.PAD_H, T.PAD_V)
-        lay.addWidget(FlowHeader(1))
         lay.addStretch(1)
 
         self.title = QLabel("분석 중…")

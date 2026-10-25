@@ -1,7 +1,6 @@
 """스크럽 바 (정의서 §6 [3]).
 
 - 곡 전체 가로 타임라인
-- 코드 변경 눈금 + 코드명
 - 현재 재생 헤드
 - 루프 경계 표시
 - 드래그 = 즉시 seek (스크럽 = 인덱스 점프, ML 재실행 없음 §4)
@@ -93,21 +92,6 @@ class ScrubBar(QWidget):
 
         if not self._timeline or not self._timeline.segments:
             return
-
-        segs = self._timeline.segments
-
-        # 코드 변경 눈금(§6.1) — 비다이아토닉 구간은 빨강 강조(§3)
-        for seg in segs:
-            detour = getattr(seg, "is_detour", False)
-            if seg.start_bar == 0 and not detour:
-                continue
-            x = self._sec_to_x(seg.start_sec)
-            if detour:
-                p.setPen(QPen(QColor(T.KEY_PRESSED_OUT), 2))
-                p.drawLine(int(x), track_y - 6, int(x), track_y + track_h + 6)
-            else:
-                p.setPen(QPen(QColor(T.TEXT_DIM), 1))
-                p.drawLine(int(x), track_y - 3, int(x), track_y + track_h + 3)
 
         # 재생된 부분
         head_x = self._sec_to_x(self._pos)

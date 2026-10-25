@@ -104,7 +104,7 @@ class UIUXTest(unittest.TestCase):
         screen._pick_method("landing")
         self.assertTrue(screen.landing_box.isVisible())
 
-    def test_long_feedback_and_loop_lists_stay_within_window(self):
+    def test_long_loop_lists_stay_within_window(self):
         tl = build_dummy_timeline()
         tl.loops = [{"name": "긴 루프 이름" * 12, "start_bar": 0, "end_bar": 0, "on": False}
                     for _ in range(20)]
@@ -112,11 +112,9 @@ class UIUXTest(unittest.TestCase):
         screen.set_timeline(tl)
         screen.resize(1040, 740)
         screen.show()
-        screen.feedback_lbl.setText("긴 연습 피드백과 점수 근거입니다. " * 80)
         screen.loop_btn.click()
         self.app.processEvents()
         self.assertGreater(screen.loop_scroll.verticalScrollBar().maximum(), 0)
-        self.assertGreater(screen.feedback_scroll.verticalScrollBar().maximum(), 0)
         self.assertTrue(screen.content.rect().contains(screen.play_btn.geometry()))
         beat = BeatScreen()
         beat.set_timeline(tl)

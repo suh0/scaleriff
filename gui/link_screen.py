@@ -18,7 +18,6 @@ from PyQt6.QtCore import Qt, pyqtSignal, QSize
 
 from gui import theme as T
 from gui.anim import stagger
-from gui.widgets.flow_header import FlowHeader
 
 try:
     from PyQt6.QtSvgWidgets import QSvgWidget
@@ -115,7 +114,6 @@ class LinkScreen(QWidget):
         content = T.compact_content(self, max_width=860)
         self.stack = QStackedWidget(content)
         root = QVBoxLayout(content); root.setContentsMargins(T.PAD_H, T.PAD_V, T.PAD_H, T.PAD_V)
-        root.addWidget(FlowHeader(0))
         root.addWidget(self.stack)
 
         self._onboard = _Onboarding()

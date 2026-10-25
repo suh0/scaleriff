@@ -22,7 +22,7 @@ def main():
     screen.resize(1040, 740)
     screen.show()
     app.processEvents()
-    screen._mode_actions["riff"].trigger()
+    screen._select_practice("riff")
     assert screen.piano._preview_opacity == 0, "정지 중 모드 선택도 스케일 예고 제거"
     screen._on_seek(0)
     before = screen.riff._nodes()

@@ -16,7 +16,6 @@ from PyQt6.QtCore import pyqtSignal
 from analyze.theory import song_scale_options, pc_name
 from ml.generate import _landing_pc
 from gui import theme as T
-from gui.widgets.flow_header import FlowHeader
 from gui.widgets.elided_label import ElidedLabel
 
 GOALS = (("root", "1도"), ("third", "3도"), ("seventh", "7도"), ("chord_tone", "코드톤"))
@@ -57,7 +56,6 @@ class SetupScreen(QWidget):
         root = QVBoxLayout(content)
         root.setContentsMargins(T.PAD_H, T.PAD_V, T.PAD_H, T.PAD_V)
         root.setSpacing(12)
-        root.addWidget(FlowHeader(4))
 
         top = QHBoxLayout()
         self.back_btn = QPushButton("← 코드 편집")

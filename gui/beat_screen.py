@@ -25,7 +25,6 @@ from PyQt6.QtMultimedia import QSoundEffect
 
 from gui import theme as T
 from gui.anim import stagger
-from gui.widgets.flow_header import FlowHeader
 from analyze.theory import (
     parse_chord, scale_pcs, degree_for, diatonic_option, pc_name,
 )
@@ -297,8 +296,6 @@ class BeatScreen(QWidget):
         outer = QVBoxLayout(content)
         outer.setContentsMargins(T.PAD_H, T.PAD_V, T.PAD_H, T.PAD_V)
         outer.setSpacing(10)
-        self.flow = FlowHeader(2)
-        outer.addWidget(self.flow)
         self.pages = QStackedWidget()
         outer.addWidget(self.pages)
         self.beat_page = QWidget()
@@ -944,7 +941,6 @@ class BeatScreen(QWidget):
     def _set_locked(self, locked: bool):
         """확정 상태 토글 — 확정 전엔 코드표가, 확정 후엔 박자 편집부가 잠긴다."""
         self._locked = locked
-        self.flow.set_stage(3 if locked else 2)
         for w in (self.zoom_l, self.zoom_r, self.sig_box, self.bpm_edit):
             self._dim(w, locked)
         for w in (self._loop_wrap, self.holder):   # 미확정 격자의 코드표는 잠금

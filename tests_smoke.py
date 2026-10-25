@@ -125,7 +125,7 @@ def main():
     ), "시작박 표시가 남아 있음"
     tl_long = deepcopy(tl)
     bar_sec = tl.time_sig_beats() * tl.beat_sec()
-    for bar in range(6, 50):
+    for bar in range(6, 80):
         seg = deepcopy(tl.segments[bar % 3])
         seg.idx = bar
         seg.start_bar, seg.end_bar = bar, bar + 1
@@ -145,7 +145,7 @@ def main():
     assert vbar.maximum() > 0, "긴 코드표에 세로 스크롤이 생기지 않음"
     vbar.setValue(vbar.maximum())
     app.processEvents()
-    last_cell = win.beat._cells[49]
+    last_cell = win.beat._cells[79]
     last_pos = last_cell.mapTo(win.beat.grid_scroll.viewport(), QPoint(0, 0))
     assert last_pos.y() >= 0, "세로 스크롤 후 마지막 마디가 위로 잘림"
     assert last_pos.y() + last_cell.height() <= win.beat.grid_scroll.viewport().height(), \
@@ -303,12 +303,10 @@ def main():
     ms._on_tick(2.5)
     assert ms.lane._pos == 2.5 and ms.scrub._pos == 2.5
 
-    # 도전모드 메뉴 → 리프연습 / 자유연습 → 리프 뷰 표시 연동
-    assert ms.mode_btn.menu() is ms.mode_menu
-    assert [a.text() for a in ms.mode_menu.actions()] == ["자유연습", "리프연습"]
-    ms._mode_actions["riff"].trigger()
+    # 리프연습 / 자유연습 → 리프 뷰 표시 연동
+    ms._select_practice("riff")
     assert ms._mode == "practice" and not ms.riff.isHidden()
-    ms._mode_actions["free"].trigger()
+    ms._select_practice("free")
     assert ms._mode == "guide" and ms.riff.isHidden()
 
     # ML 리프: 스케일 '종류당 1개' (코드 등장마다가 아님, §8) — 코드별 모드 타임라인 기준
@@ -357,13 +355,13 @@ def main():
     assert _rv._total_beats == tl2.time_sig_beats(), f"가이드 1마디 아님: {_rv._total_beats}"
     assert all(n["beat_pos"] < tl2.time_sig_beats() for n in _rv._notes), "가이드에 2마디째 음"
     # §2 리프가 곡에 함께 구워짐(재생 헤드 동기) — 일시정지/시킹과 함께 동작
-    ms._mode_actions["riff"].trigger()     # 리프연습 → 이벤트 생성
+    ms._select_practice("riff")     # 리프연습 → 이벤트 생성
     assert ms._riff_events and ms._riff_times == sorted(ms._riff_times), "리프 이벤트 정렬"
     mid = tl.segments[1].start_sec
     ms._seek_riff_idx(mid)
     assert all(t < mid for t in ms._riff_times[:ms._riff_idx]), "시킹 커서 오류(앞)"
     assert all(t >= mid for t in ms._riff_times[ms._riff_idx:]), "시킹 커서 오류(뒤)"
-    ms._mode_actions["free"].trigger()     # 자유연습
+    ms._select_practice("free")     # 자유연습
 
     # §1 수동 코드 수정: 박자 조정 화면 코드 목록에서 바꾸면 스케일·리프 재계산
     win.beat.set_timeline(tl, ms._ml_model)
