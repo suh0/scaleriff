@@ -49,14 +49,14 @@ class EndToEndTest(unittest.TestCase):
                     screen.note_player.set_volume(0)
                     window._on_timeline_ready(timeline)
                     self.assertIs(window.stack.currentWidget(), window.beat)
-                    apply_chord_edit(timeline, 0, 1.2, "Dm7", screen._ml_model)
-                    apply_chord_edit(timeline, 1.2, 2.4, "G7", screen._ml_model)
+                    apply_chord_edit(timeline, 0, 2.4, "Dm7", screen._ml_model)
+                    apply_chord_edit(timeline, 2.4, 4.8, "G7", screen._ml_model)
                     timeline.loops = [{"name": "통합 검사", "start_bar": 0, "end_bar": 1,
                                        "start_sec": 0, "end_sec": 4.8, "on": True}]
                     timeline.bpm = 100
                     self.assertTrue(regrid_timeline(timeline, screen._ml_model, anchor_sec=0))
                     self.assertEqual(timeline.segment_at(.5).chord.name, "Dm7")
-                    self.assertEqual(timeline.segment_at(1.5).chord.name, "G7")
+                    self.assertEqual(timeline.segment_at(3.0).chord.name, "G7")
                     window._enter_score()
                     window._enter_main()
                     screen.range_combo.setCurrentIndex(screen.range_combo.findData(0))

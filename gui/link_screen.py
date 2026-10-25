@@ -3,6 +3,7 @@
 - 워드마크 로고(원형 황동 링) + 'ScaleRiff' 세리프 워드마크
 - 링크 붙여넣기 + 로컬 파일 선택
 - 최근 저장경로를 링크 입력란 아래에 표시
+- 최근 분석 세션 3개 — 클릭 즉시 로드
 - 제한 모드(백그라운드 분석 중): 세션(.json) 선택만 활성
 - (첫 실행) 온보딩 3카드. 스킵 가능
 """
@@ -196,6 +197,14 @@ class LinkScreen(QWidget):
         self.input_hint.setStyleSheet(f"color:{T.TEXT_DIM};font-size:11px;")
         lay.addWidget(self.input_hint)
 
+        # 최근 분석 세션(최대 3) — 클릭 즉시 로드
+        self.recent_box = QWidget()
+        self._recent_lay = QVBoxLayout(self.recent_box)
+        self._recent_lay.setContentsMargins(0, 6, 0, 0)
+        self._recent_lay.setSpacing(4)
+        lay.addWidget(self.recent_box)
+        self.recent_box.hide()
+
         lay.addSpacing(10)
         # 버튼은 내용 크기 + 가운데 정렬(가로로 안 늘임)
         go_row = QHBoxLayout()
@@ -232,6 +241,24 @@ class LinkScreen(QWidget):
         self._save_dir = (d or "").strip()
         self.save_label.setText(f"최근 저장경로: {self._save_dir}")
         self.save_label.setToolTip(self._save_dir)
+
+    def set_recent(self, paths):
+        while self._recent_lay.count():
+            self._recent_lay.takeAt(0).widget().deleteLater()
+        paths = [p for p in paths if os.path.isfile(p)][:3]
+        if paths:
+            head = QLabel("최근 분석")
+            head.setStyleSheet(f"color:{T.TEXT_MUTED};font-size:11px;")
+            self._recent_lay.addWidget(head)
+        for p in paths:
+            # 세션 파일명 = "{제목}_{해시16}.json"
+            name = os.path.splitext(os.path.basename(p))[0].rsplit("_", 1)[0]
+            btn = QPushButton(name or os.path.basename(p))
+            btn.setToolTip(p)
+            btn.setStyleSheet(T.qss_ghost_btn() + "QPushButton{text-align:left;}")
+            btn.clicked.connect(lambda _, p=p: self.buildRequested.emit(p))
+            self._recent_lay.addWidget(btn)
+        self.recent_box.setVisible(bool(paths))
 
     def _browse(self):
         if self._restricted:    # 분석 중 — 세션 열기만, 선택 즉시 로드

@@ -52,11 +52,11 @@ class MusicIntegrityTest(unittest.TestCase):
             self.assertTrue(all(n["midi"] % 12 in allowed
                                 for n in generate_scale_riff(None, o["kind"])))
 
-    def test_two_chords_inside_one_bar(self):
-        st = structure_from_grid([0, 2], [ChordSpan(0, 1, "Dm7"),
-                                         ChordSpan(1, 2, "G7")], 2, 4)
+    def test_one_chord_per_bar_by_longest_overlap(self):
+        st = structure_from_grid([0, 2, 4], [ChordSpan(0, 1.5, "Dm7"),
+                                            ChordSpan(1.5, 4, "G7")], 4, 4)
         self.assertEqual([(s.start_sec, s.end_sec, s.chord_name) for s in st.segments],
-                         [(0, 1, "Dm7"), (1, 2, "G7")])
+                         [(0, 2, "Dm7"), (2, 4, "G7")])
 
     def test_manual_chord_survives_regrid_and_roundtrip(self):
         tl = build_dummy_timeline()
@@ -74,9 +74,12 @@ class MusicIntegrityTest(unittest.TestCase):
         tl = build_dummy_timeline()
         tl.bar_times = [0, 2, 5]
         tl.beat_times = [0, .4, 1, 1.5, 2, 2.6, 3.3, 4.1, 5]
-        self.assertAlmostEqual(tl.time_at_beat(5), 2.6)
-        self.assertAlmostEqual(tl.beat_at(4.1), 7)
-        self.assertAlmostEqual(tl.beats_between(1, 4.1), 5)
+        grid = tl.beat_grid()                  # 마디선 + (보정한) 검출 비트
+        self.assertEqual(len(grid), 9)         # 2마디 × 4박 + 끝
+        self.assertGreater(grid[6] - grid[5], grid[2] - grid[1])   # 둘째 마디가 더 느림(가변)
+        self.assertAlmostEqual(tl.time_at_beat(5), grid[5])
+        self.assertAlmostEqual(tl.beat_at(grid[7]), 7)
+        self.assertAlmostEqual(tl.beats_between(grid[2], grid[7]), 5)
         for sec in (-1, 0, .7, 2.6, 4.8, 6):
             self.assertAlmostEqual(tl.time_at_beat(tl.beat_at(sec)), sec)
 

@@ -53,11 +53,11 @@
 ## 평가 재현
 
 ```powershell
-& ./.venv/Scripts/python.exe -m ml.evaluate --wjazzd data/wjazzd.db --out document/AI_EVALUATION.md
+& ./.venv/Scripts/python.exe -m ml.evaluate --wjazzd data/wjazzd.db --out cache/ai_evaluation/report.md
 ```
 
 규칙/부트스트랩/기존 학습 모델의 고정 진행 생성 제약을 비교하고, 곡 단위 재학습 결과는
-`cache/ai_evaluation`에 별도 저장한다. 결과와 정확한 해석은 [AI 평가](../../document/AI_EVALUATION.md)에 있다.
+`cache/ai_evaluation`에 별도 저장한다. 결과와 정확한 해석은 `cache/ai_evaluation/report.md`에 있다.
 
 전체 토큰 log loss는 재학습이 균등 기준보다 낮았지만 **온셋만의 log loss는 균등 기준보다 높았다**.
 관측 음에서 유도한 스케일과 정답 이전 토큰을 조건으로 한 확률 평가이며, 생성곡의 자연스러움이나 학습 효과의 입증이 아니다.

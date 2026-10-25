@@ -27,6 +27,7 @@ from gui.analyzing_screen import AnalyzingScreen
 from gui.beat_screen import BeatScreen
 from gui.score_screen import ScoreScreen
 from gui.main_screen import MainScreen
+from gui.widgets.busy_overlay import run_busy
 from build.timeline_builder import build_timeline
 from ml.generate import bake_examples
 
@@ -124,6 +125,7 @@ class AppWindow(QMainWindow):
         self._midi = None
         self.link_screen.set_save_dir(
             self._settings.value("save_dir", _CACHE_DIR, type=str))
+        self.link_screen.set_recent(self._settings.value("recent_sessions", [], type=list))
         self._try_start_midi()
 
     # ── 빌드 흐름 ────────────────────────────────────────────────
@@ -192,7 +194,12 @@ class AppWindow(QMainWindow):
             d = self.link_screen.save_dir() or _CACHE_DIR
             os.makedirs(d, exist_ok=True)
             self._settings.setValue("save_dir", d)   # 다음 실행에도 유지
-            tl.save_json(self._session_path(tl))
+            path = self._session_path(tl)
+            tl.save_json(path)
+            recent = self._settings.value("recent_sessions", [], type=list)
+            recent = [path] + [p for p in recent if p != path and os.path.isfile(p)]
+            self._settings.setValue("recent_sessions", recent[:3])
+            self.link_screen.set_recent(recent[:3])
             self.statusBar().showMessage("세션 저장 완료", 3000)
             return True
         except (OSError, ValueError) as error:
@@ -212,12 +219,18 @@ class AppWindow(QMainWindow):
 
     def _open_timeline(self, timeline):
         self._timeline = timeline
-        # 스케일 종류당 1개 리프 굽기(§8) — 악보 화면에서 미리 보여주기 위해 여기서 1회.
-        if not getattr(timeline, "scale_riffs", None):
-            bake_examples(timeline, self.main_screen._ml_model)
-        self._save_session(timeline)     # 재분석 없이 불러올 세션 파일(캐시)
-        self.beat.set_timeline(timeline, self.main_screen._ml_model)
-        self.stack.setCurrentWidget(self.beat)
+
+        def work():
+            # 스케일 종류당 1개 리프 굽기(§8) — 악보 화면에서 미리 보여주기 위해 여기서 1회.
+            if not getattr(timeline, "scale_riffs", None):
+                bake_examples(timeline, self.main_screen._ml_model)
+
+        def done(_):
+            self._save_session(timeline)     # 재분석 없이 불러올 세션 파일(캐시)
+            self.beat.set_timeline(timeline, self.main_screen._ml_model)
+            self.stack.setCurrentWidget(self.beat)
+
+        run_busy(self, work, done)
 
     # ── 백그라운드 분석 대기(연습하며 기다리기) ──────────────────
     def _enter_bg_wait(self):
@@ -318,6 +331,8 @@ class AppWindow(QMainWindow):
         if self.main_screen.playhead:
             self.main_screen.playhead.pause()
         self.beat.pause()
+        if getattr(self, "_busy_worker", None):   # 계산 중 종료 → 끝난 뒤 저장
+            self._busy_worker.wait()
         if self._timeline is not None:
             self._save_session(self._timeline)
         super().closeEvent(e)

@@ -495,10 +495,10 @@ class MainScreen(QWidget):
         self.bpm_lbl.setText(f"{tl.key}  ·  {tl.bpm:.0f} BPM")
         self.lane.set_timeline(tl)
         self.scrub.set_timeline(tl)
-        self.scrub.set_position(0.0)
-        self.time_lbl.setText(_fmt_sec(0))
         self.total_time_lbl.setText(_fmt_sec(tl.total_sec()))
-        self._render_at(0.0)
+        self._seek_to(tl.count_in_start())   # 처음 = 예비박부터(음수는 무음 프리롤)
+        self.scrub.set_position(self.playhead.position_sec())
+        self.time_lbl.setText(_fmt_sec(self.playhead.position_sec()))
 
     def pause(self):
         self.recorder.cancel()
@@ -565,7 +565,7 @@ class MainScreen(QWidget):
         self.recorder.cancel()
         self.pause()
         self._last_idx = -1
-        self._seek_to(0.0)
+        self._seek_to(self.tl.count_in_start() if self.tl else 0.0)
         self._on_state(False)
 
     # ── 재생 제어 ────────────────────────────────────────────────
@@ -585,7 +585,7 @@ class MainScreen(QWidget):
                 if self.playhead.is_playing():
                     self._reset_challenge()
                 else:
-                    self._seek_to(0.0)
+                    self._seek_to(self.tl.count_in_start())
                     self.playhead.play()
             else:
                 self.playhead.toggle()

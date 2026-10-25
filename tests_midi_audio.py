@@ -18,8 +18,11 @@ from PyQt6.QtMultimedia import QAudioBufferOutput, QMediaPlayer
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication
 from player.midi_input import MidiInput
-from player.note_synth import NotePlayer
+from player.note_synth import RELEASE_SEC, NotePlayer
 from player.playhead import Playhead
+
+
+RELEASE_MS = round(RELEASE_SEC * 1000) + 80
 
 
 class FakePort:
@@ -163,13 +166,19 @@ class MidiAudioTest(unittest.TestCase):
             synth.note_off(60, channel=0)
             self.assertTrue(quiet.playing)
             synth.note_off(60, channel=1)
+            self.assertTrue(loud.playing)          # 즉시 끊지 않고 페이드
+            self.assertLess(loud.level, 0.8)
+            QTest.qWait(RELEASE_MS)
             self.assertFalse(loud.playing)
+            self.assertEqual(loud.level, 0.0)
             synth.set_pedal(False, channel=0)
+            QTest.qWait(RELEASE_MS)
             self.assertFalse(quiet.playing)
             synth.note_on(62, velocity=127)
             synth.set_volume(0.3)
             self.assertAlmostEqual(synth._effect(62).level, 0.3)
             synth.stop_all()
+            QTest.qWait(RELEASE_MS)
             self.assertFalse(synth._effect(62).playing)
 
     def test_scheduled_note_length_and_old_timer_cannot_stop_repeated_note(self):
@@ -181,7 +190,7 @@ class MidiAudioTest(unittest.TestCase):
             synth.play_note(60, duration=0.15)
             QTest.qWait(50)
             self.assertTrue(synth._effect(60, 16).playing)
-            QTest.qWait(140)
+            QTest.qWait(100 + RELEASE_MS)
             self.assertFalse(synth._effect(60, 16).playing)
             synth.play_note(60, duration=0.03)
             synth.stop_all()
@@ -201,13 +210,14 @@ class MidiAudioTest(unittest.TestCase):
             riff = synth._effect(60, 16)
             review = synth._effect(60, 17)
             synth.note_off(60, channel=0)
+            QTest.qWait(RELEASE_MS)
             self.assertFalse(user.playing)
-            self.assertTrue(riff.playing)
             self.assertTrue(review.playing)
-            QTest.qWait(60)
+            QTest.qWait(10)
             self.assertFalse(riff.playing)
             self.assertTrue(review.playing)
             synth.stop_all()
+            QTest.qWait(RELEASE_MS)
             self.assertFalse(review.playing)
 
     def test_virtual_rate_change_preserves_position_and_preroll_pause(self):

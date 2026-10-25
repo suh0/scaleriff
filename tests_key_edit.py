@@ -5,7 +5,7 @@ import unittest
 from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-from PyQt6.QtWidgets import QApplication, QLabel
+from PyQt6.QtWidgets import QApplication
 from gui.app import AppWindow
 from player.dummy_timeline import build_dummy_timeline
 from player.timeline import Timeline
@@ -38,8 +38,7 @@ class KeyEditTest(unittest.TestCase):
         self.assertEqual(tl.bar_times, bars)
         self.assertEqual(tl.segments[2].scale_name, "C 리디안")
         self.assertEqual(tl.segments[2].note_set, [0, 2, 4, 6, 7, 9, 11])
-        self.assertEqual([x.text() for x in win.beat._cells[-1].findChildren(QLabel)],
-                         ["0", "", ""])
+        self.assertNotIn(-1, win.beat._cells)   # 예비박은 코드표에 없음
         win.beat._on_done()
         self.assertIs(win.stack.currentWidget(), win.score)
         self.assertIn("G major", win.score.key_lbl.text())

@@ -1,4 +1,4 @@
-"""피아노 키보드 위젯 — ScaleRiff (SCALERIFF_DESIGN_SPEC §5 v8).
+"""피아노 키보드 위젯 — ScaleRiff.
 
 핵심 원칙 (v8):
 - 건반 fill·border는 상태와 무관하게 항상 동일 (기본색 고정)

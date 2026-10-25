@@ -8,7 +8,7 @@ from __future__ import annotations
 import os
 import numpy as np
 
-from PyQt6.QtCore import QObject, QTimer, QUrl
+from PyQt6.QtCore import QObject, Qt, QTimer, QUrl
 
 SR = 44100   # 샘플레이트
 
@@ -43,6 +43,8 @@ os.makedirs(_CACHE, exist_ok=True)
 
 NOTE_DUR = 6.0   # 누른 동안 재생할 피아노의 자연 감쇠
 DEFAULT_NOTE_DUR = 1.1
+RELEASE_SEC = 0.08   # note-off 페이드 — 즉시 stop()은 파형을 잘라 '딱' 팝이 난다
+_FADE_STEPS = 8
 
 
 def _render_silence_wav() -> str:
@@ -52,6 +54,22 @@ def _render_silence_wav() -> str:
         import soundfile as sf
         sf.write(path, np.zeros(int(SR * 0.12), dtype=np.int16), SR,
                  subtype="PCM_16")
+    return path
+
+
+def render_click_wav(freq: float) -> str:
+    """메트로놈 클릭 — 150ms 사인이 스스로 0까지 감쇠(stop() 없이 재생 → 끊김 팝 없음).
+
+    30ms처럼 너무 짧으면 Windows QSoundEffect가 출력 장치를 여는 동안 통째로 묻힌다.
+    """
+    path = os.path.join(_CACHE, f"click_v2_{int(freq)}.wav")
+    if not os.path.exists(path):
+        import soundfile as sf
+        t = np.arange(int(SR * 0.15)) / SR
+        y = np.sin(2.0 * np.pi * freq * t) * np.exp(-t / 0.025)
+        y[-int(0.01 * SR):] *= np.linspace(1.0, 0.0, int(0.01 * SR))   # 끝 10ms 페이드
+        y[:int(0.001 * SR)] *= np.linspace(0.0, 1.0, int(0.001 * SR))   # 1ms 어택
+        sf.write(path, (y * 0.8 * 32767).astype(np.int16), SR, subtype="PCM_16")
     return path
 
 
@@ -157,10 +175,24 @@ class NotePlayer(QObject):
 
     def _release(self, key):
         self._sustained.discard(key)
-        self._velocity.pop(key, None)
+        velocity = self._velocity.pop(key, None)
+        if self._fx.get(key) is None or velocity is None:
+            return
+        # ponytail: 같은 음을 페이드 중(80ms 안)에 재타건하면 stop()+play() 팝은 남는다 — 키당 보이스 2개로 교대하면 해결
+        self._generation[key] = generation = self._generation.get(key, 0) + 1
+        self._fade(key, generation, self._volume * velocity / 127.0, _FADE_STEPS)
+
+    def _fade(self, key, generation, start, left):
+        """볼륨을 계단식으로 내린 뒤 stop() — 새 note_on(세대 변경)이 오면 중단."""
         eff = self._fx.get(key)
-        if eff is not None:
+        if eff is None or self._generation.get(key) != generation:
+            return
+        if left <= 0:
             eff.stop()
+            return
+        eff.setVolume(start * (left - 1) / _FADE_STEPS)
+        QTimer.singleShot(round(RELEASE_SEC * 1000 / _FADE_STEPS), Qt.TimerType.PreciseTimer,
+                          lambda: self._fade(key, generation, start, left - 1))
 
     def set_pedal(self, down: bool, channel: int = 0):
         channel = int(channel)

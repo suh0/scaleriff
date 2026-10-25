@@ -192,8 +192,10 @@ class UIUXTest(unittest.TestCase):
         expected = [80 * (1 - (t - .25) / screen.riff._lead) for t in tl.beat_grid() if .25 <= t <= .25 + screen.riff._lead]
         self.assertEqual(screen.riff._beat_lines(), expected)
         screen.riff.set_position(2.2, [(1.4, 2.6)])
-        # 다음 반복의 첫 실제 박 1.4초는 루프 길이 1.2초 뒤인 2.6초에 예고된다.
-        self.assertTrue(any(abs(y - 64) < 1e-6 for y in screen.riff._beat_lines()))
+        # 다음 반복의 루프 안 첫 실제 박은 루프 길이 1.2초 뒤에 예고된다.
+        first = min(t for t in tl.beat_grid() if t >= 1.4)
+        y = 80 * (1 - (first + 1.2 - 2.2) / screen.riff._lead)
+        self.assertTrue(any(abs(v - y) < 1e-6 for v in screen.riff._beat_lines()))
 
     def test_manual_mode_switch_replaces_previous_lesson_instruction(self):
         screen = MainScreen()

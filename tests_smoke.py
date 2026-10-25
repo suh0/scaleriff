@@ -103,17 +103,20 @@ def main():
     assert win.beat.pages.currentWidget() is win.beat.beat_page
     assert win.beat.zoom_l.isVisible() and not win.beat.grid_scroll.isVisible()
     assert not win.beat.done_btn.isVisible()
-    beat_content = win.beat.findChild(QWidget, "compactContent")
+    # 박자 3단계(세로 한 화면): 현재 단계까지 활성, 아랫단계는 흐리게·비활성
+    bs = win.beat
+    for step in (1, 2, 3):
+        assert bs._step == step
+        assert [sec.isVisible() for sec in bs.sections] == [True] * 3
+        assert [sec.isEnabled() for sec in bs.sections] == [i <= step for i in (1, 2, 3)]
+        assert bs.confirm_btn.isVisible() == (step == 3)
+        if step < 3:
+            bs.next_btn.click()
+    bs._show_step(1)
+    assert bs._step == 1
     for ww, wh in ((1040, 740), (1600, 1000)):
         win.resize(ww, wh)
         app.processEvents()
-        zoom_l_pos = win.beat.zoom_l.mapTo(beat_content, QPoint(0, 0))
-        zoom_r_pos = win.beat.zoom_r.mapTo(beat_content, QPoint(0, 0))
-        confirm_pos = win.beat.confirm_btn.mapTo(beat_content, QPoint(0, 0))
-        assert abs(zoom_l_pos.y() - zoom_r_pos.y()) <= 2, \
-            "처음/마지막 10초 확대바가 한 줄에 있지 않음"
-        assert confirm_pos.x() > zoom_r_pos.x() + win.beat.zoom_r.width(), \
-            "확정 버튼이 박자 조정바 오른쪽에 있지 않음"
         assert win.beat.grid_scroll.horizontalScrollBar().maximum() == 0, \
             "마디별 코드에 가로 스크롤이 생김"
     win.resize(1040, 740)
@@ -134,7 +137,8 @@ def main():
     win.beat.confirm_btn.click()
     app.processEvents()
     cell0_pos = win.beat._cells[0].mapTo(win.beat.holder, QPoint(0, 0))
-    cell7_pos = win.beat._cells[7].mapTo(win.beat.holder, QPoint(0, 0))
+    from gui.beat_screen import BARS_PER_ROW
+    cell7_pos = win.beat._cells[BARS_PER_ROW].mapTo(win.beat.holder, QPoint(0, 0))
     assert cell7_pos.y() > cell0_pos.y(), \
         "마디별 코드가 한 줄로 늘어나 가로 스크롤을 만듦"
     assert win.beat.grid_scroll.horizontalScrollBar().maximum() == 0, \
@@ -153,7 +157,7 @@ def main():
     assert win.beat.pages.currentWidget() is win.beat.beat_page
     win.beat.confirm_btn.click()      # 확인 = 박자 적용 후 코드 편집 화면
     assert win.stack.currentWidget() is win.beat
-    assert win.beat._locked and win.beat.confirm_btn.text() == "확인"
+    assert win.beat._locked and win.beat.confirm_btn.text().startswith("확인")
     assert win.beat.pages.currentWidget() is win.beat.chord_page
     assert win.beat.grid_scroll.isVisible() and not win.beat.zoom_l.isVisible()
     assert win.beat.done_btn.isVisible()
@@ -407,6 +411,9 @@ def main():
     d2 = _TL2.from_dict(old)
     assert d2.bar_times == [] and d2.split_point == 60 and d2.loops == []
 
+    # 연습 화면·도전은 예비박(코드 없음)부터 시작
+    assert ms.playhead.position_sec() == tl.count_in_start() < tl.bar_times[0]
+    tl.count_in_bars = 0          # 아래 필터 검사는 첫 코드 위치(예비박 없음)에서
     # 난이도: 선택 → 건반 목표음 필터
     ms._difficulty_actions[0].trigger()         # Lv1: 왼손 근음 + 오른손 코드톤
     seg = ms._current_segment()
@@ -429,6 +436,7 @@ def main():
     # 해제 → 필터 해제
     ms._mode_actions["free"].trigger()
     assert ms.piano._split == 0
+    tl.count_in_bars = 1
 
     # §3.5 2차: 박자 조정 화면 — 좌(시작박)/우(BPM) 드래그 반응형 → 확정 시 재격자화
     from build.real_builder import regrid_timeline
@@ -458,10 +466,10 @@ def main():
     bs.bpm_edit.setText("120")
     bs._on_bpm_edited()
     assert abs(bs.bar_len - 2.0) < 1e-9 and abs(bs.anchor - 0.5) < 1e-9
-    # 드래그를 놓으면 그 마디선 위치부터 재생
-    bs._on_drag_end(1)
-    assert bs.playhead.is_playing(), "드래그 종료 후 재생 안 됨"
-    assert abs(bs.playhead.position_sec() - 2.5) < 0.05, bs.playhead.position_sec()
+    # 재생은 스페이스바(_toggle_play)만 — 1마디(시작박)부터
+    bs._toggle_play()
+    assert bs.playhead.is_playing(), "스페이스 재생 안 됨"
+    assert abs(bs.playhead.position_sec() - 0.5) < 0.05, bs.playhead.position_sec()
     bs.pause()
     bars_before = list(tl3.bar_times)
     assert tl3.bar_times == bars_before, "드래그만으로 재격자화됨"
@@ -472,8 +480,8 @@ def main():
     assert tl3.bpm == 120.0 and tl3.bar_times == [0.5, 2.5, 4.5, 6.5, 8.0], \
         (tl3.bpm, tl3.bar_times)
     assert [s.chord.name for s in tl3.segments] == ["C", "F"]
-    assert tl3.segments[1].start_sec == 4.0 and tl3.segments[1].scale_name == "F 리디안", \
-        "원본 F 코드의 4초 진입 시점을 마디선으로 옮기면 안 됨"
+    assert tl3.segments[1].start_sec == 4.5 and tl3.segments[1].scale_name == "F 리디안", \
+        "한 마디 한 코드: F 진입은 마디선(4.5초)에 정렬돼야 함"
     assert all(s.example for s in tl3.segments), "재격자화 후 리프 미굽기"
     assert bs.grid.count() > 0, "확정 후 코드 목록 미갱신"
     bs.back_to_beat_btn.click()
@@ -585,7 +593,16 @@ def main():
     assert peaks and all(-1.0 <= lo <= hi <= 1.0 for lo, hi in peaks)
     assert abs(peaks[0][1] - 12000 / 32768) < 1e-6, peaks[0]
     assert _wave_peaks("no_such.wav", 0.0, 1.0) == []    # 캐시 유실 → 파형 생략
-    _os.remove(wavp)
+    # 곡 전체 기준 정규화: 작게 녹음된 곡도 큰 곡과 같은 높이로
+    from gui.beat_screen import _wave_level
+    quiet = wavp + ".q.wav"
+    with _wv.open(quiet, "wb") as f:
+        f.setnchannels(1); f.setsampwidth(2); f.setframerate(22050)
+        f.writeframes(_st.pack("<h", 3000) * 22050)
+    hi = [_wave_peaks(x, 0.0, 1.0, level=_wave_level(x))[0][1] for x in (wavp, quiet)]
+    assert all(abs(v - 1.0) < 1e-3 for v in hi), hi
+    assert _wave_level("no_such.wav") == 1.0
+    _os.remove(wavp); _os.remove(quiet)
 
     # 세션 저장/불러오기 — 분석 1회 결과를 링크 화면 파일입력으로 즉시 로드(재분석 없음)
     fd, sess = _tmp.mkstemp(suffix=".json"); _os.close(fd)
@@ -604,7 +621,7 @@ def main():
         assert win.link_screen.save_label.text() == f"최근 저장경로: {save_dir}"
         with patch.object(win, "_settings"):
             win._save_session(tl3)
-            win._settings.setValue.assert_called_once_with("save_dir", save_dir)
+            win._settings.setValue.assert_any_call("save_dir", save_dir)
         saved = _TL.load_json(win._session_path(tl3))
         assert saved.bpm == tl3.bpm and saved.chord_spans == tl3.chord_spans
     win.link_screen.set_save_dir(previous_dir)

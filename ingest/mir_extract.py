@@ -24,7 +24,6 @@ from ingest._madmom_compat import (
 _MADMOM_SR = 44100   # madmom 모델 학습 SR(검증된 경로). 입력은 이 SR로 리샘플.
 
 DOWNBEAT_METERS = [3, 4]          # 다운비트 트래킹 박자 후보
-BPM_MIN, BPM_MAX = 70.0, 185.0    # BPM 옥타브 sanity 목표 범위
 
 
 @dataclass
@@ -50,24 +49,15 @@ class MirResult:
     content_span: tuple[float, float] = (0.0, 0.0)  # 무음 인트로/아웃트로 제외 구간
 
 
-# ── 비트/다운비트 트래킹 (BPM 옥타브 sanity 포함) ──────────────────
-def _octave_fix_bpm(bpm: float) -> float:
-    if bpm <= 0:
-        return 100.0
-    while bpm < BPM_MIN:
-        bpm *= 2
-    while bpm > BPM_MAX:
-        bpm /= 2
-    return bpm
-
-
+# ── 비트/다운비트 트래킹 ─────────────────────────────────────────
 def _bpm_from_beats(beat_times) -> float:
+    """비트 간격 그대로의 BPM — 2배·½ 보정 안 함(BPM이 격자와 어긋나지 않게)."""
     if len(beat_times) < 2:
         return 100.0
     med = float(np.median(np.diff(beat_times)))
     if med <= 0:
         return 100.0
-    return round(_octave_fix_bpm(60.0 / med), 1)
+    return round(60.0 / med, 1)
 
 
 def track_beats_downbeats(wav_path: str, y, sr):

@@ -14,8 +14,33 @@ import bisect
 import os
 import tempfile
 import math
+import statistics
 
 from analyze.theory import Chord
+
+
+def smooth_beats(beat_times: list[float], w: int = 8) -> list[float]:
+    """검출 비트 보정 — 박마다 앞뒤 ±w박을 직선 회귀해 지터(10ms 반올림·검출 흔들림)를 걷는다.
+
+    느린 템포 변화는 따라간다. 간격으로 박 번호를 세어 놓친 박은 채워 넣으므로
+    결과는 박 하나당 한 시각(연속)이다.
+    """
+    bt = list(beat_times)
+    if len(bt) < 4:
+        return bt
+    med = statistics.median(b - a for a, b in zip(bt, bt[1:]))
+    idx = [0]
+    for a, b in zip(bt, bt[1:]):
+        idx.append(idx[-1] + max(1, round((b - a) / med)))
+    fitted = []
+    for i, n in enumerate(idx):
+        lo, hi = max(0, i - w), min(len(bt), i + w + 1)
+        fit = statistics.linear_regression(idx[lo:hi], bt[lo:hi])
+        fitted.append(fit.intercept + fit.slope * n)
+    out = []
+    for (na, ta), (nb, tb) in zip(zip(idx, fitted), zip(idx[1:], fitted[1:])):
+        out.extend(ta + (tb - ta) * (n - na) / (nb - na) for n in range(na, nb))
+    return out + [fitted[-1]]
 
 
 @dataclass
@@ -137,23 +162,40 @@ class Timeline:
     key_override: bool = False  # 직접 선택한 키는 재격자화에서 자동 변경하지 않음
     chord_overrides: list = field(default_factory=list)  # [원본 시작초, 끝초, 수동 코드]
     timing_override: bool = False  # BPM 직접 보정 시에는 균등 격자 사용
+    count_in_bars: int = 1     # 첫 마디 앞 예비박(코드 없음, 최소 1) — 연습 화면 재생 시작점
+    grid_confirmed: bool = False  # 박자 화면에서 확정됨 → 재진입 시 자동 비트 정렬 생략
+    chord_end: float | None = None  # 코드 인식 끝(마디선, 초) — 이후는 재생만, 코드 없음
     analysis_info: dict = field(default_factory=dict)
     model_info: dict = field(default_factory=dict)
     practice_history: list = field(default_factory=list)
 
+    def smoothed_beats(self) -> list[float]:
+        """보정 비트(smooth_beats) — 원자료 beat_times는 보존, 결과만 캐시."""
+        key = (id(self.beat_times), len(self.beat_times))
+        cache = getattr(self, "_smooth_cache", None)
+        if cache is None or cache[0] != key:
+            cache = self._smooth_cache = (key, smooth_beats(self.beat_times))
+        return cache[1]
+
     def beat_grid(self) -> list[float]:
-        """마디 앵커와 검출 비트를 함께 쓰는 원본 오디오 시간축."""
+        """마디 앵커와 보정한 검출 비트를 함께 쓰는 원본 오디오 시간축."""
         if len(self.bar_times) < 2:
             return []
+        key = (tuple(self.bar_times), self.time_sig, self.timing_override,
+               id(self.beat_times), len(self.beat_times))
+        cache = getattr(self, "_grid_cache", None)
+        if cache is not None and cache[0] == key:
+            return cache[1]
         out = []
         beats = self.time_sig_beats()
-        raw = [] if self.timing_override else self.beat_times
+        raw = [] if self.timing_override else self.smoothed_beats()
         for start, end in zip(self.bar_times, self.bar_times[1:]):
             inner = [t for t in raw if start + 1e-5 < t < end - 1e-5]
             out.extend([start] + (inner if len(inner) == beats - 1 else
                                   [start + (end - start) * i / beats
                                    for i in range(1, beats)]))
-        return out + [self.bar_times[-1]]
+        self._grid_cache = (key, out + [self.bar_times[-1]])
+        return self._grid_cache[1]
 
     def beat_at(self, sec: float) -> float:
         grid = self.beat_grid()
@@ -208,7 +250,7 @@ class Timeline:
         for seg in self.segments:
             if seg.start_sec <= t < seg.end_sec:
                 return seg
-        if self.segments and t >= self.segments[-1].end_sec:
+        if self.segments and t >= self.segments[-1].end_sec and self.chord_end is None:
             return self.segments[-1]
         return None
 
@@ -216,7 +258,7 @@ class Timeline:
         for i, seg in enumerate(self.segments):
             if seg.start_sec <= t < seg.end_sec:
                 return i
-        if self.segments and t >= self.segments[-1].end_sec:
+        if self.segments and t >= self.segments[-1].end_sec and self.chord_end is None:
             return len(self.segments) - 1
         return -1
 
@@ -236,11 +278,19 @@ class Timeline:
         return None
 
     def total_sec(self) -> float:
-        return self.segments[-1].end_sec if self.segments else 0.0
+        """곡 길이 — 코드 인식 끝(chord_end) 뒤 구간도 포함."""
+        end = self.segments[-1].end_sec if self.segments else 0.0
+        return max(end, self.bar_times[-1]) if self.bar_times else end
 
     def content_end(self) -> float:
         cs, ce = self.content_span
         return ce if ce > cs else self.total_sec()
+
+    def count_in_start(self) -> float:
+        """예비박 시작 시각 — 첫 마디선에서 예비박 마디만큼 앞(음수면 무음 프리롤)."""
+        if not self.bar_times:
+            return 0.0
+        return self.bar_times[0] - self.count_in_bars * self.time_sig_beats() * self.beat_sec()
 
     # ── 직렬화 ───────────────────────────────────────────────────
     def to_dict(self):
@@ -261,6 +311,9 @@ class Timeline:
             "key_override": self.key_override,
             "chord_overrides": [list(row) for row in self.chord_overrides],
             "timing_override": self.timing_override,
+            "count_in_bars": self.count_in_bars,
+            "grid_confirmed": self.grid_confirmed,
+            "chord_end": self.chord_end,
             "analysis_info": dict(self.analysis_info), "model_info": dict(self.model_info),
             "practice_history": list(self.practice_history),
             "segments": [s.to_dict() for s in self.segments],
@@ -302,6 +355,9 @@ class Timeline:
             key_override=d.get("key_override", False),
             chord_overrides=[list(row) for row in d.get("chord_overrides", [])],
             timing_override=d.get("timing_override", False),
+            count_in_bars=max(1, int(d.get("count_in_bars", 1))),
+            grid_confirmed=d.get("grid_confirmed", False),
+            chord_end=d.get("chord_end"),
             analysis_info=dict(d.get("analysis_info", {})),
             model_info=dict(d.get("model_info", {})),
             practice_history=list(d.get("practice_history", [])),

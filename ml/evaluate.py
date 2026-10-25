@@ -1,6 +1,6 @@
 """Reproducible generation checks and a separate tune-disjoint Markov evaluation.
 
-Run: .venv/Scripts/python.exe -m ml.evaluate --out document/AI_EVALUATION.md
+Run: .venv/Scripts/python.exe -m ml.evaluate --out cache/ai_evaluation/report.md
 Original datasets and models are read only. Derived data/model/results live in cache.
 """
 from __future__ import annotations
@@ -155,7 +155,7 @@ def _heldout_evaluation(db_path, cache_dir, bootstrap, seed):
 
 def _markdown(report):
     comparison = report["generation_comparison"]
-    lines = ["# ScaleRiff AI 평가", "", "재현 명령: `.venv/Scripts/python.exe -m ml.evaluate --out document/AI_EVALUATION.md`", "",
+    lines = ["# ScaleRiff AI 평가", "", "재현 명령: `.venv/Scripts/python.exe -m ml.evaluate --out cache/ai_evaluation/report.md`", "",
              f"평가 버전 `{EVALUATION_VERSION}`, 곡 분리 seed={report['seed']}. 고정 수작업 진행 "
              f"{comparison['reference_fixture_count']}개 × 3도/7도 목표 × 변주 {len(comparison['variants'])}개.", "",
              "이 진행은 WJazzD의 홀드아웃 정답 프레이즈가 아닌 독립적인 규칙 점검용 기준이다.", "",
@@ -234,7 +234,7 @@ def run_evaluation(out, wjazzd=None, cache_dir=None, seed=42):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--out", default="document/AI_EVALUATION.md")
+    parser.add_argument("--out", default="cache/ai_evaluation/report.md")
     parser.add_argument("--wjazzd", default=None)
     parser.add_argument("--cache-dir", default=None)
     parser.add_argument("--seed", type=int, default=42)

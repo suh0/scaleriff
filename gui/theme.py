@@ -1,4 +1,4 @@
-"""다크 스튜디오 디자인 토큰. 현행 기준: document/UI_UX.md."""
+"""다크 스튜디오 디자인 토큰. 현행 기준: 이 파일."""
 from __future__ import annotations
 import os
 from PyQt6.QtGui import QFontDatabase, QPalette, QColor

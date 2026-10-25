@@ -204,7 +204,7 @@ def _measure_clip(path, truth, cache_dir, tolerance, model):
 
 def _report_markdown(report):
     lines = ["# ScaleRiff 음악 분석 평가", "",
-             "재현 명령: `.venv/Scripts/python.exe tools/evaluate_music.py --out document/MUSIC_EVALUATION.md`", "",
+             "재현 명령: `.venv/Scripts/python.exe tools/evaluate_music.py --out cache/music_evaluation/report.md`", "",
              f"버전 `{BENCHMARK_VERSION}`. 동일한 C–Am–F–G × 2, 4/4, 100 BPM, 8마디(19.2초)를 "
              "22,050 Hz로 합성했다. 기준 키는 C major다. 코드 어택/릴리즈는 20 ms, 음색은 기음+약한 2차 배음이다.", "",
              "타악 조건은 같은 화성에 4분음표마다 감쇠 킥과 1.8–7 kHz 대역 잡음을 더한다. "
@@ -295,7 +295,7 @@ def run_benchmark(out, tolerance=.07):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--out", default=str(_ROOT / "document" / "MUSIC_EVALUATION.md"))
+    parser.add_argument("--out", default=str(_ROOT / "cache" / "music_evaluation" / "report.md"))
     parser.add_argument("--tolerance", type=float, default=.07)
     args = parser.parse_args()
     if not math.isfinite(args.tolerance) or args.tolerance < 0:
