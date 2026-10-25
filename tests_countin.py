@@ -222,7 +222,6 @@ class CountInTest(unittest.TestCase):
         self.assertEqual(tl.bar_times[:-1], expected)
         self.assertFalse(tl.timing_override)      # 박도 검출 비트를 따름
         segments = list(tl.segments)
-        screen._back_to_beat()
         screen._on_confirm()                      # 무변경 확정 → 재격자화 생략
         self.assertTrue(all(a is b for a, b in zip(segments, tl.segments)))
         screen.set_timeline(tl)                   # 재진입: 같은 격자 복원
@@ -491,8 +490,10 @@ class CountInTest(unittest.TestCase):
         screen.bpm_edit.setText("120.0")
         screen.zoom_l.setFocus()
         QTest.keyClick(win, Qt.Key.Key_Return)
-        QTest.keyClick(win, Qt.Key.Key_Return)     # 3단계에서 Enter = 확인 → 코드 편집
-        self.assertTrue(screen._locked)
+        done = []
+        screen.proceedRequested.connect(lambda: done.append(True))
+        QTest.keyClick(win, Qt.Key.Key_Return)     # 3단계에서 Enter = 확인 → 학습 설정
+        self.assertTrue(done)
         screen.close()
 
     def test_tempo_row_on_top_reset_and_bpm_enter_releases_cursor(self):

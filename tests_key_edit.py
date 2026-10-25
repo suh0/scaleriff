@@ -24,6 +24,7 @@ class KeyEditTest(unittest.TestCase):
         win._timeline = tl
         win.beat.set_timeline(tl)
         win.beat._on_confirm()
+        win.beat._build_grid()
         box = win.beat.key_box
         self.assertEqual(box.currentData(), "C major")
         self.assertEqual(box.count(), 24)
@@ -39,11 +40,10 @@ class KeyEditTest(unittest.TestCase):
         self.assertEqual(tl.segments[2].scale_name, "C 리디안")
         self.assertEqual(tl.segments[2].note_set, [0, 2, 4, 6, 7, 9, 11])
         self.assertNotIn(-1, win.beat._cells)   # 예비박은 코드표에 없음
-        win.beat._on_done()
+        win._enter_setup()
         self.assertIs(win.stack.currentWidget(), win.setup)
         self.assertIn("G major", win.setup.key_lbl.text())
         self.assertIn("G 메이저 펜타토닉", win.setup.scale_btns[0].text())
-        win.beat._back_to_beat()
         win.beat._on_confirm()
         self.assertEqual(tl.key, "G major")
         self.assertEqual(tl.segments[0].chord.name, "Fmaj7")
@@ -59,6 +59,33 @@ class KeyEditTest(unittest.TestCase):
         win.beat.set_timeline(loaded)
         self.assertEqual(box.currentData(), "C minor")
         win.close()
+
+    def test_chord_dialog_reestimates_key_unless_chosen(self):
+        from PyQt6.QtCore import QTimer
+        with patch.object(AppWindow, "_try_start_midi"), \
+                patch.object(AppWindow, "_save_session"):
+            win = AppWindow()
+            tl = build_dummy_timeline()
+            win._timeline = tl
+            win.beat.set_timeline(tl)
+            win._enter_setup()
+
+            def edit(names, key=None):
+                def run():
+                    for i, name in enumerate(names):
+                        win.beat._apply_chord(tl.segments[i], name)
+                    if key:
+                        win.beat.key_box.setCurrentIndex(win.beat.key_box.findData(key))
+                    win.beat.done_btn.click()
+                QTimer.singleShot(0, run)
+                win.setup.chord_btn.click()
+            edit(["E", "A", "B7", "E", "A", "B7"])
+            self.assertEqual(tl.key, "E major")
+            self.assertIn("E 메이저", win.setup.scale_btns[0].text())
+            self.assertTrue(all(not s.is_detour for s in tl.segments))
+            edit(["Dm7", "G7", "Cmaj7"], key="E minor")     # 직접 고른 키 → 재추정 안 함
+            self.assertEqual(tl.key, "E minor")
+            win.close()
 
     def test_manual_key_survives_regrid(self):
         from gui.beat_screen import BeatScreen

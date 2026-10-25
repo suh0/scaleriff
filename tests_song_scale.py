@@ -6,9 +6,9 @@ from ml import generate
 from player.timeline import ScaleOption, Segment, Timeline
 
 
-def am_f_c_g():
+def am_f_c_g(names=("Am", "F", "C", "G")):
     tl = Timeline("", 120, "4/4", "A minor", 9, 4, bar_times=[0, 2, 4, 6, 8])
-    for i, name in enumerate(["Am", "F", "C", "G"]):
+    for i, name in enumerate(names):
         ch = parse_chord(name)
         tl.segments.append(Segment(i, 2 * i, 2 * i + 2, i, i + 1, ch,
                                    [ScaleOption("에올리안", ch.root, name, scale_pcs(9, "minor"))]))
@@ -43,6 +43,18 @@ class SongScaleTest(unittest.TestCase):
         self.assertIsNone(landing_blocker(tl, pent, "chord_tone"))
         self.assertIsNone(landing_blocker(tl, seven, "third"))
         self.assertIsNotNone(landing_blocker(tl, seven, "seventh"))   # 3화음엔 7도 없음
+
+    def test_fit_recommends_by_chord_tones_and_disables_clashing_scale(self):
+        from gui.setup_screen import scale_fit, recommend, landing_blocker
+        tl = am_f_c_g()
+        options = song_scale_options(9, "minor")
+        self.assertAlmostEqual(scale_fit(tl, options[0]), 10 / 12)
+        self.assertEqual(scale_fit(tl, options[1]), 1.0)
+        self.assertEqual(recommend(tl, options), 1)                      # 7음
+        self.assertEqual(recommend(am_f_c_g(("Am", "C", "Am", "C")), options), 0)   # 펜타
+        clash = {"kind": "테스트", "root": 1, "name": "C# 테스트", "note_set": [1, 3, 6, 8, 10]}
+        self.assertIn("Am", landing_blocker(tl, clash, "chord_tone"))
+        self.assertEqual(recommend(tl, [clash, options[1]]), 1)
 
     def test_count_per_chord_and_landing(self):
         tl = am_f_c_g()

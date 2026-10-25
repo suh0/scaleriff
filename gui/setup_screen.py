@@ -30,6 +30,32 @@ def landing_blocker(tl, option: dict, goal: str) -> str | None:
     return None
 
 
+def scale_fit(tl, option: dict) -> float:
+    """키 안 구간의 코드톤이 스케일에 드는 비율(구간 길이 가중). 예외 구간은 로컬 스케일이라 제외."""
+    total = hit = 0.0
+    for seg in tl.segments:
+        tones = seg.chord_tones()
+        if seg.is_detour or not tones:
+            continue
+        total += seg.duration()
+        hit += seg.duration() * len(set(tones) & set(option["note_set"])) / len(tones)
+    return hit / total if total else 1.0
+
+
+PENTA_MARGIN = 0.05   # 펜타토닉이 최고 적합도와 이만큼 이내면 쉬운 펜타를 추천
+
+
+def recommend(tl, options: list[dict]) -> int | None:
+    """사용 가능(모든 코드에 스케일 안 코드톤 1개 이상)한 후보 중 코드톤 포함률 최고. 펜타 근접 시 펜타."""
+    usable = [i for i, o in enumerate(options) if landing_blocker(tl, o, "chord_tone") is None]
+    if not usable:
+        return None
+    fits = {i: scale_fit(tl, options[i]) for i in usable}
+    best = max(usable, key=fits.get)
+    penta = next((i for i in usable if "펜타토닉" in options[i]["kind"]), None)
+    return penta if penta is not None and fits[best] - fits[penta] <= PENTA_MARGIN else best
+
+
 def chip_qss(selected: bool) -> str:
     if selected:
         return (f"QPushButton{{background:{T.WHITE};color:{T.BG_BASE};border:none;"
@@ -44,6 +70,7 @@ def chip_qss(selected: bool) -> str:
 class SetupScreen(QWidget):
     practiceRequested = pyqtSignal()
     backToBeatRequested = pyqtSignal()
+    chordEditRequested = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -58,7 +85,7 @@ class SetupScreen(QWidget):
         root.setSpacing(12)
 
         top = QHBoxLayout()
-        self.back_btn = QPushButton("← 코드 편집")
+        self.back_btn = QPushButton("← 박자 조정")
         self.back_btn.setStyleSheet(T.qss_ghost_btn())
         self.back_btn.clicked.connect(self.backToBeatRequested.emit)
         top.addWidget(self.back_btn)
@@ -69,6 +96,12 @@ class SetupScreen(QWidget):
         self.key_lbl = QLabel("")
         self.key_lbl.setStyleSheet(f"color:{T.TEXT_MUTED};font-family:'{T.FONT_MONO}';font-size:12px;")
         top.addWidget(self.key_lbl)
+        self.chord_btn = QPushButton("코드 수정")
+        self.chord_btn.setStyleSheet(T.qss_ghost_btn())
+        self.chord_btn.setToolTip("코드·키·루프를 수정합니다. 확인하면 이 화면에 반영돼요.")
+        self.chord_btn.clicked.connect(self.chordEditRequested.emit)
+        top.addSpacing(8)
+        top.addWidget(self.chord_btn)
         root.addLayout(top)
 
         root.addWidget(self._heading("스케일 — 곡 전체에 하나"))
@@ -165,11 +198,17 @@ class SetupScreen(QWidget):
         self._options = song_scale_options(tl.key_root, mode)
         self.title.setText(tl.title or "학습 설정")
         self.key_lbl.setText(f"{tl.key}  ·  {tl.bpm:.0f} BPM")
+        best = recommend(tl, self._options)
         for i, (btn, opt) in enumerate(zip(self.scale_btns, self._options)):
-            btn.setText(opt["name"] + ("  · 추천" if i == 0 else ""))
+            reason = landing_blocker(tl, opt, "chord_tone")
+            btn.setText(f"{opt['name']}  · 코드톤 {scale_fit(tl, opt):.0%}" + ("  · 추천" if i == best else ""))
+            btn.setEnabled(reason is None)
+            btn.setToolTip(reason.replace("코드톤 음이", "코드톤이 하나도") if reason else "")
         saved = tl.practice
         names = [o["name"] for o in self._options]
-        self._scale = names.index(saved["scale"]["name"]) if saved.get("scale", {}).get("name") in names else 0
+        name = saved.get("scale", {}).get("name")
+        self._scale = (names.index(name) if name in names and self.scale_btns[names.index(name)].isEnabled()
+                       else best if best is not None else 1)
         self._method = saved.get("method", "free")
         self._goal = saved.get("goal") or "third"
         count = saved.get("count")
@@ -227,10 +266,14 @@ class SetupScreen(QWidget):
         lo = self.count_lo.value()
         return [lo, lo if mode == 1 else max(lo, self.count_hi.value())]
 
-    def _start(self):
-        self.tl.apply_song_scale(self._options[self._scale])
+    def remember(self):
+        """화면 선택을 tl.practice에 기록(스케일 적용 없이) — 새로고침해도 유지."""
         landing = self._method == "landing"
-        self.tl.practice.update(method=self._method,
+        self.tl.practice.update(scale=dict(self._options[self._scale]), method=self._method,
                                 goal=self._goal if landing else None,
                                 count=self.count() if landing else None)
+
+    def _start(self):
+        self.remember()
+        self.tl.apply_song_scale(self._options[self._scale])
         self.practiceRequested.emit()

@@ -1,6 +1,7 @@
 """[2a] 박자 조정 화면 (§3.5 2차) — 분석 직후 마디선/BPM 확정.
 
-화면 순서: 박자 3단계(시작점 → 끝부분 박자 → 예비박) → 코드 편집(세로 스크롤).
+화면 순서: 박자 3단계(시작점 → 끝부분 박자 → 예비박) → 학습 설정. 코드 편집은 학습 설정의
+'코드 수정' 창(edit_chords, 확인=반영·취소=되돌림).
 - 초기 격자 = 자동 인식값, 인식된 비트는 확대바에 흐리게 남긴다.
 - 1단계: 클릭한 곳이 1마디(격자 평행이동), 마디선 드래그도 평행이동.
 - 2단계: 끝부분 마디선 드래그 = 시작점 고정·BPM 조정(직접 입력도 가능).
@@ -11,13 +12,14 @@
 """
 from __future__ import annotations
 
+import copy
 import math
 import bisect
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QPushButton,
     QComboBox, QLineEdit, QScrollArea, QInputDialog, QFrame,
-    QGraphicsOpacityEffect, QLayout, QMenu, QStackedWidget
+    QGraphicsOpacityEffect, QLayout, QMenu, QStackedWidget, QDialog
 )
 from PyQt6.QtGui import QPainter, QColor, QPen, QFont, QCursor, QShortcut, QKeySequence
 from PyQt6.QtCore import Qt, QRectF, pyqtSignal, QTimer, QElapsedTimer, QUrl, QEvent
@@ -33,6 +35,7 @@ from player.playhead import Playhead
 from player.note_synth import render_click_wav
 from player.waveform import WAVE_RATE
 from build.real_builder import regrid_timeline
+from analyze.harmony import _best_key_for_chords
 from ml.generate import bake_segment, bake_examples
 from gui.widgets.busy_overlay import run_busy
 
@@ -273,7 +276,6 @@ class BeatScreen(QWidget):
         self._bpm_text = ""      # BPM 칸에 마지막으로 표시한 값
         self._end_bar: int | None = None   # 코드 인식 끝 마디선(1마디부터 마디 수), None = 곡 끝
         self._dur = ZOOM_SEC
-        self._locked = False     # 확인 후 코드 편집 단계
         self._cells: dict[int, QFrame] = {} # bar → 칸(하이라이트용)
         self._drag_start: int | None = None # 칸 드래그 시작 마디
         self._drag_cur: int | None = None   # 드래그 현재 마디
@@ -291,7 +293,7 @@ class BeatScreen(QWidget):
             eff.setVolume(0.8)
             self._clicks[strong] = eff
 
-        # 같은 타임라인을 공유하는 박자 조정 / 코드 편집 화면
+        # 박자 조정 화면 + 같은 타임라인을 공유하는 코드 편집 창(학습 설정에서 연다)
         content = T.compact_content(self)
         outer = QVBoxLayout(content)
         outer.setContentsMargins(T.PAD_H, T.PAD_V, T.PAD_H, T.PAD_V)
@@ -301,7 +303,11 @@ class BeatScreen(QWidget):
         self.beat_page = QWidget()
         self.chord_page = QWidget()
         self.pages.addWidget(self.beat_page)
-        self.pages.addWidget(self.chord_page)
+        self.chord_dialog = QDialog(self)
+        self.chord_dialog.setWindowTitle("코드 수정")
+        self.chord_dialog.setStyleSheet(f"QDialog{{background:{T.BG_BASE};}}")
+        self.chord_dialog.resize(980, 640)
+        QVBoxLayout(self.chord_dialog).addWidget(self.chord_page)
         root = QVBoxLayout(self.beat_page)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(10)
@@ -440,7 +446,7 @@ class BeatScreen(QWidget):
         nav.addWidget(self.next_btn)
         self.confirm_btn = QPushButton("확인 (Enter)")
         self.confirm_btn.setStyleSheet(T.qss_primary_btn())
-        self.confirm_btn.setToolTip("변경한 박자를 반영하고 코드 편집으로 이동")
+        self.confirm_btn.setToolTip("변경한 박자를 반영하고 학습 설정으로 이동")
         self.confirm_btn.clicked.connect(self._on_confirm)
         nav.addWidget(self.confirm_btn)
         root.addLayout(nav)
@@ -448,7 +454,7 @@ class BeatScreen(QWidget):
             QShortcut(QKeySequence(key), self, self._advance,
                       context=Qt.ShortcutContext.WidgetWithChildrenShortcut)
         QShortcut(QKeySequence(Qt.Key.Key_Backspace), self,
-                  lambda: self._locked or self._show_step(self._step - 1),
+                  lambda: self._show_step(self._step - 1),
                   context=Qt.ShortcutContext.WidgetWithChildrenShortcut)
 
         self.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
@@ -460,11 +466,6 @@ class BeatScreen(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(10)
         chord_top = QHBoxLayout()
-        self.back_to_beat_btn = QPushButton("← 박자 조정")
-        self.back_to_beat_btn.setStyleSheet(T.qss_ghost_btn())
-        self.back_to_beat_btn.clicked.connect(self._back_to_beat)
-        chord_top.addWidget(self.back_to_beat_btn)
-        chord_top.addSpacing(8)
         chord_title = QLabel("코드 편집")
         chord_title.setStyleSheet(title.styleSheet())
         chord_top.addWidget(chord_title)
@@ -532,21 +533,23 @@ class BeatScreen(QWidget):
         right.addWidget(self.grid_scroll, 1)
         root.addLayout(right, 1)
 
-        # ── 조정 완료 → 다음 화면 ────────────────────────────────
+        # ── 확인 = 반영, 취소 = 편집 전으로 ──────────────────────
         done_row = QHBoxLayout()
         done_row.addStretch(1)
-        self.done_btn = QPushButton("학습 설정으로")
+        self.chord_cancel_btn = QPushButton("취소")
+        self.chord_cancel_btn.setStyleSheet(T.qss_ghost_btn())
+        self.chord_cancel_btn.clicked.connect(self.chord_dialog.reject)
+        done_row.addWidget(self.chord_cancel_btn)
+        self.done_btn = QPushButton("확인")
         self.done_btn.setStyleSheet(T.qss_primary_btn())
-        self.done_btn.clicked.connect(self._on_done)
+        self.done_btn.clicked.connect(self.chord_dialog.accept)
         done_row.addWidget(self.done_btn)
-        done_row.addStretch(1)
         root.addLayout(done_row)
 
     def showEvent(self, e):
         super().showEvent(e)
         self.setFocus()
-        stagger([self.holder, self.done_btn] if self._locked else
-                [self.sections[0]])
+        stagger([self.sections[0]])
 
     # ── 격자 상태 ────────────────────────────────────────────────
     def _beats(self) -> int:
@@ -684,9 +687,7 @@ class BeatScreen(QWidget):
         self._refresh()
 
     def _advance(self):
-        """Enter: 다음 단계, 마지막 단계면 확인(코드 편집으로). BPM 칸에선 적용만."""
-        if self._locked:
-            return
+        """Enter: 다음 단계, 마지막 단계면 확인(학습 설정으로). BPM 칸에선 적용만."""
         if self.bpm_edit.hasFocus():       # BPM 입력 중 Enter = 적용하고 커서 해제
             self._on_bpm_edited()
             self.setFocus()
@@ -702,7 +703,7 @@ class BeatScreen(QWidget):
         touched = (e.type() == QEvent.Type.MouseButtonPress or (   # 창 전환 포커스는 제외
             e.type() == QEvent.Type.FocusIn and e.reason() in (
                 Qt.FocusReason.TabFocusReason, Qt.FocusReason.BacktabFocusReason)))
-        if step is not None and step < self._step and not self._locked and touched:
+        if step is not None and step < self._step and touched:
             self._show_step(step)
         return super().eventFilter(obj, e)
 
@@ -713,10 +714,7 @@ class BeatScreen(QWidget):
         self.tl = tl
         self.warn_lbl.setVisible(tl.analysis_info.get("beat_detected") is False)
         self._model = model
-        mode = "minor" if "minor" in (tl.key or "").lower() else "major"
-        self.key_box.blockSignals(True)
-        self.key_box.setCurrentIndex(self.key_box.findData(f"{pc_name(tl.key_root)} {mode}"))
-        self.key_box.blockSignals(False)
+        self._sync_key_box()
         self._dur = (tl.bar_times[-1] if tl.bar_times else tl.total_sec()) or ZOOM_SEC
         idx = self.sig_box.findData(tl.time_sig)
         self.sig_box.blockSignals(True)
@@ -751,11 +749,8 @@ class BeatScreen(QWidget):
         self.count_in = max(1, tl.count_in_bars)
         self.playhead = Playhead(self._dur, tl.audio_ref, self)
         self.playhead.positionChanged.connect(self._on_tick)
-        self._set_locked(False)
         self._reset_drag()
         self._show_step(1)
-        self._build_grid()
-        self._build_loops()
 
     def pause(self):
         if self.playhead:
@@ -938,17 +933,6 @@ class BeatScreen(QWidget):
         else:
             w.setGraphicsEffect(None)
 
-    def _set_locked(self, locked: bool):
-        """확정 상태 토글 — 확정 전엔 코드표가, 확정 후엔 박자 편집부가 잠긴다."""
-        self._locked = locked
-        for w in (self.zoom_l, self.zoom_r, self.sig_box, self.bpm_edit):
-            self._dim(w, locked)
-        for w in (self._loop_wrap, self.holder):   # 미확정 격자의 코드표는 잠금
-            self._dim(w, not locked)
-        self.pages.setCurrentWidget(self.chord_page if locked else self.beat_page)
-        if not locked:
-            self._reset_drag()       # 박자 재편집 → 루프 드래그 중단
-
     def _on_confirm(self):
         self._on_bpm_edited()
         self._apply(self._finish_confirm)
@@ -957,18 +941,29 @@ class BeatScreen(QWidget):
         if self.tl is not None:
             self.tl.count_in_bars = self.count_in
             self.tl.grid_confirmed = True
-        self._set_locked(True)
+        self.proceedRequested.emit()
 
-    def _back_to_beat(self):
+    # ── 코드 편집 창 ─────────────────────────────────────────────
+    def _sync_key_box(self):
+        mode = "minor" if "minor" in (self.tl.key or "").lower() else "major"
+        self.key_box.blockSignals(True)
+        self.key_box.setCurrentIndex(self.key_box.findData(f"{pc_name(self.tl.key_root)} {mode}"))
+        self.key_box.blockSignals(False)
+
+    def edit_chords(self) -> bool:
+        """코드 편집 창 — 칸 클릭=코드 수정, 드래그=루프, 키 변경. 확인=반영, 취소=되돌림."""
         self.pause()
-        self._set_locked(False)
-        self._show_step(1)
-
-    def _on_done(self):
-        if not self._locked:
-            self._apply(self.proceedRequested.emit)   # 미확정 조정이 있으면 반영하고 진행
-        else:
-            self.proceedRequested.emit()
+        before = copy.deepcopy(self.tl.__dict__)
+        self._sync_key_box()
+        self._reset_drag()
+        self._build_grid()
+        self._build_loops()
+        if self.chord_dialog.exec() == QDialog.DialogCode.Accepted:
+            if not self.tl.key_override:
+                self._reestimate_key()
+            return True
+        self.tl.__dict__.update(before)
+        return False
 
     # ── 마디별 코드 목록(악보 화면에서 이식, §1 수동 수정) ──────
     def _build_grid(self):
@@ -1099,14 +1094,36 @@ class BeatScreen(QWidget):
         if key == self.tl.key:
             return
         self.pause()
-        self.tl.key = key
-        self.tl.key_root = index // 2
         self.tl.key_override = True
+        self._set_key(key, index // 2)
+        run_busy(self.chord_page, lambda: bake_examples(self.tl, self._model), lambda _: self._build_grid())
+
+    def _set_key(self, key: str, root: int):
+        """키 변경 — 코드·시간은 유지하고 모든 구간의 스케일·도수만 새 키로."""
+        self.tl.key = key
+        self.tl.key_root = root
         for seg in self.tl.segments:
             self._set_chord_harmony(seg, seg.chord)
         self.tl.available_scales = list(dict.fromkeys(
             seg.scale.kind for seg in self.tl.segments if seg.scale))
-        run_busy(self, lambda: bake_examples(self.tl, self._model), lambda _: self._build_grid())
+
+    def _reestimate_key(self):
+        """수정된 코드로 키 재추정(현재 키와 1점 이내면 유지). 직접 고른 키는 건드리지 않는다."""
+        current = (self.tl.key_root, "minor" if "minor" in (self.tl.key or "").lower() else "major")
+        best = _best_key_for_chords([s.chord for s in self.tl.segments], prefer=current)
+        root, mode = best
+        relative = ((root + 9) % 12, "minor") if mode == "major" else ((root + 3) % 12, "major")
+        if current in (best, relative):
+            return                      # 같은 7음 — 현재 키 유지
+        # 나란한조는 구성음만으로 못 가른다 → 으뜸화음이 더 오래 울리는 쪽
+
+        def tonic_sec(key):
+            r, m = key
+            third = (r + (3 if m == "minor" else 4)) % 12
+            return sum(s.duration() for s in self.tl.segments
+                       if s.chord.root == r and third in s.chord_tones())
+        root, mode = relative if tonic_sec(relative) > tonic_sec(best) else best
+        self._set_key(f"{pc_name(root)} {mode}", root)
 
     def _apply_chord(self, seg, name: str, bar=None):
         """수동 선택 코드로 구간의 코드·스케일·리프를 재계산."""
@@ -1115,7 +1132,7 @@ class BeatScreen(QWidget):
         if bar is not None and len(self.tl.bar_times) > bar + 1:
             start = max(start, self.tl.bar_times[bar])
             end = min(end, self.tl.bar_times[bar + 1])
-        run_busy(self, lambda: apply_chord_edit(self.tl, start, end, name, self._model),
+        run_busy(self.chord_page, lambda: apply_chord_edit(self.tl, start, end, name, self._model),
                  lambda _: self._build_grid())
 
     # ── 사용자 루프(§6): 칸 클릭=코드 수정 · 칸 드래그=루프 지정 ──
@@ -1186,7 +1203,7 @@ class BeatScreen(QWidget):
 
     def _ask_loop_name(self, s: int, e: int):
         name, ok = QInputDialog.getText(
-            self, "루프 정의", f"루프정의: {s + 1}–{e + 1}마디 이름:",
+            self.chord_page, "루프 정의", f"루프정의: {s + 1}–{e + 1}마디 이름:",
             text=f"루프 {len(self.tl.loops) + 1}")
         if ok and name.strip():
             self.tl.loops.append({"name": name.strip(), "start_bar": s,

@@ -113,6 +113,7 @@ class AppWindow(QMainWindow):
         self.beat.proceedRequested.connect(self._enter_setup)
         self.beat.backToLinkRequested.connect(self._go_link)
         self.setup.practiceRequested.connect(self._enter_main)
+        self.setup.chordEditRequested.connect(self._edit_chords)
         self.setup.backToBeatRequested.connect(
             lambda: self.stack.setCurrentWidget(self.beat))
         self.main_screen.backToLinkRequested.connect(self._go_link)
@@ -275,6 +276,16 @@ class AppWindow(QMainWindow):
         self._timeline = self.beat.tl
         self.setup.set_timeline(self._timeline)
         self.stack.setCurrentWidget(self.setup)
+
+    def _edit_chords(self):
+        """학습 설정의 '코드 수정' 창 — 확인하면 저장하고 학습 설정을 새로고침."""
+        self.setup.remember()
+        key = self._timeline.key
+        if self.beat.edit_chords():
+            self._save_session(self._timeline)
+            self.setup.set_timeline(self._timeline)
+            if self._timeline.key != key:
+                self.statusBar().showMessage(f"코드에 맞춰 키를 {self._timeline.key}로 바꿨어요", 5000)
 
     def _enter_main(self):
         self._save_session(self._timeline)   # 보정·수정 반영해 세션 갱신

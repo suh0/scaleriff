@@ -96,11 +96,8 @@ def main():
     win._on_timeline_ready(tl)
     assert os.path.exists(win._session_path(tl)), "세션 자동 저장 안 됨"
     assert win.stack.currentWidget() is win.beat
-    assert win.beat.grid.count() > 0, "박자 화면에 코드 목록 없음"
-    assert not win.beat.holder.isEnabled(), "확정 전 코드표 잠김 아님"
     assert win.beat.pages.currentWidget() is win.beat.beat_page
-    assert win.beat.zoom_l.isVisible() and not win.beat.grid_scroll.isVisible()
-    assert not win.beat.done_btn.isVisible()
+    assert win.beat.zoom_l.isVisible() and not win.beat.chord_dialog.isVisible()
     # 박자 3단계(세로 한 화면): 현재 단계까지 활성, 아랫단계는 흐리게·비활성
     bs = win.beat
     for step in (1, 2, 3):
@@ -112,13 +109,6 @@ def main():
             bs.next_btn.click()
     bs._show_step(1)
     assert bs._step == 1
-    for ww, wh in ((1040, 740), (1600, 1000)):
-        win.resize(ww, wh)
-        app.processEvents()
-        assert win.beat.grid_scroll.horizontalScrollBar().maximum() == 0, \
-            "마디별 코드에 가로 스크롤이 생김"
-    win.resize(1040, 740)
-    app.processEvents()
     assert not any(
         label.isVisible() and label.text().startswith("시작 ")
         for label in win.beat.findChildren(QLabel)
@@ -132,7 +122,8 @@ def main():
         seg.start_sec, seg.end_sec = bar * bar_sec, (bar + 1) * bar_sec
         tl_long.segments.append(seg)
     win.beat.set_timeline(tl_long)
-    win.beat.confirm_btn.click()
+    win.beat._build_grid()             # 코드 수정 창(학습 설정에서 열림)을 비모달로 띄워 배치 확인
+    win.beat.chord_dialog.show()
     app.processEvents()
     cell0_pos = win.beat._cells[0].mapTo(win.beat.holder, QPoint(0, 0))
     from gui.beat_screen import BARS_PER_ROW
@@ -150,29 +141,19 @@ def main():
     assert last_pos.y() >= 0, "세로 스크롤 후 마지막 마디가 위로 잘림"
     assert last_pos.y() + last_cell.height() <= win.beat.grid_scroll.viewport().height(), \
         "세로 스크롤 후 마지막 마디가 보이지 않음"
+    win.beat.chord_dialog.hide()
     win.beat.set_timeline(tl)
     app.processEvents()
     assert win.beat.pages.currentWidget() is win.beat.beat_page
-    win.beat.confirm_btn.click()      # 확인 = 박자 적용 후 코드 편집 화면
-    assert win.stack.currentWidget() is win.beat
-    assert win.beat._locked and win.beat.confirm_btn.text().startswith("확인")
-    assert win.beat.pages.currentWidget() is win.beat.chord_page
-    assert win.beat.grid_scroll.isVisible() and not win.beat.zoom_l.isVisible()
-    assert win.beat.done_btn.isVisible()
-    assert not win.beat.zoom_l.isEnabled() and not win.beat.bpm_edit.isEnabled()
-    assert win.beat.holder.isEnabled() and win.beat._loop_wrap.isEnabled()
-    win.beat.back_to_beat_btn.click()
-    assert not win.beat._locked and win.beat.pages.currentWidget() is win.beat.beat_page
-    assert win.beat.zoom_l.isEnabled() and not win.beat.holder.isEnabled()
     segments_before = list(tl.segments)
-    win.beat.confirm_btn.click()
+    win.beat.confirm_btn.click()      # 확인 = 박자 적용 후 학습 설정
     assert all(a is b for a, b in zip(segments_before, tl.segments)), \
-        "박자 변경 없이 돌아오면 코드 편집 내용을 보존해야 함"
-    win.beat.done_btn.click()         # 편집 완료 → 학습 설정
+        "박자 변경 없이 확인하면 코드 편집 내용을 보존해야 함"
     assert win.stack.currentWidget() is win.setup
-    # 학습 설정: 곡 스케일 3후보(첫 = 펜타토닉 추천), 착지음 옵션은 착지 방식에서만
+    # 학습 설정: 곡 스케일 3후보 + 코드톤 포함률, ii–V–I는 7음이 추천(펜타 67%), 착지음 옵션은 착지 방식에서만
     su = win.setup
-    assert "추천" in su.scale_btns[0].text() and "펜타토닉" in su.scale_btns[0].text()
+    assert "추천" in su.scale_btns[1].text() and "코드톤 100%" in su.scale_btns[1].text()
+    assert "펜타토닉" in su.scale_btns[0].text() and su.scale_btns[0].isEnabled() and su._scale == 1
     assert su.landing_box.isHidden()
     su._pick_method("landing")
     assert not su.landing_box.isHidden()
@@ -180,16 +161,33 @@ def main():
     su.count_mode.setCurrentIndex(2)
     su.count_lo.setValue(2)
     su.count_hi.setValue(3)
-    # ← 코드 편집 버튼 = 확인된 코드 편집 화면으로
+    # 코드 수정 창: 취소 = 되돌림, 확인 = 반영 + 학습 설정 새로고침(화면 선택 유지)
+    from PyQt6.QtCore import QTimer as _QT
+
+    def _edit(accept):
+        def run():
+            assert win.beat.chord_dialog.isVisible() and win.beat.grid.count() > 0
+            win.beat._apply_chord(tl.segments[0], "Em")
+            (win.beat.done_btn if accept else win.beat.chord_cancel_btn).click()
+        _QT.singleShot(0, run)
+        su.chord_btn.click()
+    first = tl.segments[0].chord.name
+    _edit(False)
+    assert tl.segments[0].chord.name == first, "취소했는데 코드 수정이 남음"
+    _edit(True)
+    assert tl.segments[0].chord.name == "Em", "확인했는데 코드 수정이 반영 안 됨"
+    assert su._method == "landing" and su.count() == [2, 3], "새로고침 후 선택이 초기화됨"
+    # ← 박자 조정 버튼 = 박자 조정 화면으로
     su.backToBeatRequested.emit()
     assert win.stack.currentWidget() is win.beat
-    assert win.beat.pages.currentWidget() is win.beat.chord_page
+    assert win.beat.pages.currentWidget() is win.beat.beat_page
     win._enter_setup()
     su._pick_method("landing")
     su._pick_goal("chord_tone")
     su.count_mode.setCurrentIndex(2)
     su.count_lo.setValue(2)
     su.count_hi.setValue(3)
+    su._pick_scale(0)
     su.go_btn.click()
     pent = su._options[0]
     assert tl.practice == {"scale": pent, "method": "landing", "goal": "chord_tone", "count": [2, 3]}
@@ -441,10 +439,9 @@ def main():
     bs.pause()
     bars_before = list(tl3.bar_times)
     assert tl3.bar_times == bars_before, "드래그만으로 재격자화됨"
-    bs._on_confirm()                  # 확인 → 멈춤+재격자화 후 코드 편집
-    assert bs.pages.currentWidget() is bs.chord_page
+    bs._on_confirm()                  # 확인 → 멈춤+재격자화 후 학습 설정
+    assert win.stack.currentWidget() is win.setup
     assert not bs.playhead.is_playing()
-    assert bs._locked and not bs.zoom_l.isEnabled(), "확정 후 편집부 잠금 안 됨"
     assert tl3.bpm == 120.0 and tl3.bar_times == [0.5, 2.5, 4.5, 6.5, 8.0], \
         (tl3.bpm, tl3.bar_times)
     assert [s.chord.name for s in tl3.segments] == ["C", "F"]
@@ -452,12 +449,9 @@ def main():
         "한 마디 한 코드: F 진입은 마디선(4.5초)에 정렬돼야 함"
     assert all(s.example for s in tl3.segments), "재격자화 후 리프 미굽기"
     assert bs.grid.count() > 0, "확정 후 코드 목록 미갱신"
-    bs.back_to_beat_btn.click()
     bs.bpm_edit.setText("96")
     bs.confirm_btn.click()
     assert tl3.bpm == 96.0 and tl3.bar_times[:3] == [0.5, 3.0, 5.5]
-    assert bs.pages.currentWidget() is bs.chord_page
-    bs.back_to_beat_btn.click()
     bs.bpm_edit.setText("120")
     bs.confirm_btn.click()
 
@@ -501,12 +495,12 @@ def main():
     assert bs._is_diatonic_name("Dm7") and bs._is_diatonic_name("G7")
     assert not bs._is_diatonic_name("Eb") and not bs._is_diatonic_name("Cm")
 
-    # 확정 후 코드 수정 → 조정 완료가 잠금 상태면 재격자화 생략(수정 보존)
+    # 코드 수정 후 박자 그대로 확인 → 재격자화 생략(수정 보존)
     bs._apply_chord(tl3.segments[0], "Am")
     assert tl3.segments[0].chord.name == "Am"
-    bs._on_done()
+    bs._on_confirm()
     assert win.stack.currentWidget() is win.setup
-    assert tl3.segments[0].chord.name == "Am", "조정 완료가 코드 수정을 덮어씀"
+    assert tl3.segments[0].chord.name == "Am", "확인이 코드 수정을 덮어씀"
 
     # 메인 화면 루프 사이드바(§6): 루프 리스트 + 루프별 ON/OFF + 재생 루프백
     win.setup.practiceRequested.emit()
