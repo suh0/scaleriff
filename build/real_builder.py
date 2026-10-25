@@ -18,6 +18,7 @@ from analyze.structure import analyze_structure, structure_from_grid
 from analyze.harmony import analyze_harmony
 from analyze.theory import diatonic_option, degree_for
 from player.timeline import Timeline, Segment, ScaleOption
+from player.waveform import wave_peaks
 
 _Span = namedtuple("_Span", "start_sec end_sec name")
 
@@ -93,7 +94,7 @@ def build_real_timeline(source: str, progress_cb=None) -> Timeline:
         bar_times=st.bar_times, loop_phase=st.loop_phase,
         beat_times=list(mir.beat_times),   # 마디선 보정(§3.5 2차) 재료
         chord_spans=[[c.start_sec, c.end_sec, c.name] for c in mir.chords],
-        wav_ref=wav,                       # 파형 표시용(박자 조정 화면)
+        wave_peaks=wave_peaks(wav),        # 파형 표시용(박자 조정 화면) — 분석 WAV는 이후 삭제
         analysis_info={"beat_backend": mir.beat_source,
                        "beat_detected": mir.beat_detected,
                        "chord_backend": "madmom" if backend.use_madmom else "librosa",

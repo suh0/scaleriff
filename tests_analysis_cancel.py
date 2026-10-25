@@ -34,7 +34,8 @@ def successful_build(source, cb):
     wav, audio, title = resolve_audio(source, cb)
     Path(wav).parent.joinpath("unused.part").write_bytes(b"partial")
     tl = build_dummy_timeline()
-    tl.wav_ref, tl.audio_ref, tl.title = wav, audio, title
+    from player.waveform import wave_peaks
+    tl.wave_peaks, tl.audio_ref, tl.title = wave_peaks(wav), audio, title
     return tl
 
 
@@ -104,13 +105,13 @@ def main():
         assert source.read_bytes() == original and not ready and not errors
 
         screen.start(successful_build, str(source))
+        done_dir = Path(screen._worker.work_dir)
         wait_until(app, lambda: bool(ready))
         tl = ready[0]
-        assert Path(tl.wav_ref).is_file() and tl.audio_ref == str(source)
-        assert not Path(tl.wav_ref).parent.joinpath("unused.part").exists()
+        assert tl.wave_peaks and tl.audio_ref == str(source)
+        assert not done_dir.exists(), "분석 WAV·임시 파일이 남음(원본은 작업 폴더 밖)"
         assert source.read_bytes() == original
         import shutil
-        shutil.rmtree(Path(tl.wav_ref).parent)
 
         # 완료 통지가 UI에 도착하기 직전의 중단도 결과를 저장하지 않는다.
         screen.start(successful_build, str(source))
@@ -148,11 +149,11 @@ def main():
                                    [53, 57, 60], [55, 59, 62]) * 2])
         sf.write(str(source), samples, 22050)
         screen.start(build_timeline, str(source))
+        real_dir = Path(screen._worker.work_dir)
         wait_until(app, lambda: len(ready) == 2 or len(errors) > 1, timeout=90)
         assert len(errors) == 1, errors
-        assert ready[-1].segments and ready[-1].beat_times
-        assert Path(ready[-1].wav_ref).is_file()
-        shutil.rmtree(Path(ready[-1].wav_ref).parent)
+        assert ready[-1].segments and ready[-1].beat_times and ready[-1].wave_peaks
+        assert not real_dir.exists(), "실제 분석 뒤 분석 WAV가 남음"
 
         from PyQt6.QtCore import QSettings
         from gui.app import AppWindow

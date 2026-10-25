@@ -11,6 +11,7 @@ from PyQt6.QtTest import QTest
 from PyQt6.QtCore import QUrl, QPoint, Qt
 from gui.beat_screen import BeatScreen
 from player.dummy_timeline import build_dummy_timeline
+from player.waveform import WAVE_RATE
 from player.timeline import Timeline
 from player.playhead import Playhead
 from build.real_builder import regrid_timeline
@@ -104,6 +105,7 @@ class CountInTest(unittest.TestCase):
         tl.bpm = 120
         tl.bar_times = [0, 2, 4, 6, 8]
         tl.chord_spans = [[0, 4, "Dm7"], [4, 8, "G7"]]
+        tl.wave_peaks = [[-.5, .5]] * (8 * WAVE_RATE)   # 8초 음원의 저장된 파형
         screen = BeatScreen()
         screen.set_timeline(tl)
         return screen, tl

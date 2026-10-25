@@ -56,8 +56,7 @@ class BuildWorker(QThread):
             shutil.rmtree(self.work_dir)
 
     def _remove_unused_files(self):
-        keep = {os.path.abspath(path) for path in
-                (self.result.audio_ref, self.result.wav_ref) if path}
+        keep = {os.path.abspath(self.result.audio_ref)} if self.result.audio_ref else set()   # 분석 WAV 등은 삭제
         for directory, _, files in os.walk(self.work_dir, topdown=False):
             for name in files:
                 path = os.path.join(directory, name)

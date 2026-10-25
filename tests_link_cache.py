@@ -30,7 +30,7 @@ def main():
                 wav.setparams((1, 2, 22050, 0, "NONE", "not compressed"))
                 wav.writeframes(b"\0\0" * 22050)
             tl = build_dummy_timeline()
-            tl.audio_ref = tl.wav_ref = str(audio)
+            tl.audio_ref = str(audio)
             tl.bpm = 137.0
             win._on_timeline_ready(tl)
             saved = tl.to_dict()
@@ -48,7 +48,7 @@ def main():
             nested = Path(directory) / "analysis_saved"
             nested.mkdir()
             audio = audio.rename(nested / audio.name)
-            tl.audio_ref = tl.wav_ref = str(audio)
+            tl.audio_ref = str(audio)
             win._on_timeline_ready(tl)
             saved = tl.to_dict()
             session = Path(win._session_path(tl))
@@ -66,18 +66,11 @@ def main():
                 win._start_build(url + "-new")
                 assert start.call_count == 1, "새 링크의 분석을 시작하지 않음"
 
-            tl.wav_ref = str(Path(directory) / "missing.wav")
-            tl.save_json(str(session))
-            with patch.object(win.analyzing, "start") as start:
-                win._start_build(url)
-                assert start.call_count == 1, "분석 WAV가 없는데 캐시를 재사용함"
-
             session.write_text("{broken", encoding="utf-8")
             with patch.object(win.analyzing, "start") as start:
                 win._start_build(url)
                 assert start.call_count == 1, "손상된 세션에서 재분석하지 않음"
 
-            tl.wav_ref = str(audio)
             tl.save_json(str(session))
             audio.unlink()
             with patch.object(win.analyzing, "start") as start:

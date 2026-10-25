@@ -117,8 +117,6 @@ class AppWindow(QMainWindow):
             lambda: self.stack.setCurrentWidget(self.beat))
         self.main_screen.backToLinkRequested.connect(self._go_link)
         self.main_screen.backToScoreRequested.connect(self._go_score)
-        self.main_screen.sessionChanged.connect(
-            lambda: self._save_session(self._timeline) if self._timeline else None)
         self.main_screen.midiPortRequested.connect(self._connect_midi)
 
         self._timeline = None
@@ -141,8 +139,7 @@ class AppWindow(QMainWindow):
                     if not audio:
                         self.statusBar().showMessage("원본 오디오를 다시 연결해야 이 세션을 재생할 수 있습니다")
                         return
-                    from ingest.audio_source import to_wav
-                    timeline.audio_ref, timeline.wav_ref = audio, to_wav(audio)
+                    timeline.audio_ref = audio
                 self._open_timeline(timeline)
                 return
             except (OSError, KeyError, ValueError, TypeError) as error:
@@ -174,8 +171,7 @@ class AppWindow(QMainWindow):
                 for path in paths:
                     try:
                         tl = Timeline.load_json(path)
-                        if (tl.audio_ref == audio and os.path.isfile(tl.audio_ref)
-                                and os.path.isfile(tl.wav_ref) and tl.segments):
+                        if tl.audio_ref == audio and os.path.isfile(tl.audio_ref) and tl.segments:
                             return tl
                     except (OSError, KeyError, ValueError, TypeError):
                         continue

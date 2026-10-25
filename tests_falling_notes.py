@@ -57,10 +57,9 @@ def main():
     tl.loops = [{"name": "loop", "start_bar": 0, "end_bar": 0, "on": True}]
     screen._render_at(2.3)
     assert len(screen.riff._nodes()) == 3, "지속 중인 음과 루프 다음 회차 리프 예고"
-    for mode in ("riff", "riff_challenge"):
-        screen._select_practice(mode)
-        screen._render_at(1.0)
-        assert screen.riff.isVisible() and screen.piano._preview_opacity == 0
+    screen._select_practice("riff")
+    screen._render_at(1.0)
+    assert screen.riff.isVisible() and screen.piano._preview_opacity == 0
     tl.loops = []
     screen._select_practice("free")
     screen._render_at(1.0)

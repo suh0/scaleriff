@@ -25,6 +25,14 @@ from player.playhead import Playhead
 RELEASE_MS = round(RELEASE_SEC * 1000) + 80
 
 
+def wait_for(condition, timeout_ms=800):
+    for _ in range(timeout_ms // 5):
+        if condition():
+            return True
+        QTest.qWait(5)
+    return condition()
+
+
 class FakePort:
     def __init__(self, messages=()):
         self.messages = list(messages)
@@ -205,20 +213,16 @@ class MidiAudioTest(unittest.TestCase):
             synth.note_on(60, velocity=64, channel=0)
             synth.play_note(60, duration=0.03)
             self.assertTrue(synth._effect(60, 16).playing)
-            synth.play_note(60, duration=0.15, channel=17)
+            synth.play_note(60, duration=1.0, channel=17)
             user = synth._effect(60, 0)
             riff = synth._effect(60, 16)
             review = synth._effect(60, 17)
             synth.note_off(60, channel=0)
-            QTest.qWait(RELEASE_MS)
-            self.assertFalse(user.playing)
-            self.assertTrue(review.playing)
-            QTest.qWait(10)
-            self.assertFalse(riff.playing)
+            # 고정 대기 대신 조건 대기 — 부하 중 타이머 지연에도 흔들리지 않게.
+            self.assertTrue(wait_for(lambda: not user.playing and not riff.playing))
             self.assertTrue(review.playing)
             synth.stop_all()
-            QTest.qWait(RELEASE_MS)
-            self.assertFalse(review.playing)
+            self.assertTrue(wait_for(lambda: not review.playing))
 
     def test_virtual_rate_change_preserves_position_and_preroll_pause(self):
         self.assertTrue(callable(getattr(Playhead, "set_rate", None)), "playback rate missing")

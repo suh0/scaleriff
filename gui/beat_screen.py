@@ -11,11 +11,8 @@
 """
 from __future__ import annotations
 
-import wave
 import math
 import bisect
-
-import numpy as np
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QPushButton,
@@ -35,6 +32,7 @@ from analyze.theory import (
 from player.timeline import ScaleOption
 from player.playhead import Playhead
 from player.note_synth import render_click_wav
+from player.waveform import WAVE_RATE
 from build.real_builder import regrid_timeline
 from ml.generate import bake_segment, bake_examples
 from gui.widgets.busy_overlay import run_busy
@@ -42,7 +40,6 @@ from gui.widgets.busy_overlay import run_busy
 ZOOM_SEC = 10.0      # 확대 창 길이
 EDGE_SEC = 5.0       # 격자는 음원 앞뒤로 이만큼까지만(예비박 시작·코드 인식 끝)
 END_GRAB_PX = 10     # 코드 인식 끝 핸들을 잡는 거리
-WAVE_BUCKETS = 300   # 확대 창 파형 해상도(컬럼 수)
 BARS_PER_ROW = 8
 CELL_W = 86          # 마디 칸 폭
 CLICK_PX = 3         # 이 이하로 움직이고 놓으면 드래그가 아니라 클릭
@@ -51,47 +48,6 @@ METRO_HI_HZ, METRO_LO_HZ = 1760.0, 1320.0   # 강박/약박 클릭 높이
 METRO_AHEAD = 0.05   # 클릭 예약 선행 시간(초) — 틱 간격(25ms)보다 길게
 # 수동 코드 수정 선택지(접미사). parse_chord가 인식하는 표기.
 _EDIT_SUFFIXES = ["", "m", "7", "maj7", "m7", "m7b5", "dim", "6", "m6", "sus4"]
-
-
-def _wave_level(path: str) -> float:
-    """곡 전체의 큰 소리 크기(|진폭| 상위 0.5%, 1.0 = 최대) — 곡마다 파형 높이를 맞추는 기준.
-
-    최댓값 대신 분위수: 순간 튀는 소리 하나로 곡 전체가 작아 보이지 않게.
-    무음·읽기 실패는 1.0(절대 크기 그대로).
-    """
-    try:
-        with wave.open(path, "rb") as f:
-            if f.getsampwidth() != 2:
-                return 1.0
-            a = np.frombuffer(f.readframes(f.getnframes()), dtype=np.int16)
-    except (OSError, wave.Error, EOFError):
-        return 1.0
-    if not a.size:
-        return 1.0
-    level = float(np.percentile(np.abs(a[::10].astype(np.int32)), 99.5)) / 32768.0
-    return level if level >= 0.05 else 1.0
-
-
-def _wave_peaks(path: str, t0: float, t1: float,
-                buckets: int = WAVE_BUCKETS, level: float = 1.0) -> list[tuple[float, float]]:
-    """분석 WAV(PCM16 모노)의 [t0,t1) 구간 min/max 피크(level 기준 ±1로 자름). 실패 시 []."""
-    try:
-        with wave.open(path, "rb") as f:
-            if f.getsampwidth() != 2:
-                return []
-            sr, ch = f.getframerate(), f.getnchannels()
-            a = max(0, int(t0 * sr))
-            b = min(f.getnframes(), int(t1 * sr))
-            if b <= a:
-                return []
-            f.setpos(a)
-            samples = np.frombuffer(f.readframes(b - a), dtype=np.int16)[::ch]
-        step = max(1, len(samples) // buckets)
-        n = min(buckets, len(samples) // step)
-        c = samples[:n * step].reshape(n, step) / (32768.0 * level)
-        return list(zip(np.maximum(c.min(1), -1.0).tolist(), np.minimum(c.max(1), 1.0).tolist()))
-    except (OSError, wave.Error, EOFError):
-        return []
 
 
 class ZoomBar(QWidget):
@@ -770,12 +726,9 @@ class BeatScreen(QWidget):
         self.sig_box.setCurrentIndex(idx if idx >= 0 else 1)
         self.sig_box.blockSignals(False)
         self.zoom_l.set_window(0.0, ZOOM_SEC)
-        self._wav = getattr(tl, "wav_ref", "")
-        self._wav_level = _wave_level(self._wav)   # 곡마다 파형 크기를 비슷하게(진입 시 1회)
-        peaks = _wave_peaks(self._wav, 0.0, self._dur, level=self._wav_level,
-                            buckets=round(WAVE_BUCKETS * self._dur / ZOOM_SEC))
+        peaks = tl.wave_peaks                  # 세션 JSON에 저장된 곡 전체 파형
         for z in (self.zoom_l, self.zoom_r):
-            z.set_wave(peaks, 0.0, self._dur)   # 곡 전체 1회 — 창을 끌어도 다시 읽지 않음
+            z.set_wave(peaks, 0.0, len(peaks) / WAVE_RATE)
         lat = (tl.smoothed_beats() if tl.analysis_info.get("beat_detected") is not False
                else [])
         for z in (self.zoom_l, self.zoom_r):

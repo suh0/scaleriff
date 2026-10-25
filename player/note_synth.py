@@ -86,10 +86,10 @@ def _render_note_wav(midi: int) -> str:
 
 
 class NotePlayer(QObject):
-    # 상시 보유 이펙트는 화면 건반 전 음역(C3~B5 = 48~83)만 미리 로드한다.
+    # 상시 보유 이펙트는 화면 건반 전 음역(C4~B5 = 60~83)만 미리 로드한다.
     # MIDI는 0~15 채널, 리프/재청취는 16/17의 독립 보이스를 사용한다.
     # 입력 건반은 미리 로드하고 예정 리프는 preload()로 대비한다.
-    def __init__(self, parent=None, prewarm=range(48, 84)):
+    def __init__(self, parent=None, prewarm=range(60, 84)):
         super().__init__(parent)
         self._fx: dict[object, object] = {}
         self._volume = 0.7

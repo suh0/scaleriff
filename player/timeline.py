@@ -151,14 +151,13 @@ class Timeline:
     # ── 마디 격자·보정(§3.5) ────────────────────────────────────
     bar_times: list[float] = field(default_factory=list)  # 마디 시작 시각(+끝)
     loop_phase: int = 0        # 감지 루프 시작 마디 오프셋
-    split_point: int = 60      # 왼손(C3~B3)/오른손(C4~B5) 존 분할 MIDI(C4 고정)
     # 사용자 정의 루프 — 코드배열표에서 마디 2개 선택으로 생성(§6).
     # [{"name": str, "start_bar": int, "end_bar": int(포함), "on": bool}, …]
     loops: list = field(default_factory=list)
     # ── MIR 원자료(마디선 보정 §3.5 2차 — 재격자화 재료, MIR 재실행 없음) ──
     beat_times: list[float] = field(default_factory=list)   # 비트 시각
     chord_spans: list = field(default_factory=list)         # [[start,end,name], …]
-    wav_ref: str = ""          # 분석용 모노 WAV 경로(파형 표시용, 캐시)
+    wave_peaks: list = field(default_factory=list)  # 박자 조정 파형 [[min,max]…] 초당 WAVE_RATE개
     key_override: bool = False  # 직접 선택한 키는 재격자화에서 자동 변경하지 않음
     chord_overrides: list = field(default_factory=list)  # [원본 시작초, 끝초, 수동 코드]
     timing_override: bool = False  # BPM 직접 보정 시에는 균등 격자 사용
@@ -167,7 +166,6 @@ class Timeline:
     chord_end: float | None = None  # 코드 인식 끝(마디선, 초) — 이후는 재생만, 코드 없음
     analysis_info: dict = field(default_factory=dict)
     model_info: dict = field(default_factory=dict)
-    practice_history: list = field(default_factory=list)
 
     def smoothed_beats(self) -> list[float]:
         """보정 비트(smooth_beats) — 원자료 beat_times는 보존, 결과만 캐시."""
@@ -303,11 +301,10 @@ class Timeline:
             "scale_riffs": self.scale_riffs,
             "bar_times": list(self.bar_times),
             "loop_phase": self.loop_phase,
-            "split_point": self.split_point,
             "loops": [dict(l) for l in self.loops],
             "beat_times": list(self.beat_times),
             "chord_spans": [list(c) for c in self.chord_spans],
-            "wav_ref": self.wav_ref,
+            "wave_peaks": self.wave_peaks,
             "key_override": self.key_override,
             "chord_overrides": [list(row) for row in self.chord_overrides],
             "timing_override": self.timing_override,
@@ -315,7 +312,6 @@ class Timeline:
             "grid_confirmed": self.grid_confirmed,
             "chord_end": self.chord_end,
             "analysis_info": dict(self.analysis_info), "model_info": dict(self.model_info),
-            "practice_history": list(self.practice_history),
             "segments": [s.to_dict() for s in self.segments],
         }
 
@@ -347,11 +343,10 @@ class Timeline:
             scale_riffs=d.get("scale_riffs", {}),
             bar_times=list(d.get("bar_times", [])),
             loop_phase=d.get("loop_phase", 0),
-            split_point=d.get("split_point", 60),
             loops=[dict(l) for l in d.get("loops", [])],
             beat_times=list(d.get("beat_times", [])),
             chord_spans=[list(c) for c in d.get("chord_spans", [])],
-            wav_ref=d.get("wav_ref", ""),
+            wave_peaks=d.get("wave_peaks", []),
             key_override=d.get("key_override", False),
             chord_overrides=[list(row) for row in d.get("chord_overrides", [])],
             timing_override=d.get("timing_override", False),
@@ -360,7 +355,6 @@ class Timeline:
             chord_end=d.get("chord_end"),
             analysis_info=dict(d.get("analysis_info", {})),
             model_info=dict(d.get("model_info", {})),
-            practice_history=list(d.get("practice_history", [])),
         )
         tl.segments = [Segment.from_dict(s) for s in d["segments"]]
         return tl
@@ -370,13 +364,11 @@ class Timeline:
         folder = os.path.dirname(path)
         payload = self.to_dict()
         payload["media_refs"] = {}
-        for name in ("audio_ref", "wav_ref"):
-            value = getattr(self, name)
-            if value:
-                try:
-                    payload["media_refs"][name] = os.path.relpath(value, folder)
-                except ValueError:  # Windows 다른 드라이브
-                    pass
+        if self.audio_ref:
+            try:
+                payload["media_refs"]["audio_ref"] = os.path.relpath(self.audio_ref, folder)
+            except ValueError:  # Windows 다른 드라이브
+                pass
         fd, temporary = tempfile.mkstemp(prefix=".session_", suffix=".tmp", dir=folder)
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
@@ -399,4 +391,8 @@ class Timeline:
                 candidate = os.path.abspath(os.path.join(os.path.dirname(path), relative))
                 if os.path.isfile(candidate):
                     payload[name] = candidate
+        if not payload.get("wave_peaks") and payload.get("wav_ref"):
+            # 구 세션: 남아 있는 분석 WAV에서 파형을 1회 옮긴다(다음 저장부터 JSON만).
+            from player.waveform import wave_peaks
+            payload["wave_peaks"] = wave_peaks(payload["wav_ref"])
         return Timeline.from_dict(payload)

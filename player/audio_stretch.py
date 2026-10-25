@@ -1,16 +1,21 @@
 """재생 틱 밖에서 음정을 유지한 연습 속도 WAV를 준비한다."""
 from __future__ import annotations
 
+import atexit
 import hashlib
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import tempfile
 
 import imageio_ffmpeg
 
 
-_CACHE = Path(__file__).resolve().parent.parent / "cache" / "practice_audio"
+# 실행 중에만 쓰는 임시 폴더 — 앱 종료 시 삭제(속도 변환 결과를 남기지 않는다).
+# ponytail: 비정상 종료 시엔 OS 임시 폴더에 남음, 필요하면 시작 시 이전 scaleriff_rate_* 정리
+_CACHE = Path(tempfile.mkdtemp(prefix="scaleriff_rate_"))
+atexit.register(shutil.rmtree, _CACHE, ignore_errors=True)
 
 
 def validate_rate(rate: float) -> float:
@@ -21,7 +26,7 @@ def validate_rate(rate: float) -> float:
 
 
 def prepare_audio_rate(source: str, rate: float) -> str:
-    """원본 변경 시 캐시를 갱신하며 ffmpeg atempo로 음정을 보존한다."""
+    """ffmpeg atempo로 음정을 보존한다. 같은 실행 안에서는 결과를 재사용한다."""
     rate = validate_rate(rate)
     original = Path(source).resolve(strict=True)
     if rate == 1.0:

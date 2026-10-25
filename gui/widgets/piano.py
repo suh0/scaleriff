@@ -8,7 +8,7 @@
 - 친 건반 (§5.3):
   · 코드톤/스케일음: 배지 유지 + 상태별 컬러 border
   · 스케일 밖: 건반 전체 빨간색 fill (border 없음)
-- 범위: 3옥타브 C3–B5 (MIDI 48–83) — 왼손 C3~B3 / 오른손 C4~B5
+- 범위: 오른손 2옥타브 C4–B5 (MIDI 60–83) — 리프 생성 음역과 동일
 - 흰 건반 가로:세로 비율 WHITE_RATIO 고정 → 어떤 창에서도 비율 유지(레터박스)
 - 배지는 가이드·연습 모드 모두 전체 표시(퀴즈 블러 제거 §10)
 - 전환 직전 다음 음의 건반 아래 둥근 막대가 건반 너비까지 넓어진다.
@@ -21,15 +21,12 @@ from PyQt6.QtCore import Qt, QRectF, pyqtSignal
 
 from gui import theme as T
 
-MIDI_LOW  = 48   # C3
+MIDI_LOW  = 60   # C4
 MIDI_HIGH = 83   # B5
 
 WHITE_RATIO = 4.2   # 흰 건반 가로:세로 고정 비율
 PREVIEW_SPACE = 16  # 흰 건반 아래 예고 막대 여백
 PREVIEW_HEIGHT = 4
-# 왼손(C3~B3)/오른손(C4~B5) 사이 시각 간격.
-GAP_MIDI  = 60       # 이 음(C4) 앞에 간격
-GAP_UNITS = 0.8      # 간격 폭(흰 건반 폭 배수)
 
 WHITE_PCS = {0, 2, 4, 5, 7, 9, 11}
 BLACK_PCS = {1, 3, 6, 8, 10}
@@ -51,9 +48,6 @@ class PianoWidget(QWidget):
         self._chord_tones: set[int] = set()
         self._degrees: dict[int, str] = {}
         self._pressed: set[int] = set()
-        self._split = 0                      # 난이도 목표음 필터(§7.5, 0=없음)
-        self._left_targets: set[int] = set()
-        self._right_targets: set[int] = set()
         self._preview_notes: set[int] = set()
         self._preview_chords: set[int] = set()
         self._preview_root = 0
@@ -72,13 +66,6 @@ class PianoWidget(QWidget):
 
     def set_pressed(self, pressed):
         self._pressed = set(pressed)
-        self.update()
-
-    def set_targets(self, split: int = 0, left=None, right=None):
-        """난이도 존별 목표음(pc) — 비목표음 배지는 흐리게(§7.5). split=0이면 해제."""
-        self._split = split
-        self._left_targets = set(left or ())
-        self._right_targets = set(right or ())
         self.update()
 
     def set_preview(self, notes=(), chords=(), root=0, progress=0.0):
@@ -109,12 +96,6 @@ class PianoWidget(QWidget):
         p.drawRoundedRect(bar, 2, 2)
         p.restore()
 
-    def _is_dim(self, midi: int) -> bool:
-        if not self._split:
-            return False
-        t = self._left_targets if midi < self._split else self._right_targets
-        return (midi % 12) not in t
-
     # ── 기하: 비율 고정 + 가운데 정렬 ───────────────────────────
     def _geometry(self):
         white_midis = [m for m in range(MIDI_LOW, MIDI_HIGH + 1) if _is_white(m)]
@@ -122,20 +103,18 @@ class PianoWidget(QWidget):
         if n == 0:
             return None
         w, h = self.width(), self.height() - PREVIEW_SPACE
-        units = n + GAP_UNITS            # 중앙 간격 포함 폭
-        kw = w / units
+        kw = w / n
         kh = kw * WHITE_RATIO
         if kh > h:
             kh = h
             kw = kh / WHITE_RATIO
-        total_w = kw * units
+        total_w = kw * n
         return white_midis, (w - total_w) / 2.0, (h - kh) / 2.0, kw, kh
 
     @staticmethod
     def _wx(i: int, white_midis: list[int], x0: float, kw: float) -> float:
-        """i번째 흰 건반의 x — GAP_MIDI 이상이면 중앙 간격만큼 밀림."""
-        gap = GAP_UNITS * kw if white_midis[i] >= GAP_MIDI else 0.0
-        return x0 + i * kw + gap
+        """i번째 흰 건반의 x."""
+        return x0 + i * kw
 
     # ── 상태 판정 ────────────────────────────────────────────────
     def _content_state(self, midi: int) -> str:
@@ -180,8 +159,7 @@ class PianoWidget(QWidget):
             self._draw_white(p, midi, r)
             preview_rects.append((midi, r))
 
-        # 검은 건반 (흰 건반 위에 덮어 그림) — B|C 경계엔 검은 건반이 없어
-        # 중앙 간격과 겹치지 않는다.
+        # 검은 건반 (흰 건반 위에 덮어 그림)
         for i, wmidi in enumerate(white_midis):
             if (wmidi % 12) + 1 in BLACK_PCS:
                 bmidi = wmidi + 1
@@ -266,8 +244,6 @@ class PianoWidget(QWidget):
         deg = self._degrees.get(pc)
         if deg is None:
             return
-        if self._is_dim(midi):
-            p.setOpacity(0.25)
 
         if state == "CHORD":
             bg = QColor(T.BADGE_ROOT if deg == "1" else T.BADGE_CHORD)  # 근음=파랑
@@ -281,8 +257,6 @@ class PianoWidget(QWidget):
         p.setBrush(bg)
         p.setPen(Qt.PenStyle.NoPen)
         p.drawEllipse(badge)
-
-        p.setOpacity(1.0)
 
     # ── 마우스 입력 ──────────────────────────────────────────────
     def _midi_at(self, mx: float, my: float) -> int | None:
@@ -303,7 +277,7 @@ class PianoWidget(QWidget):
                     bx = self._wx(i, white_midis, x0, kw) + kw - bw / 2
                     if bx <= mx <= bx + bw:
                         return bmidi
-        for i in range(len(white_midis)):    # 중앙 간격 클릭은 None
+        for i in range(len(white_midis)):
             wx = self._wx(i, white_midis, x0, kw)
             if wx <= mx < wx + kw:
                 return white_midis[i]

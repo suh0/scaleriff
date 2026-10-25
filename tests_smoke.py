@@ -7,8 +7,6 @@ import tempfile
 from copy import deepcopy
 from unittest.mock import patch
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-# 이전 기록 경로를 지정해도 연주가 채점 기록을 생성하지 않아야 한다.
-os.environ["SCALERIFF_PRACTICE_LOG"] = os.path.join(tempfile.mkdtemp(), "practice_log.jsonl")
 import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -316,8 +314,8 @@ def main():
     assert ms.lane._pos == 2.5 and ms.scrub._pos == 2.5
 
     # 도전모드 메뉴 → 리프연습 / 자유연습 → 리프 뷰 표시 연동
-    assert ms.challenge_btn.menu() is ms.challenge_menu
-    assert [a.text() for a in ms.challenge_menu.actions()] == ["자유연습", "리프연습", "스케일도전", "리프도전"]
+    assert ms.mode_btn.menu() is ms.mode_menu
+    assert [a.text() for a in ms.mode_menu.actions()] == ["자유연습", "리프연습"]
     ms._mode_actions["riff"].trigger()
     assert ms._mode == "practice" and not ms.riff.isHidden()
     ms._mode_actions["free"].trigger()
@@ -396,47 +394,27 @@ def main():
     assert 64 not in ms.piano._pressed
     ms._on_tick(tl.content_end())
     ms.pause()
-    assert not os.path.exists(os.environ["SCALERIFF_PRACTICE_LOG"])
     win.score.practiceRequested.emit()
     assert win.stack.currentWidget() is win.main_screen
 
     # 세션 저장/복원과 구 캐시의 기본값 유지.
     from player.timeline import Timeline as _TL2
     d = _TL2.from_dict(tl.to_dict())
-    assert d.bar_times == tl.bar_times and d.split_point == 60
+    assert d.bar_times == tl.bar_times
     old = tl.to_dict()
     old["loop_override"] = 4  # 이전 채점 설정이 있어도 세션 로드 가능
-    for key in ("bar_times", "loop_phase", "split_point", "loops"):
+    old["split_point"] = 60   # 구 세션의 왼손 경계 키는 무시
+    for key in ("bar_times", "loop_phase", "loops"):
         old.pop(key, None)
     d2 = _TL2.from_dict(old)
-    assert d2.bar_times == [] and d2.split_point == 60 and d2.loops == []
+    assert d2.bar_times == [] and d2.loops == []
 
-    # 연습 화면·도전은 예비박(코드 없음)부터 시작
+    # 연습 화면은 예비박(코드 없음)부터 시작
     assert ms.playhead.position_sec() == tl.count_in_start() < tl.bar_times[0]
-    tl.count_in_bars = 0          # 아래 필터 검사는 첫 코드 위치(예비박 없음)에서
-    # 난이도: 선택 → 건반 목표음 필터
-    ms._difficulty_actions[0].trigger()         # Lv1: 왼손 근음 + 오른손 코드톤
-    seg = ms._current_segment()
-    assert ms.piano._split == tl.split_point
-    assert ms.piano._right_targets == set(seg.chord_tones()), "Lv1 오른손 ≠ 코드톤"
-    assert ms.piano._left_targets == {seg.chord.root % 12}, "Lv1 왼손 ≠ 근음"
-    ms._difficulty_actions[1].trigger()
-    assert ms.piano._left_targets == {seg.chord.root % 12}
-    assert ms.piano._right_targets == set(seg.note_set)
-    ms._difficulty_actions[2].trigger()
-    assert ms.piano._left_targets == set(seg.chord_tones())
-    assert ms.piano._right_targets == set(seg.note_set)
-    # 리프연습에는 이전 자유연습의 난이도 필터를 적용하지 않음
-    ms._mode_actions["riff"].trigger()
-    assert ms.piano._split == 0 and ms._mode_actions["riff"].isChecked()
-    assert not any(a.isChecked() for a in ms._difficulty_actions)
-    ms._difficulty_actions[2].trigger()
-    assert ms.piano._split == tl.split_point and not ms._mode_actions["riff"].isChecked()
-    assert ms._difficulty_actions[2].isChecked()
-    # 해제 → 필터 해제
-    ms._mode_actions["free"].trigger()
-    assert ms.piano._split == 0
-    tl.count_in_bars = 1
+    # 건반은 오른손 두 옥타브(C4~B5)만 그린다.
+    from gui.widgets.piano import MIDI_HIGH, MIDI_LOW
+    assert (MIDI_LOW, MIDI_HIGH) == (60, 83)
+    assert len(ms.piano._geometry()[0]) == 14, "흰 건반 2옥타브(14개) 아님"
 
     # §3.5 2차: 박자 조정 화면 — 좌(시작박)/우(BPM) 드래그 반응형 → 확정 시 재격자화
     from build.real_builder import regrid_timeline
@@ -570,39 +548,46 @@ def main():
     ms.pause()
     tl3.bar_times = saved_bars
 
-    # 건반 중앙 간격 — 왼손(C3~B3)|오른손(C4~B5) 시각 분리(B3|C4)
+    # 건반 = 오른손 C4~B5, 흰 건반이 간격 없이 이어진다.
     pw = ms.piano
     pw.resize(900, 220)
     _wm, _x0, _y0, _kw, _kh = pw._geometry()
-    assert _wm[0] == 48 and _wm[-1] == 83          # C3~B5
-    _i = _wm.index(60)                              # C4 앞에 간격
-    _gap = pw._wx(_i, _wm, _x0, _kw) - (pw._wx(_i - 1, _wm, _x0, _kw) + _kw)
-    assert _gap > 0.5 * _kw, _gap
+    assert _wm[0] == 60 and _wm[-1] == 83          # C4~B5
+    assert all(abs(pw._wx(i + 1, _wm, _x0, _kw) - pw._wx(i, _wm, _x0, _kw) - _kw) < 1e-6
+               for i in range(len(_wm) - 1))
     # 보정 결과는 캐시 JSON에 영속(원자료 포함)
     d3 = _TL.from_dict(tl3.to_dict())
     assert d3.beat_times == tl3.beat_times and d3.bar_times == tl3.bar_times
 
-    # 파형 피크(분석 WAV → 박자 조정 확대바)
-    import wave as _wv, struct as _st, os as _os, tempfile as _tmp
-    from gui.beat_screen import _wave_peaks
+    # 파형 피크(분석 WAV → 세션 JSON) — 곡 전체 기준 정규화로 작게 녹음된 곡도 같은 높이
+    import wave as _wv, struct as _st, os as _os, tempfile as _tmp, json as _json
+    from player.waveform import wave_peaks, WAVE_RATE
     fd, wavp = _tmp.mkstemp(suffix=".wav"); _os.close(fd)
-    with _wv.open(wavp, "wb") as f:
-        f.setnchannels(1); f.setsampwidth(2); f.setframerate(22050)
-        f.writeframes(_st.pack("<h", 12000) * 22050)     # 1초, 일정 진폭
-    peaks = _wave_peaks(wavp, 0.0, 1.0)
-    assert peaks and all(-1.0 <= lo <= hi <= 1.0 for lo, hi in peaks)
-    assert abs(peaks[0][1] - 12000 / 32768) < 1e-6, peaks[0]
-    assert _wave_peaks("no_such.wav", 0.0, 1.0) == []    # 캐시 유실 → 파형 생략
-    # 곡 전체 기준 정규화: 작게 녹음된 곡도 큰 곡과 같은 높이로
-    from gui.beat_screen import _wave_level
     quiet = wavp + ".q.wav"
-    with _wv.open(quiet, "wb") as f:
-        f.setnchannels(1); f.setsampwidth(2); f.setframerate(22050)
-        f.writeframes(_st.pack("<h", 3000) * 22050)
-    hi = [_wave_peaks(x, 0.0, 1.0, level=_wave_level(x))[0][1] for x in (wavp, quiet)]
-    assert all(abs(v - 1.0) < 1e-3 for v in hi), hi
-    assert _wave_level("no_such.wav") == 1.0
-    _os.remove(wavp); _os.remove(quiet)
+    for path, amp in ((wavp, 12000), (quiet, 3000)):
+        with _wv.open(path, "wb") as f:
+            f.setnchannels(1); f.setsampwidth(2); f.setframerate(22050)
+            f.writeframes(_st.pack("<h", amp) * 22050)     # 1초, 일정 진폭
+    for path in (wavp, quiet):
+        peaks = wave_peaks(path)
+        assert len(peaks) == WAVE_RATE and all(abs(hi - 1.0) < 1e-3 for _, hi in peaks), peaks[:2]
+    assert wave_peaks("no_such.wav") == []               # 파일 없음 → 파형 생략
+    # 구 세션(wav_ref만 있음)은 불러올 때 파형을 옮기고, 저장 JSON엔 WAV 경로가 없다.
+    fd, old_sess = _tmp.mkstemp(suffix=".json"); _os.close(fd)
+    old_payload = tl3.to_dict(); old_payload.pop("wave_peaks"); old_payload["wav_ref"] = wavp
+    with open(old_sess, "w", encoding="utf-8") as f:
+        _json.dump(old_payload, f)
+    migrated = _TL.load_json(old_sess)
+    assert len(migrated.wave_peaks) == WAVE_RATE
+    migrated.save_json(old_sess)
+    with open(old_sess, encoding="utf-8") as f:
+        saved_payload = _json.load(f)
+    assert "wav_ref" not in saved_payload and "wav_ref" not in saved_payload["media_refs"]
+    assert saved_payload["wave_peaks"] == migrated.wave_peaks
+    _os.remove(wavp); _os.remove(quiet); _os.remove(old_sess)
+    # 속도 변환 결과는 OS 임시 폴더에만(프로젝트 cache에 남기지 않음)
+    from player.audio_stretch import _CACHE as _RATE_DIR
+    assert _RATE_DIR.name.startswith("scaleriff_rate_") and "cache" not in _RATE_DIR.parts[-2:]
 
     # 세션 저장/불러오기 — 분석 1회 결과를 링크 화면 파일입력으로 즉시 로드(재분석 없음)
     fd, sess = _tmp.mkstemp(suffix=".json"); _os.close(fd)
