@@ -27,9 +27,7 @@ from gui.analyzing_screen import AnalyzingScreen
 from gui.beat_screen import BeatScreen
 from gui.setup_screen import SetupScreen
 from gui.main_screen import MainScreen
-from gui.widgets.busy_overlay import run_busy
 from build.timeline_builder import build_timeline
-from ml.generate import bake_examples
 
 
 class AnalysisPill(QFrame):
@@ -205,8 +203,6 @@ class AppWindow(QMainWindow):
 
     def _on_timeline_ready(self, timeline):
         if self._bg_wait:               # 연습하며 기다리는 중 — 화면 전환 없이 보관
-            if not getattr(timeline, "scale_riffs", None):
-                bake_examples(timeline, self.main_screen._ml_model)
             self._save_session(timeline)
             self._pending_tl = timeline
             self._pill.set_ready(timeline.title or "")
@@ -216,18 +212,9 @@ class AppWindow(QMainWindow):
 
     def _open_timeline(self, timeline):
         self._timeline = timeline
-
-        def work():
-            # 스케일 종류당 1개 리프 굽기(§8) — 악보 화면에서 미리 보여주기 위해 여기서 1회.
-            if not getattr(timeline, "scale_riffs", None):
-                bake_examples(timeline, self.main_screen._ml_model)
-
-        def done(_):
-            self._save_session(timeline)     # 재분석 없이 불러올 세션 파일(캐시)
-            self.beat.set_timeline(timeline, self.main_screen._ml_model)
-            self.stack.setCurrentWidget(self.beat)
-
-        run_busy(self, work, done)
+        self._save_session(timeline)         # 재분석 없이 불러올 세션 파일(캐시)
+        self.beat.set_timeline(timeline)
+        self.stack.setCurrentWidget(self.beat)
 
     # ── 백그라운드 분석 대기(연습하며 기다리기) ──────────────────
     def _enter_bg_wait(self):

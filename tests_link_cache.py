@@ -37,8 +37,7 @@ def main():
             session = Path(win._session_path(tl))
             assert session.exists()
 
-            with patch.object(win.analyzing, "start") as start, \
-                    patch("gui.app.bake_examples", side_effect=AssertionError("리프 재생성")):
+            with patch.object(win.analyzing, "start") as start:
                 win._start_build(url)
                 assert not start.called, "저장된 링크를 재분석함"
                 assert win._timeline.to_dict() == saved, "저장된 수정 내용이 달라짐"

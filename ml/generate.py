@@ -441,30 +441,6 @@ def bake_examples(timeline, model, max_bars=1):
     return timeline
 
 
-def rebake_kind(timeline, model, kind: str, max_bars=1) -> dict:
-    """리프 재생성 — 같은 종류의 다른 변주(시드 변경) + 그 종류 구간 전부 재타일링."""
-    v = (timeline.scale_riffs.get(kind) or {}).get("variant", 0) + 1
-    timeline.scale_riffs[kind] = _make_riff(model, kind, max_bars, variant=v,
-                                          beats_per_bar=timeline.time_sig_beats())
-    for seg in timeline.segments:
-        if seg.scale and seg.scale.kind == kind:
-            _tile_segment(timeline, seg)
-    return timeline.scale_riffs[kind]
-
-
-def bake_segment(timeline, seg, model, max_bars=1):
-    """단일 구간 재굽기 — 악보 화면 수동 코드 수정 후 그 구간 리프만 갱신.
-
-    새 스케일 종류면 timeline.scale_riffs에 추가하고, seg.example을 다시 타일링.
-    """
-    kind = seg.scale.kind if seg.scale else "메이저"
-    if kind not in timeline.scale_riffs:
-        timeline.scale_riffs[kind] = _make_riff(model, kind, max_bars,
-                                              beats_per_bar=timeline.time_sig_beats())
-    _tile_segment(timeline, seg)
-    return timeline
-
-
 def _landing_pc(seg, goal):
     intervals = CHORD_SPECS.get(seg.chord.quality, ([], ""))[0]
     if goal == "third":

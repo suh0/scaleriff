@@ -4,8 +4,8 @@
   → 구조분석(루프 감지) → 화성분석(코드별 스케일 배정) → Timeline.
 
 코드별 스케일(§3.3): 다이아토닉 → 키의 해당 모드 / 비다이아토닉 → 로컬 코드-스케일.
-플레이어는 재생/룩업만(§4). 리프 굽기(§8 bake_examples)는 호출측(gui/app,
-regrid)이 Timeline 완성 직후 1회 수행한다.
+플레이어는 재생/룩업만(§4). 리프는 메인 화면 리프학습모드에서만 만든다
+(ml.generate.bake_progression).
 """
 from __future__ import annotations
 
@@ -105,7 +105,7 @@ def build_real_timeline(source: str, progress_cb=None) -> Timeline:
 
 
 # ── 마디선 보정 (§3.5 2차) — 저장된 코드 스팬으로 재격자화 ──────────────
-def regrid_timeline(tl: Timeline, model=None, anchor_sec: float | None = None,
+def regrid_timeline(tl: Timeline, anchor_sec: float | None = None,
                     preserve_tempo: bool = False, bars: list[float] | None = None) -> bool:
     """마디선 보정 — MIR 재실행 없이 구조 재계산만(§3.5 원칙).
 
@@ -156,12 +156,10 @@ def regrid_timeline(tl: Timeline, model=None, anchor_sec: float | None = None,
             lp["start_bar"] = max(0, bisect.bisect_right(bars, lp["start_sec"]) - 1)
             lp["end_bar"] = min(len(bars) - 2, max(lp["start_bar"],
                                                   bisect.bisect_left(bars, lp["end_sec"]) - 1))
-    from ml.generate import bake_examples   # 지역 import: 무거운 ml 로딩을 보정 시점까지 지연
-    bake_examples(tl, model)                 # 새 격자 기준 리프/예시 재굽기(§8)
     return True
 
 
-def apply_chord_edit(tl: Timeline, start: float, end: float, name: str, model=None):
+def apply_chord_edit(tl: Timeline, start: float, end: float, name: str):
     """선택한 실제 시간 구간만 보정하고 원시 MIR 결과는 유지한다."""
     if not tl.chord_spans:
         tl.chord_spans = [[s.start_sec, s.end_sec, s.chord.name] for s in tl.segments]
@@ -173,6 +171,3 @@ def apply_chord_edit(tl: Timeline, start: float, end: float, name: str, model=No
                                tl.bar_times[-1], tl.time_sig_beats(), tl.chord_end)
     mode = "minor" if "minor" in tl.key.lower() else "major"
     tl.segments, tl.available_scales = _segments_from_structure(st, tl.key_root, mode, True)
-    from ml.generate import bake_segment
-    for seg in tl.segments:
-        bake_segment(tl, seg, model)

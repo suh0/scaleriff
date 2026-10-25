@@ -362,15 +362,14 @@ def main():
     ms._select_practice("free")     # 자유연습
 
     # §1 수동 코드 수정: 박자 조정 화면 코드 목록에서 바꾸면 스케일·리프 재계산
-    win.beat.set_timeline(tl, ms._ml_model)
+    win.beat.set_timeline(tl)
     s0 = tl.segments[0]                      # Dm7 → Fmaj7로 수정
     win.beat._apply_chord(s0, "Fmaj7")
     s0 = tl.segment_at(s0.start_sec)  # 편집은 시간 구간을 다시 구성하므로 현재 객체를 조회
     assert s0.chord.name == "Fmaj7" and s0.scale_name == "F 리디안", \
         f"수동 수정 실패: {s0.chord.name}/{s0.scale_name}"
-    assert s0.example, "수정 후 리프 미생성"
-    assert "리디안" in tl.scale_riffs, "새 스케일 종류 리프 미생성"
-    print(f"  scale_riffs: {list(tl.scale_riffs)}  riff_events={len(ms._riff_events)}  "
+    assert not s0.example, "코드 수정 시 리프를 미리 굽지 않는다(리프학습모드에서만)"
+    print(f"  riff_events={len(ms._riff_events)}  "
           f"(모델 {'O' if ms._ml_model else 'X'})")
 
     # 연주 입력과 반복 재생 후에도 채점 기록을 생성하지 않는다.
@@ -407,7 +406,7 @@ def main():
     # §3.5 2차: 박자 조정 화면 — 좌(시작박)/우(BPM) 드래그 반응형 → 확정 시 재격자화
     from build.real_builder import regrid_timeline
     assert tl.chord_overrides, "수동 코드의 원본 시간 기록이 없음"
-    assert regrid_timeline(tl, ms._ml_model, 1.0), "수정 시 보존한 원자료로 재격자화 실패"
+    assert regrid_timeline(tl, 1.0), "수정 시 보존한 원자료로 재격자화 실패"
     assert tl.segment_at(1.2).chord.name == "Fmaj7", "재격자화 후 수동 코드 유실"
     tl3 = _TL(audio_ref="", bpm=120, time_sig="4/4", key="C major", key_root=0,
               loop_len=0, segments=[], content_span=(0.0, 8.0),
@@ -415,7 +414,7 @@ def main():
               beat_times=[i * 0.5 for i in range(17)],
               chord_spans=[[0.0, 4.0, "C"], [4.0, 8.0, "F"]])
     bs = win.beat
-    bs.set_timeline(tl3, ms._ml_model)
+    bs.set_timeline(tl3)
     assert bs.anchor == 0.0 and abs(bs.bar_len - 2.0) < 1e-9
     assert bs.bpm_edit.text() == "120.0"
     bs._on_drag(1, 2.7)               # 왼쪽 창: 마디1 선을 2.7s로 → 시작박 0.7s
@@ -447,7 +446,7 @@ def main():
     assert [s.chord.name for s in tl3.segments] == ["C", "F"]
     assert tl3.segments[1].start_sec == 4.5 and tl3.segments[1].scale_name == "F 리디안", \
         "한 마디 한 코드: F 진입은 마디선(4.5초)에 정렬돼야 함"
-    assert all(s.example for s in tl3.segments), "재격자화 후 리프 미굽기"
+    assert not any(s.example for s in tl3.segments), "재격자화 시 리프를 미리 굽지 않는다"
     assert bs.grid.count() > 0, "확정 후 코드 목록 미갱신"
     bs.bpm_edit.setText("96")
     bs.confirm_btn.click()
@@ -576,7 +575,7 @@ def main():
     win._start_build(sess)
     assert win.stack.currentWidget() is win.beat, "세션 로드 후 박자 화면 아님"
     assert win._timeline is not tl3 and win._timeline.bpm == tl3.bpm
-    assert len(win._timeline.segments) == 2 and win._timeline.scale_riffs
+    assert len(win._timeline.segments) == 2
     assert win._timeline.chord_spans == tl3.chord_spans   # 원자료도 복원 → 재보정 가능
     _os.remove(sess)
 
@@ -608,7 +607,7 @@ def main():
     tl_bg = build_dummy_timeline()
     win.analyzing.timelineReady.emit(tl_bg)               # 완료 → 알약에 연주하기
     assert win._pending_tl is tl_bg and win.stack.currentWidget() is win.link_screen
-    assert not win._pill.play_btn.isHidden() and tl_bg.scale_riffs
+    assert not win._pill.play_btn.isHidden() and not tl_bg.scale_riffs
     win._play_pending()                                   # → 그 곡의 박자 조정
     assert win.stack.currentWidget() is win.beat and win._timeline is tl_bg
     assert not win._bg_wait and win._pill.isHidden()

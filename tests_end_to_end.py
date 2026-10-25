@@ -47,17 +47,20 @@ class EndToEndTest(unittest.TestCase):
                     screen.note_player.set_volume(0)
                     window._on_timeline_ready(timeline)
                     self.assertIs(window.stack.currentWidget(), window.beat)
-                    apply_chord_edit(timeline, 0, 2.4, "Dm7", screen._ml_model)
-                    apply_chord_edit(timeline, 2.4, 4.8, "G7", screen._ml_model)
+                    apply_chord_edit(timeline, 0, 2.4, "Dm7")
+                    apply_chord_edit(timeline, 2.4, 4.8, "G7")
                     timeline.loops = [{"name": "통합 검사", "start_bar": 0, "end_bar": 1,
                                        "start_sec": 0, "end_sec": 4.8, "on": True}]
                     timeline.bpm = 100
-                    self.assertTrue(regrid_timeline(timeline, screen._ml_model, anchor_sec=0))
+                    self.assertTrue(regrid_timeline(timeline, anchor_sec=0))
                     self.assertEqual(timeline.segment_at(.5).chord.name, "Dm7")
                     self.assertEqual(timeline.segment_at(3.0).chord.name, "G7")
                     window._enter_setup()
                     window._enter_main()
+                    from gui.riff_dialog import RiffDialog
+                    RiffDialog(timeline, screen._ml_model, 0, 4.8, screen).accept()   # 리프학습모드 확정
                     screen._select_practice("riff")
+                    window._save_session(timeline)
                     saved = Timeline.load_json(window._session_path(timeline))
                     self.assertEqual(saved.chord_overrides, timeline.chord_overrides)
                     self.assertEqual(saved.loops[0]["end_sec"], 4.8)

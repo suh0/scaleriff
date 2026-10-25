@@ -36,7 +36,6 @@ from player.note_synth import render_click_wav
 from player.waveform import WAVE_RATE
 from build.real_builder import regrid_timeline
 from analyze.harmony import _best_key_for_chords
-from ml.generate import bake_segment, bake_examples
 from gui.widgets.busy_overlay import run_busy
 
 ZOOM_SEC = 10.0      # 확대 창 길이
@@ -264,7 +263,6 @@ class BeatScreen(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.tl = None
-        self._model = None
         self.playhead: Playhead | None = None
         # 격자: 검출 비트 모드(_lattice = 보정 비트, 1마디 = _lattice[_bar1] + _offset)
         #      또는 BPM 직접 지정 시 균등 모드(_lattice=None, _u_anchor + i*beat_len)
@@ -708,12 +706,11 @@ class BeatScreen(QWidget):
         return super().eventFilter(obj, e)
 
     # ── 로드 ─────────────────────────────────────────────────────
-    def set_timeline(self, tl, model=None):
+    def set_timeline(self, tl):
         if self.playhead:
             self.playhead.pause()
         self.tl = tl
         self.warn_lbl.setVisible(tl.analysis_info.get("beat_detected") is False)
-        self._model = model
         self._sync_key_box()
         self._dur = (tl.bar_times[-1] if tl.bar_times else tl.total_sec()) or ZOOM_SEC
         idx = self.sig_box.findData(tl.time_sig)
@@ -921,7 +918,7 @@ class BeatScreen(QWidget):
             if ok:
                 self._build_grid()
             then()
-        run_busy(self, lambda: regrid_timeline(self.tl, self._model, bars=bars), done)
+        run_busy(self, lambda: regrid_timeline(self.tl, bars=bars), done)
 
     @staticmethod
     def _dim(w: QWidget, dim: bool):
@@ -1096,7 +1093,7 @@ class BeatScreen(QWidget):
         self.pause()
         self.tl.key_override = True
         self._set_key(key, index // 2)
-        run_busy(self.chord_page, lambda: bake_examples(self.tl, self._model), lambda _: self._build_grid())
+        self._build_grid()
 
     def _set_key(self, key: str, root: int):
         """키 변경 — 코드·시간은 유지하고 모든 구간의 스케일·도수만 새 키로."""
@@ -1132,7 +1129,7 @@ class BeatScreen(QWidget):
         if bar is not None and len(self.tl.bar_times) > bar + 1:
             start = max(start, self.tl.bar_times[bar])
             end = min(end, self.tl.bar_times[bar + 1])
-        run_busy(self.chord_page, lambda: apply_chord_edit(self.tl, start, end, name, self._model),
+        run_busy(self.chord_page, lambda: apply_chord_edit(self.tl, start, end, name),
                  lambda _: self._build_grid())
 
     # ── 사용자 루프(§6): 칸 클릭=코드 수정 · 칸 드래그=루프 지정 ──
