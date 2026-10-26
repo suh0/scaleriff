@@ -11,7 +11,6 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from PyQt6.QtWidgets import QApplication, QLabel, QTextEdit, QWidget
-from PyQt6.QtGui import QImage, QColor
 from PyQt6.QtCore import QPoint, QSettings
 from gui.app import AppWindow
 from player.dummy_timeline import build_dummy_timeline
@@ -197,7 +196,6 @@ def main():
     # 리프모드: 조건대로 생성 → 다시 만들기 → 확정 시 리프연습
     from PyQt6.QtCore import QTimer
     from gui.riff_dialog import RiffDialog
-    from gui import theme as _T
     dialogs = []
 
     def _accept_dialog():
@@ -259,73 +257,15 @@ def main():
     ms._render_at(tl.segments[1].start_sec + 0.1)
     ms.on_midi_note(64, True)
     ms.on_midi_note(64, False)
-    # 코드 레인(C안): 타임라인 연결 + 위치 추적 + 클릭=구간 점프 + 드래그=시킹
-    assert ms.lane._timeline is tl
-    ms.lane.set_position(1.0)
-    assert ms.lane._pos == 1.0
-    ms.lane.resize(900, 92)
-    seg1 = tl.segments[1]
-    ms.lane.setGraphicsEffect(None)  # 입장 애니메이션 투명도와 무관하게 실제 위젯 렌더 검사
-    lane_img = QImage(ms.lane.size(), QImage.Format.Format_ARGB32)
-    ms.lane.render(lane_img)
-    fx0 = int(ms.lane._sec_to_x(seg1.start_sec)) + 8
-    fx1 = int(ms.lane._sec_to_x(seg1.end_sec)) - 4
-    name_color = QColor(_T.TEXT_MUTED).name()
-    name_rows = [
-        y for y in range(4, ms.lane.height() - 4)
-        if any(lane_img.pixelColor(x, y).name() == name_color
-               for x in range(fx0, fx1))
-    ]
-    assert len(name_rows) >= 18, f"다음 코드명이 작음: {len(name_rows)}px"
-    scale_color = QColor(_T.TEXT_DIM).name()
-    scale_rows = [
-        y for y in range(4, ms.lane.height() - 4)
-        if any(lane_img.pixelColor(x, y).name() == scale_color
-               for x in range(fx0, fx1))
-    ]
-    assert scale_rows, "다음 코드 아래 스케일명이 사라짐"
-    text_rows = name_rows + scale_rows
-    text_mid = (min(text_rows) + max(text_rows)) / 2
-    assert abs(text_mid - ms.lane.height() / 2) <= 4, \
-        f"코드 트랙 텍스트 세로 중앙 불일치: {text_mid:.1f}"
-    key_fill = QColor(_T.KEY_W_FILL).name()
-    mini_key_pixels = sum(
-        lane_img.pixelColor(x, y).name() == key_fill
-        for x in range(fx0, fx1) for y in range(58, 84)
-    )
-    assert mini_key_pixels == 0, "다음 코드에 미니 건반이 남아 있음"
-    seeks = []
-    ms.lane.seekRequested.connect(seeks.append)
-
-    class _P:                                         # 최소 마우스 이벤트 대역
-        def __init__(self, x): self._x = x
-        def x(self): return self._x
-
-    class _Ev:
-        def __init__(self, x): self._p = _P(x)
-        def position(self): return self._p
-
-    x1 = ms.lane._sec_to_x(seg1.start_sec + 0.1)     # 구간1 블록 위 클릭
-    ms.lane.mousePressEvent(_Ev(x1))
-    ms.lane.mouseReleaseEvent(_Ev(x1))                # 이동 없음 = 클릭 → 점프
-    assert seeks and abs(seeks[-1] - seg1.start_sec) < 1e-6, seeks
-    ms.lane.mousePressEvent(_Ev(x1))
-    ms.lane.mouseMoveEvent(_Ev(x1 + 60.0))            # 오른쪽 드래그 = 과거로 시킹
-    assert seeks[-1] < ms.lane._press_sec, seeks[-1]
-    n_seek = len(seeks)
-    ms.lane.mouseReleaseEvent(_Ev(x1 + 60.0))         # 드래그 후 release = 점프 없음
-    assert len(seeks) == n_seek
-    ms.lane.seekRequested.disconnect(seeks.append)
-    ms.lane.set_position(1.0)
-    # 곡 전체 재생바 + 레인 연동: 한 틱에 둘 다 같은 위치로 이동
+    # 곡 전체 재생바 + 모니터박스 연동: 한 틱에 둘 다 같은 위치로 이동
     ms._on_tick(2.5)
-    assert ms.lane._pos == 2.5 and ms.scrub._pos == 2.5
+    assert ms.riff._sec == 2.5 and ms.scrub._pos == 2.5
 
     # 리프연습 / 자유연습 → 리프 뷰 표시 연동
     ms._select_practice("riff")
-    assert ms._mode == "practice" and not ms.riff.isHidden()
+    assert ms._mode == "practice" and ms.riff.show_notes and not ms.riff.isHidden()
     ms._select_practice("free")
-    assert ms._mode == "guide" and ms.riff.isHidden()
+    assert ms._mode == "guide" and not ms.riff.show_notes and not ms.riff.isHidden()
 
     # ML 리프: 스케일 '종류당 1개' (코드 등장마다가 아님, §8) — 코드별 모드 타임라인 기준
     from ml.generate import bake_examples as _bake_ml
@@ -635,7 +575,7 @@ def main():
 
     # 입장 애니메이션 헬퍼 — 헤드리스에서 예외 없이 동작
     from gui.anim import stagger as _stagger
-    _stagger([ms.play_btn, ms.lane])
+    _stagger([ms.play_btn, ms.riff])
 
     print("\nSMOKE OK — 스케일/악보+수동수정/리프동기재생/리프불변식(1마디·스케일안·밀도·해결·음역)/보정/난이도/마디선+확정잠금/루프정의·사이드바/건반간격/파형·세션/애니메이션 정상")
     win.close()

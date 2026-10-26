@@ -602,19 +602,36 @@ def write_examples(timeline, start_sec, end_sec, notes):
 
 
 def chord_patterns(timeline, bars_per_riff=2):
-    """곡을 2마디 창으로 나눠 같은 스케일 흐름(바뀌는 박 위치·note_set)끼리 묶는다 — 많이 나오는 순.
+    """리프 패턴 = 곡 스케일 2마디 리프 1종(모든 창) + 디투어 마디용 1마디 리프(로컬 스케일별, overlay).
 
-    코드는 보지 않는다 — 다른 코드 구간에는 transpose_riff로 도수 이동. 패턴 수 = 최소 리프 수.
+    창을 순서대로 잘라 묶으면 디투어 위치마다 패턴이 갈려 리프 수가 불어난다 — 디투어만 마디 단위로 덧씌운다.
+    다른 코드 구간에는 transpose_riff로 도수 이동. 패턴 수 = 최소 리프 수.
     """
     bars = list(timeline.bar_times)
     if len(bars) < 2:
         bar = timeline.beat_sec() * timeline.time_sig_beats()
         bars = [i * bar for i in range(int(math.ceil(timeline.total_sec() / bar)) + 1)]
+
+    def segs_in(a, b):
+        return [s for s in timeline.segments if s.start_sec < b and s.end_sec > a]
+
+    windows = [(bars[i], bars[min(i + bars_per_riff, len(bars) - 1)])
+               for i in range(0, len(bars) - 1, bars_per_riff)]
+    windows = [w for w in windows if segs_in(*w)]
+    if not windows:
+        return []
+    # 리프는 디투어 없는 첫 온전한(짧은 마지막 창 제외) 창에서 굽는다(spans[0])
+    full = timeline.beats_between(*windows[0])
+    clean = [w for w in windows if timeline.beats_between(*w) >= full - 1e-6
+             and not any(s.is_detour for s in segs_in(*w))]
+    first = clean[0] if clean else windows[0]
+    home = next((s.scale.name for s in timeline.segments if not s.is_detour and s.scale), "곡 스케일")
+    patterns = [{"label": f"{home} · {bars_per_riff}마디",
+                 "spans": [first] + [w for w in windows if w != first], "overlay": False}]
     groups = {}
-    for i in range(0, len(bars) - 1, bars_per_riff):
-        a, b = bars[i], bars[min(i + bars_per_riff, len(bars) - 1)]
-        segs = [s for s in timeline.segments if s.start_sec < b and s.end_sec > a]
-        if not segs:
+    for a, b in zip(bars, bars[1:]):
+        segs = segs_in(a, b)
+        if not any(s.is_detour for s in segs):
             continue
         b0 = timeline.beat_at(a)
         runs = []   # (상대 박, note_set, 이름) — 같은 스케일이 이어지면 하나로
@@ -624,9 +641,9 @@ def chord_patterns(timeline, bars_per_riff=2):
                 runs.append((round(timeline.beat_at(max(a, s.start_sec)) - b0, 3), ns,
                              s.scale.name if s.scale else s.chord.name))
         key = (round(timeline.beats_between(a, b), 3),) + tuple(r[:2] for r in runs)
-        groups.setdefault(key, {"label": "→".join(r[2] for r in runs),
-                                "spans": []})["spans"].append((a, b))
-    return sorted(groups.values(), key=lambda p: -len(p["spans"]))
+        groups.setdefault(key, {"label": "→".join(r[2] for r in runs) + " · 1마디",
+                                "spans": [], "overlay": True})["spans"].append((a, b))
+    return patterns + sorted(groups.values(), key=lambda p: -len(p["spans"]))
 
 
 def _degree(note_set, pc):

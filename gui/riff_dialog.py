@@ -1,4 +1,4 @@
-"""리프 생성 창 — 곡 전체를 2마디 스케일 패턴으로 묶어 패턴별 리프를 만든다(학습 설정 조건 적용).
+"""리프 생성 창 — 곡 스케일 2마디 리프 + 디투어 마디용 1마디 리프를 만든다(학습 설정 조건 적용).
 
 리프 수 = 패턴 수(최소) + 사용자가 늘린 만큼 자주 나오는 패턴에 변형 추가.
 패턴 목록 클릭 = 공유 롤의 음표만 교체, 듣기 = 선택 리프를 원곡 템포로 재생,
@@ -45,7 +45,7 @@ class RiffDialog(QDialog):
         lay.addWidget(self.info)
         need = len(self.patterns)
         top = QHBoxLayout()
-        self.need_lbl = QLabel(f"2마디 스케일 패턴 {need}종 → 최소 리프 {need}개")
+        self.need_lbl = QLabel(f"스케일 패턴 {need}종(곡 스케일 2마디 + 디투어 1마디) → 최소 리프 {need}개")
         self.need_lbl.setStyleSheet(f"color:{T.TEXT_MUTED};font-size:12px;")
         top.addWidget(self.need_lbl)
         top.addStretch(1)
@@ -169,8 +169,11 @@ class RiffDialog(QDialog):
         self._show(self.list.currentRow())
 
     def _apply(self):
-        """패턴의 k번째 등장 구간 ← 그 패턴 변형 k % n을 그 구간 코드에 맞춰 도수 이동해 기록."""
-        for i, pt in enumerate(self.patterns):
+        """패턴의 k번째 등장 구간 ← 그 패턴 변형 k % n을 그 구간 코드에 맞춰 도수 이동해 기록.
+
+        기본(2마디) 패턴을 먼저 깔고, 디투어 1마디 패턴(overlay)을 그 마디에 덧씌운다.
+        """
+        for i, pt in sorted(enumerate(self.patterns), key=lambda x: x[1]["overlay"]):
             mine = [r for r in self.riffs if r["pattern"] == i]
             src = pt["spans"][0][0]
             for k, (a, b) in enumerate(pt["spans"]):

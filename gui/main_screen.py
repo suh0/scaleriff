@@ -25,7 +25,6 @@ from gui import theme as T
 from gui.anim import fade_in, reduced_motion, set_reduced_motion
 from gui.widgets.elided_label import ElidedLabel
 from gui.widgets.piano import MIDI_HIGH, MIDI_LOW, PianoWidget
-from gui.widgets.chord_lane import ChordLane
 from gui.widgets.scrub_bar import ScrubBar
 from gui.widgets.falling_notes import FallingNotes
 from gui.riff_dialog import RiffDialog
@@ -65,6 +64,8 @@ class MainScreen(QWidget):
         self._midi_name = ""
         self._last_tick = 0.0
         self._seeking = False
+        self._monitor_seg = None          # 모니터박스에 표시 중인 현재 구간
+        self._monitor_prev = ""          # push 동안 밀려나는 이전 코드명
 
         self.content = T.compact_content(self)
         root = QVBoxLayout(self.content)
@@ -99,11 +100,7 @@ class MainScreen(QWidget):
         root.addLayout(top)
         self.settings_btn.clicked.connect(self._show_settings)
 
-        # ── 코드 레인 — HUD+다음 미리보기 통합(고정 플레이헤드) ──
-        self.lane = ChordLane()
-        self.lane.seekRequested.connect(self._on_seek)
-        root.addWidget(self.lane)
-
+        # ── 모니터박스 자리(guide_space~건반) — 현재/다음 코드 + 리프 낙하 ──
         self.guide_space = QWidget()
         self.guide_space.setMinimumHeight(40)
         root.addWidget(self.guide_space, 1)
@@ -341,6 +338,7 @@ class MainScreen(QWidget):
         self._select_practice("free")
         self.tl = tl
         self._last_idx = -1
+        self._monitor_seg = None
         self._build_loop_rows()            # 사용자 루프 리스트(사이드바) 갱신
         self._build_riff_events()          # 리프를 곡에 함께 구움(§2)
         self._riff_idx = 0
@@ -354,7 +352,6 @@ class MainScreen(QWidget):
 
         self.song_lbl.setText(tl.title or tl.audio_ref or "내 곡")
         self.bpm_lbl.setText(f"{tl.key}  ·  {tl.bpm:.0f} BPM")
-        self.lane.set_timeline(tl)
         self.scrub.set_timeline(tl)
         self.total_time_lbl.setText(_fmt_sec(tl.total_sec()))
         self._seek_to(tl.count_in_start())   # 처음 = 예비박부터(음수는 무음 프리롤)
@@ -373,7 +370,7 @@ class MainScreen(QWidget):
         self._mode = "practice" if mode == "riff" else "guide"
         practice = (self._mode == "practice")
         self.riff_btn.setText("리프모드 해제" if practice else "리프모드")
-        self.riff.setVisible(practice)
+        self.riff.show_notes = practice
         self._place_falling_notes()
         self.riff.raise_()
         self.loop_panel.raise_()
@@ -438,8 +435,7 @@ class MainScreen(QWidget):
             self._seek_riff_idx(sec)        # 리프 커서도 함께 점프
 
     def _on_tick(self, sec: float):
-        self.lane.set_position(sec)
-        self.scrub.set_position(sec)       # 레인·재생바 함께 이동
+        self.scrub.set_position(sec)
         if self.tl:
             self.time_lbl.setText(_fmt_sec(sec))
         if self._seeking:
@@ -485,34 +481,55 @@ class MainScreen(QWidget):
         self.piano.set_scale(seg.note_set, chord_tones)
         self.piano.set_degrees({pc: degree_number(pc, seg.scale_root) for pc in seg.note_set})
         self.piano.set_pressed({m for _, m in self._held_keys})
-        # 현재/다음 코드·스케일은 코드 레인이 스스로 그림(set_position)
+        # 현재/다음 코드는 모니터박스가 그림(_update_monitor)
 
     def _update_scale_preview(self, sec: float, idx: int):
         self.piano.set_preview()
-        if self._mode == "practice":
-            self._place_falling_notes()
-            self.riff.set_position(sec, self._loop_spans())
-            return
-        if idx < 0:
-            return
-        seg = self.tl.segments[idx]
-        upcoming = self.tl.next_segment(seg)
-        boundary = upcoming.start_sec if upcoming else seg.end_sec
-        for start, end in self._loop_spans():
-            if start <= sec < end and end <= boundary:
-                boundary = end
-                upcoming = self.tl.segment_at(start)
+        self._place_falling_notes()
+        spans = self._loop_spans()
+        self.riff.set_position(sec, spans)
+        seg = self.tl.segments[idx] if idx >= 0 else None
+        if seg is None:      # 예비박: 첫 코드를 다음 코드로 예고
+            first = self.tl.segments[0]
+            upcoming = first if sec < first.start_sec else None
+            boundary = first.start_sec
+        else:
+            upcoming = self.tl.next_segment(seg)
+            boundary = upcoming.start_sec if upcoming else seg.end_sec
+        change = seg.start_sec if seg else sec
+        for start, end in spans:
+            if start <= sec < end:
+                change = max(change, start)
+                if end <= boundary:
+                    boundary = end
+                    upcoming = self.tl.segment_at(start)
                 break
-        if upcoming is None or boundary > self.tl.content_end():
+        if upcoming is not None and boundary > self.tl.content_end():
+            upcoming = None
+        lead = min(4 * self.tl.beat_sec(), boundary - (seg.start_sec if seg else sec - 4 * self.tl.beat_sec()))
+        grow = (sec - boundary + lead) / lead if upcoming and lead > 0 and boundary - lead <= sec < boundary else 0.0
+        self._update_monitor(sec, seg, upcoming, grow, change)
+        if self._mode == "practice" or seg is None or upcoming is None or grow <= 0:
             return
         if (seg.scale_name, seg.chord_tones(), set(seg.note_set)) == (
                 upcoming.scale_name, upcoming.chord_tones(), set(upcoming.note_set)):
             return
-        lead = min(4 * self.tl.beat_sec(), boundary - seg.start_sec)
-        if lead <= 0 or not boundary - lead <= sec < boundary:
-            return
         self.piano.set_preview(upcoming.note_set, upcoming.chord_tones(),
-                               upcoming.scale_root, (sec - boundary + lead) / lead)
+                               upcoming.scale_root, grow)
+
+    def _update_monitor(self, sec, seg, upcoming, grow, change):
+        """모니터박스 코드 표시 — 재생 중 코드가 바뀌면 이전 코드를 밀어내는 push(0.5박)."""
+        if seg is not self._monitor_seg:
+            playing = self.playhead is not None and self.playhead.is_playing()
+            self._monitor_prev = self._monitor_seg.chord.name if playing and self._monitor_seg else ""
+            self._monitor_seg = seg
+        push = min(1.0, max(0.0, (sec - change) / (0.5 * self.tl.beat_sec()))) if self._monitor_prev else 1.0
+        if push >= 1:
+            self._monitor_prev = ""
+        self.riff.set_chords(seg.chord.name if seg else "",
+                             seg.scale.kind if seg and seg.scale else "",
+                             upcoming.chord.name if upcoming else "",
+                             self._monitor_prev, grow, push)
 
     # ── 입력 콜백 ────────────────────────────────────────────────
     def on_midi_note(self, midi: int, is_on: bool):

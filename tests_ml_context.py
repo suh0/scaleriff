@@ -198,10 +198,10 @@ class ProvenanceTest(unittest.TestCase):
 
 class PatternTest(unittest.TestCase):
     def _song(self):
-        tl = Timeline("", 120, "4/4", "C", 0, 2, bar_times=[0, 2, 4, 6, 8, 10, 12])
+        tl = Timeline("", 120, "4/4", "C", 0, 2, bar_times=[0, 2, 4, 6, 8, 10, 12, 14])
         diatonic = [0, 2, 4, 5, 7, 9, 11]
         for i, (bar, name, detour) in enumerate([(0, "Dm7", 0), (1, "G7", 0), (2, "G7", 0), (3, "Cmaj7", 0),
-                                                 (4, "Dm7", 0), (5, "F#7", 1)]):
+                                                 (4, "Dm7", 0), (5, "F#7", 1), (6, "F#7", 1)]):
             ch = parse_chord(name)
             pcs = [1, 3, 4, 6, 8, 10, 11] if detour else diatonic
             tl.segments.append(Segment(i, bar * 2, bar * 2 + 2, bar, bar + 1, ch,
@@ -211,12 +211,14 @@ class PatternTest(unittest.TestCase):
         return tl
 
     def test_patterns_follow_scale_changes_not_chords(self):
+        # 7마디: 창 [0,2)[2,4)[4,6)[6,7) — 디투어(5마디=창 뒤, 6마디=홀수 끝 창)는 위치와 무관하게 1종
         patterns = generate.chord_patterns(self._song())
-        self.assertEqual([(p["label"], len(p["spans"])) for p in patterns],
-                         [("C 메이저", 2), ("C 메이저→F# 믹솔리디안", 1)])   # ii–V·V–I는 같은 패턴
+        self.assertEqual([(p["label"], len(p["spans"]), p["overlay"]) for p in patterns],
+                         [("C 메이저 · 2마디", 4, False), ("F# 믹솔리디안 · 1마디", 2, True)])
+        self.assertEqual(patterns[0]["spans"][0], (0, 4))   # 디투어 없는 온전한 창에서 굽는다
         self.assertEqual(generate.allocate(patterns, 2), [1, 1])
         self.assertEqual(generate.allocate(patterns, 3), [2, 1])   # 자주 나오는 패턴부터
-        self.assertEqual(generate.allocate(patterns, 9), [2, 1])   # 등장 횟수 상한
+        self.assertEqual(generate.allocate(patterns, 9), [4, 2])   # 등장 횟수 상한
 
     def test_transpose_moves_by_scale_degree_and_keeps_landings(self):
         tl = self._song()

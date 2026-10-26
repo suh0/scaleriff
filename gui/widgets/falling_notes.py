@@ -1,7 +1,7 @@
-"""리프 음표를 재생 위치에 맞춰 해당 건반으로 떨어뜨리는 예고."""
+"""모니터박스 — 현재/다음 코드 표시 + (리프모드) 리프 음표를 해당 건반으로 떨어뜨리는 예고."""
 import bisect
 from PyQt6.QtCore import Qt, QRectF
-from PyQt6.QtGui import QColor, QPainter, QPen, QLinearGradient
+from PyQt6.QtGui import QColor, QPainter, QPen, QLinearGradient, QFont
 from PyQt6.QtWidgets import QWidget
 
 from gui import theme as T
@@ -18,8 +18,47 @@ class FallingNotes(QWidget):
         self._beat = .5
         self._beat_grid = []
         self._loops = []
+        self.show_notes = False            # 리프모드에서만 노드 낙하
+        self._chords = ("", "", "", "", 0.0, 1.0)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        self.hide()
+
+    def set_chords(self, cur, kind, nxt, prev, grow, push):
+        """cur/kind=현재 코드·스케일, nxt=다음 코드, prev=방금 밀려나는 코드.
+        grow 0→1: 다음 코드가 커짐 · push 0→1: 바뀐 직후 새 코드가 내려오며 prev를 밀어냄."""
+        self._chords = (cur, kind, nxt, prev, grow, push)
+        self.update()
+
+    def _draw_chords(self, p):
+        cur, kind, nxt, prev, grow, push = self._chords
+        h, w = self.height(), self.width()
+        big = max(28.0, min(96.0, h * 0.32))
+        mid_y, top_y = h * 0.5, h * 0.16
+        ease = 1 - (1 - push) ** 3
+
+        def text(name, size, y, alpha):
+            if not name or size < 1 or alpha <= 0:
+                return
+            f = QFont(T.FONT_SANS_EN)
+            f.setBold(True)
+            f.setPixelSize(int(size))
+            p.setFont(f)
+            c = QColor(T.TEXT_PRIMARY)
+            c.setAlphaF(alpha)
+            p.setPen(c)
+            p.drawText(QRectF(0, y - size, w, size * 2), Qt.AlignmentFlag.AlignCenter, name)
+
+        small = big * (0.4 + 0.25 * grow)
+        # 밀려나는 이전 코드: 중앙 → 아래로, 페이드
+        text(prev, big, mid_y + (h - mid_y) * ease, 0.35 * (1 - ease))
+        # 현재 코드: 다음 코드 자리(위·작게) → 중앙·크게
+        size = small + (big - small) * ease if prev else big
+        y = top_y + (mid_y - top_y) * ease if prev else mid_y
+        text(cur, size, y, 0.2 + 0.15 * ease if prev else 0.35)
+        if kind and ease >= 1:
+            text(kind, big * 0.18, mid_y + big * 0.62, 0.3)
+        # 다음 코드: 위에서 작게 → 점점 커짐(push 동안엔 숨김)
+        if ease >= 1:
+            text(nxt, small, top_y, 0.2)
 
     def set_events(self, events, beat_sec, beat_grid=()):
         self._events = events
@@ -60,7 +99,7 @@ class FallingNotes(QWidget):
 
     def _nodes(self):
         geo = self.piano._geometry()
-        if not geo or self._lead <= 0:
+        if not self.show_notes or not geo or self._lead <= 0:
             return []
         whites, x0, _, kw, _ = geo
         loop = next(((start, end) for start, end in self._loops
@@ -109,9 +148,11 @@ class FallingNotes(QWidget):
             for i in range(len(whites)):
                 x = self.piano._wx(i, whites, x0, kw) + kw / 2
                 p.drawLine(int(x), 0, int(x), self.height())
-        p.setPen(QPen(QColor(T.BORDER_SUBTLE), 1))
-        for y in self._beat_lines():
-            p.drawLine(0, int(y), self.width(), int(y))
+        self._draw_chords(p)
+        if self.show_notes:
+            p.setPen(QPen(QColor(T.BORDER_SUBTLE), 1))
+            for y in self._beat_lines():
+                p.drawLine(0, int(y), self.width(), int(y))
         p.setPen(Qt.PenStyle.NoPen)
         for x, y, width, length, color in self._nodes():
             gradient = QLinearGradient(0, y, 0, y + length)

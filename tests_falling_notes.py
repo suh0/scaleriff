@@ -59,11 +59,27 @@ def main():
     assert len(screen.riff._nodes()) == 3, "지속 중인 음과 루프 다음 회차 리프 예고"
     screen._select_practice("riff")
     screen._render_at(1.0)
-    assert screen.riff.isVisible() and screen.piano._preview_opacity == 0
+    assert screen.riff.show_notes and screen.piano._preview_opacity == 0
     tl.loops = []
     screen._select_practice("free")
     screen._render_at(1.0)
-    assert screen.riff.isHidden() and screen.piano._preview_opacity > 0
+    assert screen.riff.isVisible() and not screen.riff.show_notes and screen.piano._preview_opacity > 0
+    assert not screen.riff._nodes(), "자유모드: 모니터박스는 있되 노드 없음"
+    # 모니터박스 코드: 경계 4박 전부터 다음 코드가 커지고, 재생 중 바뀌면 이전 코드를 밀어냄
+    seg0, seg1 = tl.segments[1], tl.segments[2]
+    beat = tl.beat_sec()
+    screen._render_at(seg0.start_sec)
+    cur, _, nxt, prev, grow, push = screen.riff._chords
+    assert (cur, nxt, prev, grow, push) == (seg0.chord.name, seg1.chord.name, "", 0.0, 1.0)
+    screen._render_at(seg1.start_sec - 2 * beat)
+    assert abs(screen.riff._chords[4] - 0.5) < 1e-6, "4박 창 절반에서 grow 0.5"
+    screen.playhead.is_playing = lambda: True
+    screen._render_at(seg1.start_sec + 0.25 * beat)
+    cur, _, _, prev, _, push = screen.riff._chords
+    assert (cur, prev) == (seg1.chord.name, seg0.chord.name) and abs(push - 0.5) < 1e-6
+    screen._render_at(seg1.start_sec + beat)
+    assert screen.riff._chords[3] == "" and screen.riff._chords[5] == 1.0, "push 끝나면 이전 코드 제거"
+    del screen.playhead.is_playing
     screen.close()
     print("FALLING NOTES OK")
 
