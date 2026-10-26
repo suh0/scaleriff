@@ -234,8 +234,7 @@ def main():
     # 렌더 + 입력 + 모드토글
     ms = win.main_screen
     app.processEvents()
-    assert ms.scrub.geometry().top() > ms.piano.geometry().bottom(), \
-        "재생바가 건반 아래에 있지 않음"
+    assert ms.scrub_row.isHidden(), "재생바는 기본 숨김(스페이스로 표시)"
     for ww, wh in ((1040, 740), (1600, 1000)):
         win.resize(ww, wh)
         app.processEvents()
@@ -263,9 +262,9 @@ def main():
 
     # 리프연습 / 자유연습 → 리프 뷰 표시 연동
     ms._select_practice("riff")
-    assert ms._mode == "practice" and ms.riff.show_notes and not ms.riff.isHidden()
+    assert ms._mode == "practice" and ms.riff.show_notes and not ms.stage.isHidden()
     ms._select_practice("free")
-    assert ms._mode == "guide" and not ms.riff.show_notes and not ms.riff.isHidden()
+    assert ms._mode == "guide" and not ms.riff.show_notes and not ms.stage.isHidden()
 
     # ML 리프: 스케일 '종류당 1개' (코드 등장마다가 아님, §8) — 코드별 모드 타임라인 기준
     from ml.generate import bake_examples as _bake_ml

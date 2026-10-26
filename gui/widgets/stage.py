@@ -1,0 +1,330 @@
+"""연주 무대 — 건반과 노드 레인을 원근(3D로 기울인 하이웨이)으로 그린다.
+
+평면 좌표(world): 레인 y∈[0, lane_h], 건반 y∈[lane_h, lane_h+kh], x는 PianoWidget 좌표 그대로.
+변환 두 개(평면 직사각형 → 화면 사다리꼴)로 점만 변환한다: 레인은 강하게 소실(_xf),
+건반은 완만하게(_kxf). 둘은 판정선(건반 윗선)에서 같은 화면 선분을 공유해 이어진다.
+
+연주 중 비용: 벽·도로·레인 선·눌리지 않은 건반·배지는 QPixmap 캐시
+(창 크기·스케일이 바뀔 때만 다시 그림). 매 프레임엔 캐시 복사 + 노드·눌린 건반·빛기둥·예고만 그린다.
+건반 클릭은 역변환 한 번 → PianoWidget._midi_at, 다시 그리기는 바뀐 건반 영역만(update_keys).
+"""
+from PyQt6.QtCore import Qt, QPointF, QRectF
+from PyQt6.QtGui import (QColor, QLinearGradient, QPainter, QPen, QPixmap,
+                         QPolygonF, QTransform)
+from PyQt6.QtWidgets import QWidget
+
+from gui import theme as T
+from gui.widgets.piano import BLACK_PCS, MIDI_HIGH, MIDI_LOW, PREVIEW_SPACE, WHITE_RATIO, _is_white
+
+TOP_RATIO = 0.3    # 레인 먼 끝 폭 ÷ 판정선 폭(소실 정도)
+TOP_Y = 0.15       # 레인 먼 끝의 화면 높이 비율
+KEYS_TOP = 0.63    # 건반 윗선(판정선)의 화면 높이 비율
+KEYS_TAPER = 0.06  # 판정선 쪽이 건반 앞쪽보다 양옆으로 좁아지는 비율(화면 폭 기준)
+LIP = 0.035        # 흰 건반 앞면 두께(화면 높이 비율)
+BEAM = 0.45        # 빛기둥 길이(레인 길이 비율)
+
+SCALE_NODE = "#dfe6ee"   # 스케일음 노드(이미지의 흰 노드)
+SCALE_GLOW = "#8fcaff"   # 스케일음 눌림 발광 — 흰 건반 위에서도 보이게 하늘색
+WALL_TONES = ("#161d28", "#1c2532", "#121822")
+
+
+def _quad(rect, corners):
+    """평면 사각형 → 화면 사각형(좌상·우상·우하·좌하) 원근 변환."""
+    xf = QTransform()
+    QTransform.quadToQuad(QPolygonF([rect.topLeft(), rect.topRight(), rect.bottomRight(), rect.bottomLeft()]),
+                          QPolygonF([QPointF(x, y) for x, y in corners]), xf)
+    return xf
+
+
+def _hair(color, width=1.0):
+    """원근 변환과 무관하게 화면에서 일정한 두께의 선."""
+    pen = QPen(color, width)
+    pen.setCosmetic(True)
+    return pen
+
+
+class Stage(QWidget):
+    def __init__(self, piano, riff, parent=None):
+        super().__init__(parent)
+        self.piano, self.riff = piano, riff
+        piano.setParent(self)
+        piano.hide()                       # 상태·기하 모델로만 사용
+        riff.setParent(self)
+        riff.hide()
+        self.setMinimumHeight(240)
+        self._xf = QTransform()            # 레인(평면 → 화면)
+        self._kxf = QTransform()           # 건반(평면 → 화면)
+        self._kinv = QTransform()
+        self._lane_h = 1.0
+        self._cache = None
+        self._cache_key = None
+        self.cache_builds = 0              # 캐시 재생성 횟수(비용 측정용)
+        self._mouse_midi = None
+
+    # ── 기하 ─────────────────────────────────────────────────────
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        w, h = self.width(), self.height()
+        kw = w / 14
+        self.piano.resize(w, int(kw * WHITE_RATIO) + PREVIEW_SPACE)
+        _, _, _, _, kh = self.piano._geometry()
+        self._lane_h = kh * 3
+        self.riff.resize(w, max(1, int(self._lane_h)))
+        # 건반 앞쪽은 화면 여백 안, 판정선은 그보다 좁게 → 원근을 유지하며 끝 건반까지 화면 안
+        half, hit = w * TOP_RATIO / 2, h * KEYS_TOP
+        near_l, near_r = T.PAD_H, w - T.PAD_H
+        hit_l, hit_r = near_l + w * KEYS_TAPER, near_r - w * KEYS_TAPER
+        self._xf = _quad(QRectF(0, 0, w, self._lane_h),
+                         [(w / 2 - half, h * TOP_Y), (w / 2 + half, h * TOP_Y), (hit_r, hit), (hit_l, hit)])
+        self._kxf = _quad(QRectF(0, self._lane_h, w, kh),
+                          [(hit_l, hit), (hit_r, hit), (near_r, h * (1 - LIP)), (near_l, h * (1 - LIP))])
+        self._kinv, _ = self._kxf.inverted()
+        self._cache_key = None
+
+    def _key_rect(self, midi):
+        """건반 윗면의 평면 사각형."""
+        whites, x0, _, kw, kh = self.piano._geometry()
+        if _is_white(midi):
+            return QRectF(x0 + whites.index(midi) * kw + 1, self._lane_h, kw - 2, kh - 1)
+        x = x0 + whites.index(midi - 1) * kw + kw - kw * 0.3
+        return QRectF(x, self._lane_h, kw * 0.6, kh * 0.62)
+
+    def _keys(self):
+        whites = [m for m in range(MIDI_LOW, MIDI_HIGH + 1) if _is_white(m)]
+        blacks = [m + 1 for m in whites if (m % 12) + 1 in BLACK_PCS and m + 1 <= MIDI_HIGH]
+        return whites, blacks
+
+    def _lip(self):
+        return self.height() * LIP
+
+    def _screen_rect(self, midi):
+        """그 건반(앞면·빛기둥 포함)이 차지하는 화면 영역 — 부분 다시 그리기용."""
+        r = self._key_rect(midi)
+        beam = QRectF(r.left(), self._lane_h * (1 - BEAM), r.width(), self._lane_h * BEAM)
+        area = self._kxf.mapRect(r).united(self._xf.mapRect(beam))
+        return area.toAlignedRect().adjusted(-3, -3, 3, int(self._lip()) + 3)
+
+    def update_keys(self, midis):
+        for midi in midis:
+            if MIDI_LOW <= midi <= MIDI_HIGH:
+                self.update(self._screen_rect(midi))
+
+    # ── 색 규칙(PianoWidget 눌림 규칙 + 이미지 하이라이트) ────────
+    def _pressed_color(self, midi):
+        piano = self.piano
+        if piano._is_out(midi):
+            return QColor(T.KEY_PRESSED_OUT)
+        state = piano._content_state(midi)
+        if state == "CHORD":
+            return QColor(T.BADGE_ROOT if piano._degrees.get(midi % 12) == "1" else T.KEY_PRESSED_CHORD)
+        return QColor(SCALE_GLOW if state == "SCALE" else T.TEXT_DIM)
+
+    @staticmethod
+    def _node_color(color):
+        return QColor(SCALE_NODE if color == T.BADGE_SCALE else color)
+
+    # ── 그리기 부품 ──────────────────────────────────────────────
+    @staticmethod
+    def _front(p, xf, rect, depth, color):
+        """평면 사각형의 앞 모서리 아래로 두께 면을 화면 좌표에서 그린다."""
+        a = xf.map(rect.bottomLeft())
+        b = xf.map(rect.bottomRight())
+        p.save()
+        p.resetTransform()
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(color)
+        p.drawPolygon(QPolygonF([a, b, b + QPointF(0, depth), a + QPointF(0, depth)]))
+        p.restore()
+
+    def _draw_white(self, p, midi, glow=None):
+        p.setTransform(self._kxf)
+        r = self._key_rect(midi)
+        g = QLinearGradient(0, r.top(), 0, r.bottom())
+        top = glow.lighter(135) if glow else QColor("#dde2e8")
+        g.setColorAt(0, top)
+        g.setColorAt(1, glow if glow else QColor(T.KEY_W_FILL))
+        p.setBrush(g)
+        p.setPen(_hair(glow.darker(120) if glow else QColor(T.KEY_W_BORDER)))
+        p.drawRoundedRect(r, 4, 4)
+        self._draw_badge(p, midi, r, 26, 5)
+        self._front(p, self._kxf, r, self._lip(), (glow or QColor("#c3c9d1")).darker(125))
+
+    def _draw_black(self, p, midi, glow=None):
+        p.setTransform(self._kxf)
+        r = self._key_rect(midi)
+        shadow = QColor(0, 0, 0, 90)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(shadow)
+        p.drawRoundedRect(r.translated(r.width() * 0.12, r.height() * 0.04), 4, 4)
+        g = QLinearGradient(0, r.top(), 0, r.bottom())
+        g.setColorAt(0, glow.darker(160) if glow else QColor("#14171c"))
+        g.setColorAt(1, glow if glow else QColor("#30353d"))
+        p.setBrush(g)
+        p.drawRoundedRect(r, 4, 4)
+        self._draw_badge(p, midi, r, 20, 7)
+        self._front(p, self._kxf, r, self._lip() * 0.6, (glow or QColor("#30353d")).darker(200))
+
+    def _draw_badge(self, p, midi, r, size, gap):
+        state = self.piano._content_state(midi)
+        if state != "DEFAULT":
+            self.piano._draw_badge(p, midi, state, r.center().x(), r.bottom() - size / 2 - gap, size)
+
+    def _draw_walls(self, p):
+        """도로 양옆에 서 있는 벽 — 평면 바닥선 위로 세운 패널을 원근으로."""
+        w, lane = self.width(), self._lane_h
+        steps = [0, .12, .3, .5, .72, 1.0]
+        heights = [1.9, 1.3, 2.4, 1.6, 2.1]
+        for side, x in ((-1, -0.12 * w), (1, 1.12 * w)):
+            for i in range(len(steps) - 1):
+                y0, y1 = steps[i] * lane, steps[i + 1] * lane
+                f0, f1 = self._xf.map(QPointF(x, y0)), self._xf.map(QPointF(x, y1))
+                s0 = self._xf.map(QPointF(x + side, y0)).x() - f0.x()
+                s1 = self._xf.map(QPointF(x + side, y1)).x() - f1.x()
+                hh = heights[i] * w * 0.25
+                t0, t1 = f0 - QPointF(0, abs(s0) * hh), f1 - QPointF(0, abs(s1) * hh)
+                p.setPen(QPen(QColor(T.BORDER_SUBTLE), 1))
+                p.setBrush(QColor(WALL_TONES[i % len(WALL_TONES)]))
+                p.drawPolygon(QPolygonF([f0, f1, t1, t0]))
+                if (i, side) in ((3, 1), (1, 1)):   # 세로 네온 스트립 — 왼쪽 벽은 곡 정보 글자 자리라 생략
+                    mid0, mid1 = (f0 + f1) / 2, (t0 + t1) / 2
+                    neon = QColor(T.BADGE_ROOT if i == 3 else T.BADGE_CHORD)
+                    p.setPen(QPen(neon, max(2.0, abs(s1) * w * 0.006)))
+                    p.drawLine(mid0 - (mid0 - mid1) * .25, mid0 - (mid0 - mid1) * .75)
+
+    def _build_cache(self):
+        dpr = self.devicePixelRatioF()
+        pix = QPixmap(int(self.width() * dpr), int(self.height() * dpr))
+        pix.setDevicePixelRatio(dpr)
+        p = QPainter(pix)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        w, h = self.width(), self.height()
+        bg = QLinearGradient(0, 0, 0, h)
+        bg.setColorAt(0, QColor("#0a0e15"))
+        bg.setColorAt(1, QColor(T.BG_BASE))
+        p.fillRect(QRectF(0, 0, w, h), bg)
+        self._draw_walls(p)
+        p.setTransform(self._xf)
+        road = QLinearGradient(0, 0, 0, self._lane_h)
+        road.setColorAt(0, QColor("#0b1017"))
+        road.setColorAt(1, QColor("#161e2a"))
+        p.fillRect(QRectF(0, 0, w, self._lane_h), road)
+        whites, x0, _, kw, _ = self.piano._geometry()
+        p.setPen(_hair(QColor("#2a3444")))
+        for i in range(1, len(whites)):
+            x = x0 + i * kw
+            p.drawLine(QPointF(x, 0), QPointF(x, self._lane_h))
+        p.setPen(_hair(QColor("#4a5668"), 2))
+        p.drawLine(QPointF(0, 0), QPointF(0, self._lane_h))
+        p.drawLine(QPointF(w, 0), QPointF(w, self._lane_h))
+        whites, blacks = self._keys()
+        for midi in whites:
+            self._draw_white(p, midi)
+        for midi in blacks:
+            self._draw_black(p, midi)
+        p.end()
+        self._cache = pix
+        self.cache_builds += 1
+
+    # ── 프레임 ───────────────────────────────────────────────────
+    def paintEvent(self, event):
+        piano = self.piano
+        key = (self.width(), self.height(), frozenset(piano._note_set),
+               frozenset(piano._chord_tones), tuple(sorted(piano._degrees.items())))
+        if key != self._cache_key:
+            self._build_cache()
+            self._cache_key = key
+        p = QPainter(self)
+        p.drawPixmap(0, 0, self._cache)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setTransform(self._xf)
+        lane = QRectF(0, 0, self.width(), self._lane_h)
+        glows = {m: self._pressed_color(m) for m in piano._pressed if MIDI_LOW <= m <= MIDI_HIGH}
+
+        p.setClipRect(lane)
+        if self.riff.show_notes:
+            p.setPen(_hair(QColor(255, 255, 255, 22)))
+            for y in self.riff._beat_lines():
+                p.drawLine(QPointF(0, y), QPointF(lane.width(), y))
+        for x, y, size, length, color in self.riff._nodes():
+            c = self._node_color(color)
+            if y + length >= self._lane_h - 1:          # 판정선 도착 = 그 건반 발광
+                midi = piano._midi_at(x, 1)
+                if midi is not None:
+                    glows.setdefault(midi, c)
+            trail = QLinearGradient(0, y, 0, y + length)
+            fade = QColor(c)
+            fade.setAlpha(0)
+            trail.setColorAt(0, fade)
+            fade.setAlpha(110)
+            trail.setColorAt(1, fade)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(trail)
+            p.drawRect(QRectF(x - size / 2, y, size, length))
+            cap = QRectF(x - size / 2, y + length - min(length, size * 0.35), size, min(length, size * 0.35))
+            p.setBrush(c.lighter(115))
+            p.drawRoundedRect(cap, 4, 4)
+            a, b = self._xf.map(cap.bottomLeft()), self._xf.map(cap.bottomRight())
+            self._front(p, self._xf, cap, (b.x() - a.x()) * 0.12, c.darker(150))
+        for midi, c in glows.items():                   # 건반에서 레인 위로 빛기둥
+            r = self._key_rect(midi)
+            beam = QRectF(r.left(), self._lane_h * (1 - BEAM), r.width(), self._lane_h * BEAM)
+            g = QLinearGradient(0, beam.top(), 0, beam.bottom())
+            fade = QColor(c)
+            fade.setAlpha(0)
+            g.setColorAt(0, fade)
+            fade.setAlpha(120)
+            g.setColorAt(1, fade)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(g)
+            p.drawRect(beam)
+        p.setClipping(False)
+
+        whites, blacks = self._keys()
+        lit_white = [m for m in whites if m in glows]
+        for midi in lit_white:
+            self._draw_white(p, midi, glows[midi])
+        for midi in blacks:                             # 발광한 흰 건반 위로 흑건 복원
+            if midi in glows or lit_white:
+                self._draw_black(p, midi, glows.get(midi))
+        self._draw_preview(p)
+
+    def _draw_preview(self, p):
+        """다음 스케일 예고: 건반 앞쪽 배지 위에 넓어지는 막대(PianoWidget 예고 규칙)."""
+        piano = self.piano
+        if not piano._preview_opacity:
+            return
+        p.setTransform(self._kxf)
+        for midi in range(MIDI_LOW, MIDI_HIGH + 1):
+            pc = midi % 12
+            if pc not in piano._preview_notes:
+                continue
+            if pc != piano._preview_root and pc not in piano._preview_chords:
+                continue
+            tint = QColor(T.BADGE_ROOT if pc == piano._preview_root else T.BADGE_CHORD)
+            tint.setAlphaF(piano._preview_opacity)
+            r = self._key_rect(midi)
+            width = r.width() * (0.3 + 0.7 * piano._preview_progress)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(tint)
+            y = r.bottom() - (52 if _is_white(midi) else 12)   # 배지 바로 위(흑건에 가리지 않게)
+            p.drawRoundedRect(QRectF(r.center().x() - width / 2, y, width, 7), 3, 3)
+
+    # ── 마우스: 역변환 → 평평한 건반 좌표 ─────────────────────────
+    def _midi_at(self, pos):
+        pt = self._kinv.map(QPointF(pos))
+        _, _, y0, _, kh = self.piano._geometry()
+        y = pt.y() - self._lane_h
+        if kh <= y <= kh * 1.15:                       # 앞면 두께 부분도 그 건반
+            y = kh - 1
+        return self.piano._midi_at(pt.x(), y + y0)
+
+    def mousePressEvent(self, e):
+        midi = self._midi_at(e.position())
+        if midi is not None:
+            self._mouse_midi = midi
+            self.piano.notePlayed.emit(midi, True)
+
+    def mouseReleaseEvent(self, e):
+        if self._mouse_midi is not None:
+            self.piano.notePlayed.emit(self._mouse_midi, False)
+            self._mouse_midi = None

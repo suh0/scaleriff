@@ -87,11 +87,9 @@ class UIUXTest(unittest.TestCase):
             self.app.processEvents()
             self.assertGreater(screen.content.width(), screen.width() * .9)
             self.assertLessEqual(screen.height(), height)
-            for widget in (screen.piano, screen.play_btn, screen.scrub):
-                self.assertTrue(screen.content.rect().contains(widget.geometry()), widget.objectName())
-            screen._place_falling_notes()
-            geo = screen.piano._geometry()
-            self.assertAlmostEqual(screen.riff.y() + screen.riff.height(), screen.piano.y() + geo[2], delta=1)
+            for widget in (screen.stage, screen.play_btn, screen.riff_btn, screen.settings_btn, screen.scrub_row):
+                top_left = widget.mapTo(screen.content, widget.rect().topLeft())
+                self.assertTrue(screen.content.rect().contains(widget.rect().translated(top_left)), widget.objectName())
 
     def test_setup_screen_fits_and_landing_options_follow_method(self):
         screen = SetupScreen()

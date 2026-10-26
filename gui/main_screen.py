@@ -1,8 +1,8 @@
-"""[3] 메인 화면 = 플레이어 — ScaleRiff (디자인 스펙 §6.1, C안 코드 레인).
+"""[3] 메인 화면 = 플레이어 — ScaleRiff (리듬게임형 원근 하이웨이).
 
 타임라인을 재생하며 위젯을 갱신만 한다(§4: 재분석 없음).
-레이아웃: 상단바(뒤로/곡명/BPM/시간) · 코드 레인(고정 플레이헤드로 블록이 흐름)
-        · 리프 뷰(연습 시) · 피아노 · 하단 컨트롤 한 줄(루프·리프학습·재생)
+레이아웃: 원근 무대(건반+노드 레인) 위에 왼쪽 벽(곡 정보·뒤로) · 상단 가운데(현재/다음 코드)
+        · 오른쪽 벽(재생·리프모드·루프·입력·소리) · 숨김 재생바(스페이스로 표시)
 """
 from __future__ import annotations
 
@@ -10,9 +10,11 @@ import bisect
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QPushButton, QFrame,
-    QComboBox, QDialog, QFormLayout, QSlider, QCheckBox, QScrollArea, QMessageBox
+    QComboBox, QDialog, QFormLayout, QSlider, QCheckBox, QScrollArea, QMessageBox,
+    QGraphicsOpacityEffect
 )
-from PyQt6.QtCore import pyqtSignal, Qt, QEvent
+from PyQt6.QtCore import pyqtSignal, Qt, QTimer
+from PyQt6.QtGui import QKeySequence, QShortcut
 
 from player.timeline import Timeline
 from player.playhead import Playhead
@@ -27,6 +29,8 @@ from gui.widgets.elided_label import ElidedLabel
 from gui.widgets.piano import MIDI_HIGH, MIDI_LOW, PianoWidget
 from gui.widgets.scrub_bar import ScrubBar
 from gui.widgets.falling_notes import FallingNotes
+from gui.widgets.chord_header import ChordHeader
+from gui.widgets.stage import Stage
 from gui.riff_dialog import RiffDialog
 
 # 코드/가이드를 재생 위치보다 앞당겨 표시하는 보정값(초). 0 = 보정 없음.
@@ -68,100 +72,105 @@ class MainScreen(QWidget):
         self._monitor_prev = ""          # push 동안 밀려나는 이전 코드명
 
         self.content = T.compact_content(self)
-        root = QVBoxLayout(self.content)
-        root.setContentsMargins(T.PAD_H, 16, T.PAD_H, 16)
-        root.setSpacing(6)
+        # 원근 무대를 한 칸에 깔고 같은 칸에 HUD를 정렬로 겹친다(이미지형 하이웨이 배치).
+        root = QGridLayout(self.content)
+        root.setContentsMargins(0, 0, 0, 0)
 
-        # ── 상단 바 ──
-        top = QHBoxLayout()
+        # ── 무대: 건반+노드 레인(원근). PianoWidget·FallingNotes는 상태 모델 ──
+        self.piano = PianoWidget()
+        self.piano.notePlayed.connect(self.on_midi_note)
+        self.riff = FallingNotes(self.piano)
+        self.stage = Stage(self.piano, self.riff)
+        root.addWidget(self.stage, 0, 0)
+
+        # ── 왼쪽 벽: 곡 정보 ──
+        left = QWidget()
+        lv = QVBoxLayout(left)
+        lv.setContentsMargins(T.PAD_H + 8, 24, 0, 0)
+        lv.setSpacing(4)
+        self.song_lbl = ElidedLabel("—")
+        self.song_lbl.setFixedWidth(240)
+        self.song_lbl.setStyleSheet(
+            f"color:{T.TEXT_PRIMARY};font-family:'{T.FONT_SANS}';font-size:16px;font-weight:700;")
+        lv.addWidget(self.song_lbl)
+        self.key_lbl, self.bpm_lbl, self.time_lbl = (
+            self._hud_stat(lv, cap) for cap in ("KEY", "BPM", "TIME"))
+        lv.addSpacing(10)
+        nav = QHBoxLayout()
         self.link_btn = QPushButton("← 링크")
         self.score_btn = QPushButton("← 학습 설정")
         for b in (self.link_btn, self.score_btn):
             b.setStyleSheet(T.qss_ghost_btn())
+            b.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            nav.addWidget(b)
         self.link_btn.clicked.connect(self.backToLinkRequested.emit)
         self.score_btn.clicked.connect(self.backToSetupRequested.emit)
-        top.addWidget(self.link_btn)
-        top.addWidget(self.score_btn)
-        top.addSpacing(10)
-        self.song_lbl = ElidedLabel("—")
-        self.song_lbl.setStyleSheet(
-            f"color:{T.TEXT_PRIMARY};font-family:'{T.FONT_SANS}';"
-            "font-size:15px;font-weight:700;")
-        top.addWidget(self.song_lbl, 1)
-        top.addSpacing(12)
-        self.bpm_lbl = QLabel("")
-        self.bpm_lbl.setStyleSheet(
-            f"color:{T.TEXT_MUTED};font-family:'{T.FONT_MONO}';font-size:12px;")
-        top.addWidget(self.bpm_lbl)
-        top.addSpacing(12)
-        self.settings_btn = QPushButton("입력·소리")
-        self.settings_btn.setStyleSheet(T.qss_ghost_btn())
-        top.addWidget(self.settings_btn)
-        root.addLayout(top)
-        self.settings_btn.clicked.connect(self._show_settings)
+        lv.addLayout(nav)
+        root.addWidget(left, 0, 0, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
 
-        # ── 모니터박스 자리(guide_space~건반) — 현재/다음 코드 + 리프 낙하 ──
-        self.guide_space = QWidget()
-        self.guide_space.setMinimumHeight(40)
-        root.addWidget(self.guide_space, 1)
+        # ── 상단 가운데: 현재/다음 코드 ──
+        self.chord_hdr = ChordHeader()
+        root.addWidget(self.chord_hdr, 0, 0, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter)
 
-        # ── 피아노 (리프연습과 무관하게 가만히 — 가이드 그대로) ──
-        self.piano = PianoWidget()
-        self.piano.notePlayed.connect(self.on_midi_note)
-        root.addWidget(self.piano, 2)
-        self.riff = FallingNotes(self.piano, self.content)
-        self.piano.installEventFilter(self)
-
-        # ── 곡 전체 재생바(스크럽) — 건반 아래, seek로 레인과 연동 ──
-        self.scrub = ScrubBar()
-        self.scrub.seekRequested.connect(self._on_seek)
-        scrub_row = QHBoxLayout()
-        self.time_lbl = QLabel("00:00")
-        self.total_time_lbl = QLabel("00:00")
-        for label in (self.time_lbl, self.total_time_lbl):
-            label.setStyleSheet(
-                f"color:{T.TEXT_BODY};font-family:'{T.FONT_MONO}';font-size:12px;")
-        scrub_row.addWidget(self.time_lbl)
-        scrub_row.addWidget(self.scrub, 1)
-        scrub_row.addWidget(self.total_time_lbl)
-        root.addLayout(scrub_row)
-
-        # ── 하단 컨트롤 한 줄: 루프·리프학습 + 재생 ──
-        rrow = QHBoxLayout()
+        # ── 오른쪽 벽: 재생(원형) + 리프모드·루프·입력·소리 ──
+        right = QWidget()
+        rv = QVBoxLayout(right)
+        rv.setContentsMargins(0, 24, T.PAD_H + 8, 0)
+        rv.setSpacing(8)
+        self.play_btn = QPushButton("▶")
+        self.play_btn.setFixedSize(64, 64)
+        self.play_btn.setAccessibleName("재생 또는 일시정지")
+        self.play_btn.setToolTip("재생 / 일시정지 (스페이스)")
+        self.play_btn.setStyleSheet(
+            f"QPushButton{{background:transparent;color:{T.TEXT_PRIMARY};border:2px solid {T.TEXT_PRIMARY};"
+            "border-radius:32px;font-size:22px;font-weight:700;padding:0;}"
+            "QPushButton:hover{background:rgba(255,255,255,0.08);}"
+            f"QPushButton:pressed{{border-color:{T.BORDER_ACTIVE};color:{T.BORDER_ACTIVE};}}")
+        self.play_btn.clicked.connect(self._toggle_play)
+        rv.addWidget(self.play_btn, 0, Qt.AlignmentFlag.AlignRight)
+        rv.addSpacing(6)
+        self.riff_btn = QPushButton("리프모드")
+        self.riff_btn.clicked.connect(self._toggle_riff_mode)
         # 루프 버튼 — 사이드바 토글(생성한 루프 리스트, 루프별 ON/OFF)
         self.loop_btn = QPushButton("루프")
         self.loop_btn.setCheckable(True)
-        self.loop_btn.setFixedHeight(36)
-        self.loop_btn.setStyleSheet(T.qss_ghost_btn())
         self.loop_btn.clicked.connect(self._toggle_loop_panel)
-        rrow.addWidget(self.loop_btn)
-        self.riff_btn = QPushButton("리프모드")
-        self.riff_btn.setFixedHeight(36)
-        self.riff_btn.setStyleSheet(T.qss_ghost_btn())
-        self.riff_btn.clicked.connect(self._toggle_riff_mode)
-        rrow.addWidget(self.riff_btn)
-        rrow.addStretch(1)
-        # 재생/일시정지 (흰 원형, §6.1)
-        self.play_btn = QPushButton("▶")
-        self.play_btn.setFixedSize(52, 52)
-        self.play_btn.setAccessibleName("재생 또는 일시정지")
-        self.play_btn.setToolTip("재생 / 일시정지")
-        self.play_btn.setStyleSheet(
-            f"QPushButton{{background:{T.WHITE};color:{T.BG_BASE};border:1px solid transparent;"
-            "min-width:50px;max-width:50px;min-height:50px;max-height:50px;"
-            "border-radius:26px;font-size:20px;font-weight:700;padding:0;}"
-            f"QPushButton:hover{{background:{T.TEXT_BODY};}}"
-            f"QPushButton:pressed{{background:{T.BORDER_ACTIVE};}}"
-            f"QPushButton:focus{{border-color:{T.BORDER_ACTIVE};}}")
-        self.play_btn.clicked.connect(self._toggle_play)
-        playback_row = QGridLayout()
-        playback_row.addLayout(rrow, 0, 0)
-        playback_row.addWidget(self.play_btn, 0, 1)
-        playback_row.addWidget(QWidget(), 0, 2)
-        for column in (0, 2):
-            playback_row.setColumnStretch(column, 1)
-            playback_row.setColumnMinimumWidth(column, rrow.minimumSize().width())
-        root.addLayout(playback_row)
+        self.settings_btn = QPushButton("입력·소리")
+        self.settings_btn.clicked.connect(self._show_settings)
+        for b in (self.riff_btn, self.loop_btn, self.settings_btn):
+            b.setFixedSize(116, 36)
+            b.setStyleSheet(T.qss_ghost_btn())
+            b.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            rv.addWidget(b, 0, Qt.AlignmentFlag.AlignRight)
+        root.addWidget(right, 0, 0, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignRight)
+
+        # ── 재생바: 기본 숨김, 스페이스로 잠깐 반투명 표시 ──
+        self.scrub = ScrubBar()
+        self.scrub.seekRequested.connect(self._on_seek)
+        self.scrub_row = QWidget()
+        scrub_row = QHBoxLayout(self.scrub_row)
+        scrub_row.setContentsMargins(T.PAD_H, 0, T.PAD_H, 6)
+        self.pos_lbl = QLabel("00:00")
+        self.total_time_lbl = QLabel("00:00")
+        for label in (self.pos_lbl, self.total_time_lbl):
+            label.setStyleSheet(
+                f"color:{T.TEXT_BODY};font-family:'{T.FONT_MONO}';font-size:12px;")
+        scrub_row.addWidget(self.pos_lbl)
+        scrub_row.addWidget(self.scrub, 1)
+        scrub_row.addWidget(self.total_time_lbl)
+        fx = QGraphicsOpacityEffect(self.scrub_row)
+        fx.setOpacity(0.75)
+        self.scrub_row.setGraphicsEffect(fx)
+        self.scrub_row.hide()
+        root.addWidget(self.scrub_row, 0, 0, Qt.AlignmentFlag.AlignBottom)
+        self._scrub_timer = QTimer(self)
+        self._scrub_timer.setSingleShot(True)
+        self._scrub_timer.setInterval(3000)
+        self._scrub_timer.timeout.connect(self._hide_scrub)
+        self.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
+        # 스페이스 = 재생/일시정지 + 재생바 표시(포커스된 버튼 클릭보다 먼저 처리)
+        QShortcut(QKeySequence(Qt.Key.Key_Space), self, self._on_space,
+                  context=Qt.ShortcutContext.WidgetWithChildrenShortcut)
 
         # ── 루프 사이드바 (오버레이) — 생성한 루프 리스트 + 루프별 ON/OFF ──
         self.loop_panel = QFrame(self.content)
@@ -205,28 +214,45 @@ class MainScreen(QWidget):
             self.loop_panel.hide()
 
     def _place_loop_panel(self):
-        w = 310
-        self.loop_panel.setGeometry(self.content.width() - w - 20, 64,
+        w = 310      # 오른쪽 벽 버튼들 왼쪽에 띄운다
+        self.loop_panel.setGeometry(self.content.width() - w - 116 - T.PAD_H - 24, 24,
                                     w, min(380, self.content.height() - 130))
+
+    # ── HUD ─────────────────────────────────────────────────────
+    @staticmethod
+    def _hud_stat(layout, caption):
+        """이미지형 HUD: 자간 넓은 작은 대문자 라벨 + 큰 값."""
+        cap = QLabel(caption)
+        cap.setStyleSheet(
+            f"color:{T.TEXT_MUTED};font-family:'{T.FONT_SANS_EN}';font-size:11px;letter-spacing:3px;")
+        value = QLabel("—")
+        value.setStyleSheet(
+            f"color:{T.TEXT_PRIMARY};font-family:'{T.FONT_SANS_EN}';font-size:24px;font-weight:600;")
+        layout.addSpacing(6)
+        layout.addWidget(cap)
+        layout.addWidget(value)
+        return value
+
+    def _set_time(self, sec):
+        self.pos_lbl.setText(_fmt_sec(sec))
+        total = _fmt_sec(self.tl.total_sec()) if self.tl else "00:00"
+        self.time_lbl.setText(f"{_fmt_sec(sec)} / {total}")
+
+    def _on_space(self):
+        self._toggle_play()
+        self.scrub_row.show()
+        self._scrub_timer.start()
+
+    def _hide_scrub(self):
+        if self.scrub_row.underMouse():
+            self._scrub_timer.start()      # 마우스가 올라가 있으면 유지
+        else:
+            self.scrub_row.hide()
 
     def resizeEvent(self, e):
         super().resizeEvent(e)
-        if hasattr(self, "riff"):
-            self._place_falling_notes()
         if self.loop_panel.isVisible():
             self._place_loop_panel()
-
-    def _place_falling_notes(self):
-        geo = self.piano._geometry()
-        if geo:
-            top = self.guide_space.y()
-            bottom = self.piano.y() + geo[2]
-            self.riff.setGeometry(self.piano.x(), top, self.piano.width(), max(1, int(bottom - top)))
-
-    def eventFilter(self, watched, event):
-        if watched is self.piano and event.type() in (QEvent.Type.Move, QEvent.Type.Resize):
-            self._place_falling_notes()
-        return super().eventFilter(watched, event)
 
     def _build_loop_rows(self):
         while self.loop_rows.count():
@@ -351,12 +377,13 @@ class MainScreen(QWidget):
         self._last_tick = 0.0
 
         self.song_lbl.setText(tl.title or tl.audio_ref or "내 곡")
-        self.bpm_lbl.setText(f"{tl.key}  ·  {tl.bpm:.0f} BPM")
+        self.key_lbl.setText(tl.key)
+        self.bpm_lbl.setText(f"{tl.bpm:.0f}")
         self.scrub.set_timeline(tl)
         self.total_time_lbl.setText(_fmt_sec(tl.total_sec()))
         self._seek_to(tl.count_in_start())   # 처음 = 예비박부터(음수는 무음 프리롤)
         self.scrub.set_position(self.playhead.position_sec())
-        self.time_lbl.setText(_fmt_sec(self.playhead.position_sec()))
+        self._set_time(self.playhead.position_sec())
 
     def pause(self):
         if self.playhead:
@@ -364,6 +391,7 @@ class MainScreen(QWidget):
         self.note_player.stop_all()
         self._held_keys.clear()
         self.piano.set_pressed(set())
+        self.stage.update()
 
     # ── 연습 모드 선택 ──────────────────────────────────────────
     def _select_practice(self, mode: str):
@@ -371,8 +399,6 @@ class MainScreen(QWidget):
         practice = (self._mode == "practice")
         self.riff_btn.setText("리프모드 해제" if practice else "리프모드")
         self.riff.show_notes = practice
-        self._place_falling_notes()
-        self.riff.raise_()
         self.loop_panel.raise_()
         if practice:
             # 현재 위치부터 리프 재생(과거 음은 건너뜀)
@@ -412,6 +438,7 @@ class MainScreen(QWidget):
             self.note_player.stop_all()
             self._held_keys.clear()
             self.piano.set_pressed(set())
+            self.stage.update()
         self.play_btn.setText("⏸" if playing else "▶")
         action = "일시정지" if playing else "재생"
         self.play_btn.setAccessibleName(action)
@@ -437,7 +464,7 @@ class MainScreen(QWidget):
     def _on_tick(self, sec: float):
         self.scrub.set_position(sec)
         if self.tl:
-            self.time_lbl.setText(_fmt_sec(sec))
+            self._set_time(sec)
         if self._seeking:
             self._render_at(sec)
             return
@@ -485,7 +512,7 @@ class MainScreen(QWidget):
 
     def _update_scale_preview(self, sec: float, idx: int):
         self.piano.set_preview()
-        self._place_falling_notes()
+        self.stage.update()
         spans = self._loop_spans()
         self.riff.set_position(sec, spans)
         seg = self.tl.segments[idx] if idx >= 0 else None
@@ -526,7 +553,7 @@ class MainScreen(QWidget):
         push = min(1.0, max(0.0, (sec - change) / (0.5 * self.tl.beat_sec()))) if self._monitor_prev else 1.0
         if push >= 1:
             self._monitor_prev = ""
-        self.riff.set_chords(seg.chord.name if seg else "",
+        self.chord_hdr.set_chords(seg.chord.name if seg else "",
                              seg.scale.kind if seg and seg.scale else "",
                              upcoming.chord.name if upcoming else "",
                              self._monitor_prev, grow, push)
@@ -555,6 +582,7 @@ class MainScreen(QWidget):
             self._held_keys.discard((channel, midi))
             self.note_player.note_off(midi, channel)
         self.piano.set_pressed({m for _, m in self._held_keys})
+        self.stage.update_keys([midi])     # 원근 화면은 바뀐 건반 영역만 다시 그림
 
     def set_midi_status(self, ports, name="", error=""):
         self._midi_ports, self._midi_name = list(ports), name
