@@ -16,9 +16,10 @@ def main():
     boundary = tl.segments[1].start_sec
     assert not hasattr(piano, "set_preview") and not hasattr(screen.stage, "_draw_preview"), "예고 기능 제거"
     screen._render_at(boundary - 0.001)
-    assert piano._degrees[2] == "1", "경계 직전엔 현재 D 도리안 그대로(다음 스케일 미리 안 보임)"
+    assert piano._chord_root == 2, "경계 직전엔 현재 Dm7 근음 그대로(다음 코드 미리 안 보임)"
     screen._render_at(boundary)
-    assert piano._degrees[7] == "1", "경계에서 새 스케일로 전환"
+    assert piano._chord_root == 7, "경계에서 G7 근음으로 전환"
+    assert piano._degrees[0] == "1" and piano._degrees[7] == "5", "번호는 곡 주음(C) 기준 고정"
     print("SCALE PREVIEW OK")
 
 

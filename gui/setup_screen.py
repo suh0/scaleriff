@@ -20,6 +20,20 @@ from gui.widgets.elided_label import ElidedLabel
 
 GOALS = (("root", "1도"), ("third", "3도"), ("seventh", "7도"), ("chord_tone", "코드톤"))
 
+# 스케일 종류별 (느낌, 쓰임) 안내 — song_scale_options의 kind 기준
+SCALE_GUIDE = {
+    "메이저 펜타토닉": ("밝고 시원해요. 5음뿐이라 부딪히는 음이 거의 없어요.",
+                    "팝·컨트리·록 멜로디, 즉흥 입문"),
+    "마이너 펜타토닉": ("어둡고 힘 있는 소리. 록·블루스 기타 솔로의 기본이에요.",
+                    "록·블루스·R&B 솔로, 즉흥 입문"),
+    "메이저": ("밝고 안정적인 7음. 곡의 멜로디를 그대로 담아요.",
+             "멜로디 따라 치기, 코드톤 착지 연습 — 4·7도는 코드에 따라 부딪힐 수 있어요"),
+    "마이너": ("슬프고 서정적인 7음(자연단음계).",
+             "발라드·단조 곡 멜로디 — 2·6도는 코드에 따라 부딪힐 수 있어요"),
+    "블루스": ("마이너 펜타토닉 + ♭5 블루노트. 끈적하고 거친 느낌이에요.",
+             "블루스·록·펑크 솔로 — 블루노트는 오래 끌지 말고 지나가는 음으로"),
+}
+
 
 def landing_blocker(tl, option: dict, goal: str) -> str | None:
     """option 스케일로 goal 착지가 불가능한 첫 코드의 이유, 모두 가능하면 None."""
@@ -118,6 +132,10 @@ class SetupScreen(QWidget):
         self.scale_info.setWordWrap(True)
         self.scale_info.setStyleSheet(f"color:{T.TEXT_MUTED};font-size:12px;")
         root.addWidget(self.scale_info)
+        self.scale_guide = QLabel("")
+        self.scale_guide.setWordWrap(True)
+        self.scale_guide.setStyleSheet(f"color:{T.TEXT_BODY};font-size:12px;")
+        root.addWidget(self.scale_guide)
 
         root.addWidget(self._heading("연습 방식"))
         method_row = QHBoxLayout()
@@ -231,6 +249,8 @@ class SetupScreen(QWidget):
         if detours:
             info += f"  ·  예외 구간 {detours}개(키 밖 코드는 그 코드의 스케일 사용)"
         self.scale_info.setText(info)
+        feel, use = SCALE_GUIDE.get(opt["kind"], ("", ""))
+        self.scale_guide.setText(f"느낌: {feel}\n쓰임: {use}" if feel else "")
         for key, btn in self.goal_btns.items():
             reason = landing_blocker(self.tl, opt, key)
             btn.setEnabled(reason is None)

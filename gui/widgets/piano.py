@@ -45,13 +45,15 @@ class PianoWidget(QWidget):
         self._mouse_midi: int | None = None
         self._note_set: set[int] = set()
         self._chord_tones: set[int] = set()
-        self._degrees: dict[int, str] = {}
+        self._degrees: dict[int, str] = {}   # pc → 곡 스케일 주음 기준 번호(곡 내내 고정)
+        self._chord_root: int | None = None  # 지금 코드의 근음 pc(코드 없는 구간은 None)
         self._pressed: set[int] = set()
 
     # ── 상태 세터 ────────────────────────────────────────────────
-    def set_scale(self, note_set, chord_tones):
+    def set_scale(self, note_set, chord_tones, chord_root=None):
         self._note_set = set(note_set) if note_set else set()
         self._chord_tones = set(chord_tones) if chord_tones else set()
+        self._chord_root = chord_root
         self.update()
 
     def set_degrees(self, degrees: dict):
@@ -99,11 +101,11 @@ class PianoWidget(QWidget):
         return "DEFAULT"   # OUT → 배지 없음, 빈 건반으로 표시
 
     def _is_out(self, midi: int) -> bool:
-        """스케일 밖 음인지 여부 — 눌렸을 때 건반 전체 빨간색 표시용."""
+        """스케일 밖 음인지 여부 — 눌렸을 때 건반 전체 빨간색 표시용(지금 코드 근음은 제외)."""
         if not self._note_set:
             return False
         pc = midi % 12
-        return pc not in self._note_set and pc not in self._chord_tones
+        return pc not in self._note_set and pc not in self._chord_tones and pc != self._chord_root
 
     # ── 렌더 ─────────────────────────────────────────────────────
     def paintEvent(self, event):

@@ -117,6 +117,7 @@ class AppWindow(QMainWindow):
         self.main_screen.backToLinkRequested.connect(self._go_link)
         self.main_screen.backToSetupRequested.connect(self._go_setup)
         self.main_screen.midiPortRequested.connect(self._connect_midi)
+        self.main_screen.guideFinished.connect(lambda: self._settings.setValue("seen_play_guide", True))
 
         self._timeline = None
         self._midi = None
@@ -278,6 +279,8 @@ class AppWindow(QMainWindow):
         self._save_session(self._timeline)   # 보정·수정 반영해 세션 갱신
         self.main_screen.set_timeline(self._timeline)
         self.stack.setCurrentWidget(self.main_screen)
+        if not self._settings.value("seen_play_guide", False, type=bool):   # 첫 진입만 화면 가이드
+            self.main_screen.show_guide()
 
     # ── 뒤로가기 ─────────────────────────────────────────────────
     def _go_link(self):

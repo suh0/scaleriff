@@ -13,7 +13,7 @@ import random
 import time
 
 from PyQt6.QtCore import Qt, QPointF, QRectF, QTimer
-from PyQt6.QtGui import (QColor, QLinearGradient, QPainter, QPen, QPixmap,
+from PyQt6.QtGui import (QColor, QFont, QLinearGradient, QPainter, QPen, QPixmap,
                          QPolygonF, QTransform)
 from PyQt6.QtWidgets import QWidget
 
@@ -25,7 +25,8 @@ TOP_Y = 0.13       # 레인 먼 끝의 화면 높이 비율
 TOP_WIDTH = 0.34   # 레인 먼 끝의 폭(화면 폭 비율) = 시점 높이: 클수록 위에서 내려다본 원근(이미지는 0.18)
 KEYS_TOP = 0.64    # 건반 윗선(판정선)의 화면 높이 비율
 KEYS_BOTTOM = 0.925  # 건반 윗면 앞 모서리의 화면 높이 비율(그 아래 앞면 두께)
-LIP = 0.033        # 흰 건반 앞면 두께(화면 높이 비율)
+LIP = 0.06         # 흰 건반 앞면 두께(화면 높이 비율) — 건반 높이
+BLACK_LIP = 0.8    # 흑건 앞면 두께(흰 건반 두께 대비)
 RAIL = 0.022       # 도로 양옆 레일 폭(평면 폭 비율)
 BEAM = 0.45        # 빛기둥 길이(레인 길이 비율)
 
@@ -126,6 +127,12 @@ class Stage(QWidget):
         area = self._kxf.mapRect(r).united(self._xf.mapRect(beam))
         return area.toAlignedRect().adjusted(-3, -3, 3, int(self._lip()) + 3)
 
+    def keys_rect(self):
+        """건반 전체(앞면 포함)의 화면 영역 — 첫 진입 가이드가 밝힐 자리."""
+        whites, x0, _, kw, kh = self.piano._geometry()
+        area = self._kxf.mapRect(QRectF(x0, self._lane_h, kw * len(whites), kh))
+        return area.adjusted(0, 0, 0, self._lip()).toAlignedRect()
+
     def update_keys(self, midis):
         for midi in midis:
             if MIDI_LOW <= midi <= MIDI_HIGH:
@@ -139,10 +146,12 @@ class Stage(QWidget):
         return self._tone(midi) or QColor(T.TEXT_DIM)
 
     def _tone(self, midi):
-        """현재 코드 기준 음의 역할 색 — 근음 진함·코드톤 중간·스케일음 연함, 그 외 None."""
+        """음의 역할 색 — 지금 코드 근음 진함(스케일 밖이어도)·코드톤 중간·스케일음 연함, 그 외 None."""
+        if midi % 12 == self.piano._chord_root:
+            return QColor(TONE_ROOT)
         state = self.piano._content_state(midi)
         if state == "CHORD":
-            return QColor(TONE_ROOT if self.piano._degrees.get(midi % 12) == "1" else TONE_CHORD)
+            return QColor(TONE_CHORD)
         return QColor(TONE_SCALE) if state == "SCALE" else None
 
     @staticmethod
@@ -207,7 +216,7 @@ class Stage(QWidget):
         p.setBrush(g)
         p.drawRoundedRect(r, 4, 4)
         front = glow.darker(200) if glow else (self._state_color(midi) or QColor("#30353d").darker(200))
-        self._front(p, self._kxf, r, self._lip() * 0.6, front)
+        self._front(p, self._kxf, r, self._lip() * BLACK_LIP, front)
 
     def _state_color(self, midi):
         """현재 코드 스케일 표시 = 건반 앞면 색(파란 계열 진하기). 리프모드에선 없음."""
@@ -282,8 +291,8 @@ class Stage(QWidget):
     # ── 프레임 ───────────────────────────────────────────────────
     def paintEvent(self, event):
         piano = self.piano
-        key = (self.width(), self.height(), frozenset(piano._note_set),
-               frozenset(piano._chord_tones), tuple(sorted(piano._degrees.items())), self.riff.show_notes)
+        key = (self.width(), self.height(), frozenset(piano._note_set), frozenset(piano._chord_tones),
+               tuple(sorted(piano._degrees.items())), piano._chord_root, self.riff.show_notes)
         if key != self._cache_key:
             self._build_cache()
             self._cache_key = key
@@ -349,9 +358,41 @@ class Stage(QWidget):
             if tone is not None and tone.name() == TONE_ROOT:
                 r = self._key_rect(midi)
                 a, b = self._kxf.map(r.bottomLeft()), self._kxf.map(r.bottomRight())
-                depth = self._lip() * (1 if _is_white(midi) else 0.6)
+                depth = self._lip() * (1 if _is_white(midi) else BLACK_LIP)
                 sparkle.append((QPolygonF([a, b, b + QPointF(0, depth), a + QPointF(0, depth)]), midi))
+        if not self.riff.show_notes:
+            self._draw_numbers(p)
         self._draw_sparkles(p, sparkle)
+
+    def _draw_numbers(self, p):
+        """건반 윗면 앞쪽에 곡 스케일 번호. 지금 코드 근음은 진한 파란 원 안에 흰 숫자."""
+        piano = self.piano
+        if not piano._degrees:
+            return
+        p.resetTransform()
+        for midi in range(MIDI_LOW, MIDI_HIGH + 1):
+            number = piano._degrees.get(midi % 12)
+            if not number:
+                continue
+            white = _is_white(midi)
+            r = self._key_rect(midi)
+            a = self._kxf.map(QPointF(r.left(), r.bottom()))
+            b = self._kxf.map(QPointF(r.right(), r.bottom()))
+            size = max(10.0, min(22.0, (b.x() - a.x()) * (0.42 if white else 0.5)))
+            center = self._kxf.map(QPointF(r.center().x(), r.top() + r.height() * (0.8 if white else 0.72)))
+            box = QRectF(center.x() - size, center.y() - size * 0.7, size * 2, size * 1.4)
+            font = QFont(T.FONT_SANS_EN)
+            font.setPixelSize(int(size * (0.62 if len(number) > 1 else 0.8)))
+            font.setBold(number == "1" or midi % 12 == piano._chord_root)
+            p.setFont(font)
+            if midi % 12 == piano._chord_root:          # 근음 = 진한 파란 원 + 흰 숫자
+                p.setPen(Qt.PenStyle.NoPen)
+                p.setBrush(QColor(TONE_ROOT))
+                p.drawEllipse(center, size * 0.62, size * 0.62)
+                p.setPen(QColor(T.WHITE))
+            else:
+                p.setPen(QColor("#1b2330" if white else "#e6ebf2"))
+            p.drawText(box, Qt.AlignmentFlag.AlignCenter, number)
 
     def _draw_sparkles(self, p, targets):
         """작은 4갈래 별빛이 제자리에서 각자 다른 박자로 깜빡인다(대부분 꺼져 있다 순간 반짝)."""

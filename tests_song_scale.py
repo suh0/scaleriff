@@ -56,6 +56,12 @@ class SongScaleTest(unittest.TestCase):
         self.assertIn("Am", landing_blocker(tl, clash, "chord_tone"))
         self.assertEqual(recommend(tl, [clash, options[1]]), 1)
 
+    def test_every_scale_option_has_a_guide(self):
+        from gui.setup_screen import SCALE_GUIDE
+        for root, mode in ((9, "minor"), (0, "major")):
+            for option in song_scale_options(root, mode):
+                self.assertIn(option["kind"], SCALE_GUIDE)
+
     def test_count_per_chord_and_landing(self):
         tl = am_f_c_g()
         tl.apply_song_scale(song_scale_options(9, "minor")[1])

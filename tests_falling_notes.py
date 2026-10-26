@@ -107,11 +107,11 @@ def main():
     for area in stage._sparkle_areas * 10:
         stage.render(probe, sourceRegion=QRegion(area))
     print(f"  sparkle tick {(_t.perf_counter() - t0) / 10 * 1000:.2f}ms")
-    saved = dict(screen.piano._degrees)
-    screen.piano._degrees = {}                       # 근음 정보 없음 → 반짝이 없음
+    saved = screen.piano._chord_root
+    screen.piano._chord_root = None                  # 코드 근음 없음(예비박 등) → 반짝이 없음
     stage.render(probe)
     assert not stage._sparkle_areas and not stage._sparkle_timer.isActive(), "근음 없으면 타이머 정지"
-    screen.piano._degrees = saved
+    screen.piano._chord_root = saved
     # 양 끝 건반(앞면 포함)까지 화면 안
     for midi in (60, 83):
         area = stage._kxf.mapRect(stage._key_rect(midi)).adjusted(0, 0, 0, stage._lip())

@@ -50,7 +50,7 @@ class ChordHeader(QWidget):
         y = top_y + (mid_y - top_y) * ease if prev else mid_y
         text(cur, size, y, 0.55 + 0.45 * ease if prev else 1.0)
         if kind and ease >= 1:
-            text(kind, big * 0.24, mid_y + big * 0.8, 0.75, spacing=3, bold=False)
+            text(kind, big * 0.26, mid_y + big * 0.8, 0.8, spacing=1, bold=False)   # "근음 N번 · 스케일"
         # 다음 코드: 위에서 작게 → 점점 커짐(push 동안엔 숨김)
         if ease >= 1:
             text(nxt, small, top_y, 0.35 + 0.3 * grow)

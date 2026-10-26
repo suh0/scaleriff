@@ -13,13 +13,13 @@ from PyQt6.QtWidgets import (
     QComboBox, QDialog, QFormLayout, QSlider, QCheckBox, QScrollArea, QMessageBox,
     QGraphicsOpacityEffect
 )
-from PyQt6.QtCore import pyqtSignal, Qt, QTimer
+from PyQt6.QtCore import pyqtSignal, Qt, QPoint, QRect, QTimer
 from PyQt6.QtGui import QKeySequence, QShortcut
 
 from player.timeline import Timeline
 from player.playhead import Playhead
 from player.note_synth import shared_player
-from analyze.theory import degree_number
+from analyze.theory import degree_number, pc_name
 from ml.model import load_model
 from ml.generate import _landing_pc
 
@@ -32,6 +32,7 @@ from gui.widgets.falling_notes import FallingNotes
 from gui.widgets.chord_header import ChordHeader
 from gui.widgets.stage import Stage
 from gui.riff_dialog import RiffDialog
+from gui.widgets.play_guide import PlayGuide
 
 # 코드/가이드를 재생 위치보다 앞당겨 표시하는 보정값(초). 0 = 보정 없음.
 SYNC_LOOKAHEAD_SEC = 0.0
@@ -46,6 +47,7 @@ class MainScreen(QWidget):
     backToSetupRequested = pyqtSignal()
     backToLinkRequested = pyqtSignal()
     midiPortRequested = pyqtSignal(str)
+    guideFinished = pyqtSignal()       # 첫 진입 가이드를 끝까지 넘기거나 건너뜀
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -70,6 +72,7 @@ class MainScreen(QWidget):
         self._seeking = False
         self._monitor_seg = None          # 모니터박스에 표시 중인 현재 구간
         self._monitor_prev = ""          # push 동안 밀려나는 이전 코드명
+        self.guide = None                # 첫 진입 가이드(PlayGuide) — 떠 있는 동안만
 
         self.content = T.compact_content(self)
         # 원근 무대를 한 칸에 깔고 같은 칸에 HUD를 정렬로 겹친다(이미지형 하이웨이 배치).
@@ -113,7 +116,7 @@ class MainScreen(QWidget):
         root.addWidget(self.chord_hdr, 0, 0, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter)
 
         # ── 오른쪽 벽: [←][⚙] + 리프모드·루프 ──
-        right = QWidget()
+        right = self.right_wall = QWidget()
         rv = QVBoxLayout(right)
         rv.setContentsMargins(0, 24, T.PAD_H + 8, 0)
         rv.setSpacing(8)
@@ -264,6 +267,9 @@ class MainScreen(QWidget):
         self.time_lbl.setText(f"{_fmt_sec(sec)} / {total}")
 
     def _on_space(self):
+        if self.guide is not None:        # 가이드 중 스페이스 = 다음(가이드가 처리)
+            self.guide.next()
+            return
         self._toggle_play()
         self.scrub_row.show()
         self._scrub_timer.start()
@@ -278,6 +284,56 @@ class MainScreen(QWidget):
         super().resizeEvent(e)
         if self.loop_panel.isVisible():
             self._place_loop_panel()
+        if self.guide is not None:
+            self.guide.relayout()
+
+    # ── 첫 진입 가이드 ──────────────────────────────────────────
+    def show_guide(self):
+        """초심자용 단계별 설명. 첫 코드 위치에서 보여주고, 끝나면 예비박(지금의 첫 화면)으로 돌아간다."""
+        if not self.tl or not self.tl.segments or self.guide is not None:
+            return
+        self.pause()
+        tonic, _ = self._song_scale()
+        scale = (self.tl.practice.get("scale") or {}).get("name") or self.tl.key
+        # 설명용 자리: 근음이 1번이 아닌 첫 코드(1번 표시와 근음 표시가 서로 다른 건반에 보이게)
+        seg = next((s for s in self.tl.segments if s.chord.root % 12 != tonic), self.tl.segments[0])
+        self._seek_to(seg.start_sec + 1e-3)
+        root_no = degree_number(seg.chord.root % 12, tonic)
+
+        def at(widget):
+            return lambda: [QRect(widget.mapTo(self, QPoint(0, 0)), widget.size())]
+
+        def keys():
+            return [QRect(self.stage.mapTo(self, self.stage.keys_rect().topLeft()), self.stage.keys_rect().size())]
+
+        steps = [
+            ("연주 화면에 오신 걸 환영해요",
+             "곡에 맞춰 즉흥으로 연주하는 화면이에요.<br>건반의 <b>숫자</b>와 <b>색</b>만 알면 바로 칠 수 있어요.", None),
+            ("건반 위 숫자 = 스케일 번호",
+             f"이 곡은 <b>{scale}</b>로 연습해요. <b>1번 = {pc_name(tonic)}</b>이고, "
+             "곡이 끝날 때까지 번호는 바뀌지 않아요.<br>숫자가 있는 건반만 쳐도 곡과 어울려요.", keys),
+            ("색으로 보는 음의 역할",
+             "연한 파랑 = 스케일 음<br>파랑 = 지금 코드를 이루는 음(코드톤)<br>"
+             "<b>진한 파랑·반짝임·파란 원 숫자 = 지금 코드의 근음</b>", keys),
+            ("지금 코드와 근음 번호",
+             f"가운데 큰 글자가 지금 코드, 위 작은 글자가 다음 코드예요.<br>"
+             f"<b>'근음 {root_no}번'</b>은 지금 코드의 근음이 스케일 몇 번인지 알려줘요. "
+             "코드가 바뀌면 근음 건반도 따라 옮겨가요.", at(self.chord_hdr)),
+            ("숫자 없는 건반",
+             "스케일 밖 음이에요. 누르면 빨갛게 표시되지만 틀린 건 아니에요.<br>"
+             "처음엔 숫자 있는 건반 위주로 치고, <b>근음에서 시작하거나 끝내</b> 보세요.", keys),
+            ("재생과 도구",
+             "가운데 ▶ 또는 <b>스페이스</b>로 재생·정지해요.<br>"
+             "오른쪽 위 — 리프모드: 따라 칠 예시 리프 · 루프: 반복 구간 · 톱니 버튼: MIDI 입력과 소리",
+             lambda: at(self.right_wall)() + at(self.play_btn)()),
+        ]
+        self.guide = PlayGuide(self, steps)
+        self.guide.finished.connect(self._end_guide)
+
+    def _end_guide(self):
+        self.guide = None
+        self._seek_to(self.tl.count_in_start())                  # 지금의 연주화면 첫 상태로
+        self.guideFinished.emit()
 
     def _build_loop_rows(self):
         while self.loop_rows.count():
@@ -365,7 +421,7 @@ class MainScreen(QWidget):
                     durations[(when, n["midi"])] = self.tl.time_at_beat(onset + n.get("dur_beats", .5)) - when
                     pc = n["midi"] % 12
                     if pc in seg.chord_tones():
-                        color = T.BADGE_ROOT if pc == seg.scale_root else T.BADGE_CHORD
+                        color = T.BADGE_ROOT if pc == seg.chord.root % 12 else T.BADGE_CHORD
                     else:
                         color = T.BADGE_SCALE
                     falling.append((ev[-1][0], n["midi"], color,
@@ -513,10 +569,12 @@ class MainScreen(QWidget):
             return
         idx = self.tl.segment_index_at(sec)
         self._update_scale_preview(sec, idx)
+        tonic, song_notes = self._song_scale()
         if idx < 0:
+            # 코드 없는 구간(예비박 등)도 곡 스케일과 번호는 그대로 보여준다.
             self._last_idx = -1
-            self.piano.set_scale([], [])
-            self.piano.set_degrees({})
+            self.piano.set_scale(song_notes, [])
+            self.piano.set_degrees({pc: degree_number(pc, tonic) for pc in song_notes})
             return
         if idx == self._last_idx:
             return
@@ -527,10 +585,17 @@ class MainScreen(QWidget):
         if self.tl.practice.get("method") == "landing" and goal != "chord_tone":
             target = _landing_pc(seg, goal)      # 착지 목표음만 초록으로 강조
             chord_tones = [target] if target is not None else chord_tones
-        self.piano.set_scale(seg.note_set, chord_tones)
-        self.piano.set_degrees({pc: degree_number(pc, seg.scale_root) for pc in seg.note_set})
+        root = seg.chord.root % 12
+        self.piano.set_scale(seg.note_set, chord_tones, root)
+        # 번호는 곡 스케일 주음 기준으로 곡 내내 고정(예외 구간 음은 ♭/♯로), 근음은 스케일 밖이어도 번호 표시
+        self.piano.set_degrees({pc: degree_number(pc, tonic) for pc in set(seg.note_set) | {root}})
         self.piano.set_pressed({m for _, m in self._held_keys})
         # 현재/다음 코드는 모니터박스가 그림(_update_monitor)
+
+    def _song_scale(self):
+        """번호 기준 = 학습 설정에서 고른 곡 스케일의 1(주음)과 그 음들. 설정이 없으면 키 주음."""
+        scale = self.tl.practice.get("scale") or {}
+        return scale.get("root", self.tl.key_root) % 12, list(scale.get("note_set", []))
 
     def _update_scale_preview(self, sec: float, idx: int):
         """재생 위치 반영: 낙하 노드 위치 + 상단 코드(현재/다음). 다음 스케일 건반 예고는 없음."""
@@ -568,8 +633,11 @@ class MainScreen(QWidget):
         push = min(1.0, max(0.0, (sec - change) / (0.5 * self.tl.beat_sec()))) if self._monitor_prev else 1.0
         if push >= 1:
             self._monitor_prev = ""
-        self.chord_hdr.set_chords(seg.chord.name if seg else "",
-                             seg.scale.kind if seg and seg.scale else "",
+        caption = ""
+        if seg:      # 지금 코드 근음이 곡 스케일 몇 번인지 + 스케일 종류
+            number = degree_number(seg.chord.root % 12, self._song_scale()[0])
+            caption = f"근음 {number}번" + (f" · {seg.scale.kind}" if seg.scale else "")
+        self.chord_hdr.set_chords(seg.chord.name if seg else "", caption,
                              upcoming.chord.name if upcoming else "",
                              self._monitor_prev, grow, push)
 
