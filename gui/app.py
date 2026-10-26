@@ -10,7 +10,7 @@ import hashlib
 import os
 
 from PyQt6.QtWidgets import (
-    QMainWindow, QStackedWidget, QFrame, QHBoxLayout, QLabel, QPushButton, QFileDialog, QApplication
+    QMainWindow, QStackedWidget, QFrame, QHBoxLayout, QVBoxLayout, QLabel, QPushButton, QFileDialog, QApplication
 )
 from PyQt6.QtGui import QFont
 from PyQt6.QtCore import QSettings, pyqtSignal
@@ -84,7 +84,10 @@ class AppWindow(QMainWindow):
         seen_onboarding = self._settings.value("seen_onboarding", False, type=bool)
 
         self.stack = QStackedWidget()
-        self.setCentralWidget(self.stack)
+        backdrop = T.Backdrop()              # 전 화면 공통 배경(화면들은 투명)
+        QVBoxLayout(backdrop).addWidget(self.stack)
+        backdrop.layout().setContentsMargins(0, 0, 0, 0)
+        self.setCentralWidget(backdrop)
 
         self.link_screen = LinkScreen(show_onboarding=not seen_onboarding)
         self.analyzing = AnalyzingScreen()

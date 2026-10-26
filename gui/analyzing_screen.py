@@ -219,8 +219,10 @@ class AnalyzingScreen(QWidget):
         lay.addSpacing(16)
         lay.addLayout(bg_row)
 
-        self.err_btn = QPushButton("← 돌아가기")
-        self.err_btn.setStyleSheet(T.qss_ghost_btn())
+        self.err_btn = QPushButton("←")
+        self.err_btn.setToolTip("돌아가기")
+        self.err_btn.setFixedSize(48, 48)
+        self.err_btn.setStyleSheet(T.qss_icon_btn())
         self.err_btn.clicked.connect(self.backRequested.emit)
         self.err_btn.hide()
         lay.addWidget(self.err_btn)

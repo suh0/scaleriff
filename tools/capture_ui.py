@@ -41,7 +41,7 @@ def main():
             win.stack.setCurrentWidget(page)
             app.processEvents()
             QTest.qWait(650)
-            page.grab().save(str(output / f"{name}_{width}.png"))
+            win.centralWidget().grab().save(str(output / f"{name}_{width}.png"))  # 공통 배경 포함
             records.append(f"| [{name}_{width}.png]({name}_{width}.png) | {width}×{height} | {page.width()}×{page.height()} |")
 
         for dimensions in args.sizes.split(","):

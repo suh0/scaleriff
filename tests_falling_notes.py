@@ -45,6 +45,16 @@ def main():
         assert (lane_end - key_top).manhattanLength() <= 1.5, "원근 레인 끝이 건반 윗선과 이어짐"
         assert stage._midi_at(stage._kxf.map(QPointF(x, stage._lane_h + 2))) in (62, 66), \
             "흰 건반·흑건의 실제 위치와 노드 정렬(역변환 클릭 판정)"
+    # 실제 건반 기하: C#은 경계보다 왼쪽·D#은 오른쪽, 흑건은 솟아 있고 옆면, 눌리면 앞만 내려감
+    whites, x0, _, kw, _ = screen.piano._geometry()
+    boundary = lambda m: x0 + (whites.index(m - 1) + 1) * kw
+    assert stage._key_rect(61).center().x() < boundary(61) < stage._key_rect(63).center().x() - kw
+    w_top, w_front, _ = stage._faces(62)
+    b_top, _, b_sides = stage._faces(61)
+    assert b_top[3].y() < stage._kxf.map(stage._key_rect(61).bottomLeft()).y() and len(b_sides) == 2
+    p_top, p_front, _ = stage._faces(62, pressed=True)
+    assert p_top[0] == w_top[0] and p_top[3].y() > w_top[3].y(), "뒤 축 고정, 앞이 내려감"
+    assert p_front.boundingRect().height() < w_front.boundingRect().height(), "눌리면 앞면이 짧아짐"
     screen._on_seek(1.21)
     assert len(screen.riff._nodes()) == 2, "음표 길이 동안 막대 유지"
     assert screen.riff._nodes()[0][1] > node[1], "음표 길이에 맞춰 건반 안으로 내려감"

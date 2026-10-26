@@ -62,8 +62,9 @@ def main():
     url_pos = win.link_screen.url_edit.mapTo(link_input, QPoint(0, 0))
     assert url_pos.y() + win.link_screen.url_edit.height() <= save_pos.y(), \
         "저장경로가 링크 입력란 아래에 있지 않음"
-    assert save_pos.y() + win.link_screen.save_label.height() <= go_pos.y(), \
-        "저장경로가 분석 시작 버튼 위에 있지 않음"
+    assert abs((go_pos.y() + win.link_screen.go_btn.height() / 2)
+               - (url_pos.y() + win.link_screen.url_edit.height() / 2)) <= 2, \
+        "분석 시작 버튼이 입력란과 같은 줄에 있지 않음"
     assert win.link_screen.save_dir() in win.link_screen.save_label.text()
     assert not hasattr(win.link_screen, "_lib_panel"), "라이브러리 패널이 남아 있음"
     assert not hasattr(win.link_screen, "save_edit"), "저장경로 입력란이 남아 있음"
@@ -103,9 +104,12 @@ def main():
         assert bs._step == step
         assert [sec.isVisible() for sec in bs.sections] == [True] * 3
         assert [sec.isEnabled() for sec in bs.sections] == [i <= step for i in (1, 2, 3)]
-        assert bs.confirm_btn.isVisible() == (step == 3)
+        assert [b.isVisible() for b in bs.step_btns] == [i == step for i in (1, 2, 3)]
+        btn = bs.step_btns[step - 1]               # 단계 버튼은 그 단계 섹션 오른쪽 아래
+        assert btn.parent() is bs.sections[step - 1]
+        assert btn.mapTo(bs, QPoint(btn.width(), 0)).x() > bs.sections[step - 1].width() * .8
         if step < 3:
-            bs.next_btn.click()
+            btn.click()
     bs._show_step(1)
     assert bs._step == 1
     assert not any(
@@ -145,17 +149,20 @@ def main():
     app.processEvents()
     assert win.beat.pages.currentWidget() is win.beat.beat_page
     segments_before = list(tl.segments)
+    win.beat._show_step(3)            # 확인 버튼은 3단계(예비박) 섹션에만
     win.beat.confirm_btn.click()      # 확인 = 박자 적용 후 학습 설정
     assert all(a is b for a, b in zip(segments_before, tl.segments)), \
         "박자 변경 없이 확인하면 코드 편집 내용을 보존해야 함"
     assert win.stack.currentWidget() is win.setup
-    # 학습 설정: 곡 스케일 3후보 + 코드톤 포함률, ii–V–I는 7음이 추천(펜타 67%), 착지음 옵션은 착지 방식에서만
+    # 학습 설정: 곡 스케일 3후보, ii–V–I는 7음이 추천(칩 안 추천 배지), 착지음 옵션은 항상 보이고 착지 방식에서만 활성
     su = win.setup
-    assert "추천" in su.scale_btns[1].text() and "코드톤 100%" in su.scale_btns[1].text()
+    assert [l.text() for l in su.rec_lbls] == ["", "추천", ""]
+    assert "%" not in su.scale_btns[1].text()
     assert "펜타토닉" in su.scale_btns[0].text() and su.scale_btns[0].isEnabled() and su._scale == 1
-    assert su.landing_box.isHidden()
+    assert su.title.text() == "학습내용 선택" and su.key_lbl.text().startswith("곡의 키: ")
+    assert not su.landing_box.isHidden() and not su.landing_box.isEnabled()
     su._pick_method("landing")
-    assert not su.landing_box.isHidden()
+    assert su.landing_box.isEnabled()
     assert su.goal_btns["chord_tone"].isEnabled()
     su.count_mode.setCurrentIndex(2)
     su.count_lo.setValue(2)
@@ -408,6 +415,7 @@ def main():
     assert not any(s.example for s in tl3.segments), "재격자화 시 리프를 미리 굽지 않는다"
     assert bs.grid.count() > 0, "확정 후 코드 목록 미갱신"
     bs.bpm_edit.setText("96")
+    bs._show_step(3)
     bs.confirm_btn.click()
     assert tl3.bpm == 96.0 and tl3.bar_times[:3] == [0.5, 3.0, 5.5]
     bs.bpm_edit.setText("120")

@@ -14,7 +14,8 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
     QFileDialog, QFrame, QStackedWidget,
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QSize
+from PyQt6.QtCore import Qt, pyqtSignal, QSize, QEvent
+from PyQt6.QtGui import QIcon
 
 from gui import theme as T
 from gui.anim import stagger
@@ -25,8 +26,9 @@ try:
 except Exception:
     _HAS_SVG = False
 
-_LOGO = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                     "assets", "scaleriff_logo.svg")
+_ASSETS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets")
+_LOGO = os.path.join(_ASSETS, "scaleriff_logo.svg")
+_FORMATS = "YouTube 링크 · MP3, WAV, M4A, FLAC, OGG · 저장된 세션 JSON"
 
 ONBOARD_CARDS = [
     ("좋아하는 곡에서 시작하세요", "링크나 오디오 파일을 넣으면 코드·키·박자를 분석해요.\n분석이 끝나면 박자와 코드를 직접 확인할 수 있어요."),
@@ -42,6 +44,16 @@ def _logo_widget(size=72):
         return w
     lab = QLabel("◍")
     lab.setStyleSheet(f"color:{T.TEXT_PRIMARY};font-size:{size}px;")
+    return lab
+
+
+def _icon(name):
+    return os.path.join(_ASSETS, "icons", name)
+
+
+def _icon_label(name, size):
+    lab = QLabel()
+    lab.setPixmap(QIcon(_icon(name)).pixmap(QSize(size, size)))
     return lab
 
 
@@ -148,71 +160,86 @@ class LinkScreen(QWidget):
 
         logo_row = QHBoxLayout()
         logo_row.addStretch(1)
-        logo = _logo_widget(52)
+        logo = _logo_widget(68)
         logo_row.addWidget(logo)
         logo_row.addStretch(1)
         lay.addLayout(logo_row)
+        lay.addSpacing(6)
 
-        title = QLabel("ScaleRiff")
+        title = QLabel(f"Scale<span style='color:{T.ACCENT_LIGHT}'>Riff</span>")
+        title.setTextFormat(Qt.TextFormat.RichText)
         title.setStyleSheet(
             f"color:{T.TEXT_PRIMARY};font-family:'{T.FONT_SANS_EN}';"
-            "font-size:36px;font-weight:700;")
+            "font-size:44px;font-weight:700;")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lay.addWidget(title)
         sub = QLabel("좋아하는 곡 위에서 배우는 즉흥 연주")
-        sub.setStyleSheet(f"color:{T.TEXT_MUTED};font-size:13px;")
+        sub.setStyleSheet(f"color:{T.TEXT_BODY};font-size:14px;")
         sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lay.addWidget(sub)
-        lay.addSpacing(12)
+        lay.addSpacing(28)
 
-        row = QHBoxLayout()
-        row.setContentsMargins(0, 0, 0, 0)
+        # 입력 바: 아이콘 · 입력란 | 파일 선택 · 분석 시작 을 한 상자에
+        self._bar = QFrame()
+        self._bar.setObjectName("inputBar")
+        self._bar.setStyleSheet(
+            f"QFrame#inputBar{{background:{T.BG_SURFACE};border:1px solid {T.BORDER_DEFAULT};"
+            "border-radius:16px;}"
+            f"QFrame#inputBar[focus=\"true\"]{{border-color:{T.ACCENT};}}"
+            f"QFrame#barDivider{{background:{T.BORDER_DEFAULT};border:none;}}")
+        row = QHBoxLayout(self._bar)
+        row.setContentsMargins(18, 6, 6, 6)
         row.setSpacing(10)
+        row.addWidget(_icon_label("music.svg", 20))
         self.url_edit = QLineEdit()
-        self.url_edit.setPlaceholderText(
-            "곡 링크 또는 오디오·세션 파일 경로")
+        self.url_edit.setPlaceholderText("곡 링크 또는 오디오·세션 파일 경로")
         self.url_edit.setAccessibleName("곡 링크 또는 파일 경로")
-        self.url_edit.setStyleSheet(T.qss_input())
+        self.url_edit.setStyleSheet(
+            f"QLineEdit{{background:transparent;border:none;color:{T.TEXT_PRIMARY};"
+            f"font-size:15px;padding:10px 4px;selection-background-color:{T.ACCENT};}}"
+            f"QLineEdit:disabled{{color:{T.TEXT_DIM};}}")
         self.url_edit.returnPressed.connect(self._submit)
+        self.url_edit.installEventFilter(self)
         row.addWidget(self.url_edit, 1)
-        browse = QPushButton("파일 선택")
-        browse.setStyleSheet(T.qss_ghost_btn())
-        browse.setMinimumHeight(46)
+        divider = QFrame()
+        divider.setObjectName("barDivider")
+        divider.setFixedWidth(1)
+        row.addWidget(divider)
+        browse = QPushButton("  파일 선택")
+        browse.setIcon(QIcon(_icon("folder.svg")))
+        browse.setIconSize(QSize(18, 18))
+        browse.setStyleSheet(T.qss_ghost_btn() + "QPushButton{border:none;border-radius:20px;min-height:40px;"
+                             "font-size:13px;padding:0 18px;}")
         browse.clicked.connect(self._browse)
         row.addWidget(browse)
-        row_wrap = QWidget()
-        row_wrap.setLayout(row)
+        self.go_btn = QPushButton("  분석 시작")
+        self.go_btn.setIcon(QIcon(_icon("play.svg")))
+        self.go_btn.setIconSize(QSize(14, 14))
+        self.go_btn.setStyleSheet(T.qss_primary_btn() + "QPushButton{border-radius:22px;padding:0 26px;min-height:42px;}")
+        self.go_btn.clicked.connect(self._submit)
+        row.addWidget(self.go_btn)
+        row_wrap = self._bar
         lay.addWidget(row_wrap)
+        lay.addSpacing(12)
 
         self._save_dir = ""
         self.save_label = QLabel()
         self.save_label.setWordWrap(True)
         self.save_label.setTextFormat(Qt.TextFormat.PlainText)
-        self.save_label.setStyleSheet(f"color:{T.TEXT_MUTED};font-size:11px;")
+        self.save_label.setStyleSheet(f"color:{T.TEXT_MUTED};font-size:13px;padding-left:4px;")
         lay.addWidget(self.save_label)
-        self.input_hint = QLabel("YouTube 링크 · MP3, WAV, M4A, FLAC, OGG · 저장된 세션 JSON")
+        self.input_hint = QLabel(_FORMATS)   # 빈 입력 시 안내로 바뀜
         self.input_hint.setWordWrap(True)
-        self.input_hint.setStyleSheet(f"color:{T.TEXT_DIM};font-size:11px;")
+        self.input_hint.setStyleSheet(f"color:{T.TEXT_MUTED};font-size:13px;padding-left:4px;")
         lay.addWidget(self.input_hint)
 
         # 최근 분석 세션(최대 3) — 클릭 즉시 로드
         self.recent_box = QWidget()
         self._recent_lay = QVBoxLayout(self.recent_box)
-        self._recent_lay.setContentsMargins(0, 6, 0, 0)
-        self._recent_lay.setSpacing(4)
+        self._recent_lay.setContentsMargins(0, 22, 0, 0)
+        self._recent_lay.setSpacing(8)
         lay.addWidget(self.recent_box)
         self.recent_box.hide()
-
-        lay.addSpacing(10)
-        # 버튼은 내용 크기 + 가운데 정렬(가로로 안 늘임)
-        go_row = QHBoxLayout()
-        go_row.addStretch(1)
-        self.go_btn = QPushButton("분석 시작")
-        self.go_btn.setStyleSheet(T.qss_primary_btn())
-        self.go_btn.clicked.connect(self._submit)
-        go_row.addWidget(self.go_btn)
-        go_row.addStretch(1)
-        lay.addLayout(go_row)
 
         lay.addStretch(1)
         outer.addWidget(col)
@@ -221,8 +248,7 @@ class LinkScreen(QWidget):
         self._restricted_widgets = (self.url_edit, self.go_btn)
         self._restricted = False
         # 입장 애니메이션 순서(위 → 아래)
-        self._input_items = [logo, title, sub, row_wrap, self.save_label,
-                             self.go_btn]
+        self._input_items = [logo, title, sub, row_wrap, self.save_label]
         return w
 
     # ── 제한 모드(백그라운드 분석 중) — 세션(.json) 선택만 활성 ──
@@ -246,14 +272,26 @@ class LinkScreen(QWidget):
         paths = [p for p in paths if os.path.isfile(p)][:3]
         if paths:
             head = QLabel("최근 분석")
-            head.setStyleSheet(f"color:{T.TEXT_MUTED};font-size:11px;")
+            head.setStyleSheet(f"color:{T.TEXT_PRIMARY};font-size:14px;font-weight:700;padding-left:4px;")
             self._recent_lay.addWidget(head)
         for p in paths:
             # 세션 파일명 = "{제목}_{해시16}.json"
             name = os.path.splitext(os.path.basename(p))[0].rsplit("_", 1)[0]
-            btn = QPushButton(name or os.path.basename(p))
+            btn = QPushButton()
+            btn.setAccessibleName(name or os.path.basename(p))
             btn.setToolTip(p)
-            btn.setStyleSheet(T.qss_ghost_btn() + "QPushButton{text-align:left;}")
+            btn.setStyleSheet(
+                f"QPushButton{{background:{T.BG_SURFACE};border:1px solid {T.BORDER_DEFAULT};border-radius:14px;min-height:52px;}}"
+                f"QPushButton:hover{{background:{T.BG_SURFACE_ALT};}}"
+                f"QPushButton:focus{{border-color:{T.ACCENT};}}")
+            bl = QHBoxLayout(btn)
+            bl.setContentsMargins(22, 0, 22, 0)
+            bl.setSpacing(14)
+            text = QLabel(btn.accessibleName())
+            text.setStyleSheet(f"color:{T.TEXT_PRIMARY};font-size:14px;")
+            for part in (_icon_label("clock.svg", 20), text, _icon_label("arrow-right.svg", 18)):
+                part.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+                bl.addWidget(part, 1 if part is text else 0)
             btn.clicked.connect(lambda _, p=p: self.buildRequested.emit(p))
             self._recent_lay.addWidget(btn)
         self.recent_box.setVisible(bool(paths))
@@ -272,6 +310,12 @@ class LinkScreen(QWidget):
             "저장된 세션 (*.json);;모든 파일 (*.*)")
         if path:
             self.url_edit.setText(path)
+
+    def eventFilter(self, obj, e):
+        if obj is self.url_edit and e.type() in (QEvent.Type.FocusIn, QEvent.Type.FocusOut):
+            self._bar.setProperty("focus", e.type() == QEvent.Type.FocusIn)
+            self._bar.style().polish(self._bar)
+        return super().eventFilter(obj, e)
 
     def _submit(self):
         if self._restricted:

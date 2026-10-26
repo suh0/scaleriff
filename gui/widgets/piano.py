@@ -30,9 +30,20 @@ PREVIEW_HEIGHT = 4
 WHITE_PCS = {0, 2, 4, 5, 7, 9, 11}
 BLACK_PCS = {1, 3, 6, 8, 10}
 
+# 실제 건반 비율: 흑건 13.7/23.5mm 폭, 95/150mm 길이.
+# 흑건은 경계 가운데가 아니다 — C~E는 5등분, F~B는 7등분 자리(C#·F# 왼쪽, D#·A# 오른쪽, G# 가운데).
+BLACK_W = 0.58
+BLACK_L = 0.63
+BLACK_OFFSET = {1: -0.1, 3: 0.1, 6: -1 / 7, 8: 0.0, 10: 1 / 7}   # 경계 대비 흰 건반 폭 비율
+
 
 def _is_white(midi: int) -> bool:
     return (midi % 12) in WHITE_PCS
+
+
+def black_x(boundary: float, kw: float, midi: int) -> float:
+    """흑건 왼쪽 x — boundary = 바로 왼쪽 흰 건반의 오른쪽 경계."""
+    return boundary - kw * BLACK_W / 2 + BLACK_OFFSET[midi % 12] * kw
 
 
 class PianoWidget(QWidget):
@@ -113,8 +124,8 @@ class PianoWidget(QWidget):
         if geo is None:
             return
         white_midis, x0, y0, kw, kh = geo
-        bw = kw * 0.6     # 검은 건반 너비
-        bh = kh * 0.62    # 검은 건반 높이
+        bw = kw * BLACK_W
+        bh = kh * BLACK_L
 
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -131,7 +142,7 @@ class PianoWidget(QWidget):
                 bmidi = wmidi + 1
                 if bmidi > MIDI_HIGH:
                     continue
-                rx = self._wx(i, white_midis, x0, kw) + kw - bw / 2
+                rx = black_x(self._wx(i, white_midis, x0, kw) + kw, kw, bmidi)
                 r = QRectF(rx, y0, bw, bh)
                 self._draw_black(p, bmidi, r)
 
@@ -226,8 +237,8 @@ class PianoWidget(QWidget):
         if geo is None:
             return None
         white_midis, x0, y0, kw, kh = geo
-        bw = kw * 0.6
-        bh = kh * 0.62
+        bw = kw * BLACK_W
+        bh = kh * BLACK_L
         if my < y0 or my > y0 + kh:
             return None
         if my <= y0 + bh:
@@ -236,7 +247,7 @@ class PianoWidget(QWidget):
                     bmidi = wmidi + 1
                     if bmidi > MIDI_HIGH:
                         continue
-                    bx = self._wx(i, white_midis, x0, kw) + kw - bw / 2
+                    bx = black_x(self._wx(i, white_midis, x0, kw) + kw, kw, bmidi)
                     if bx <= mx <= bx + bw:
                         return bmidi
         for i in range(len(white_midis)):

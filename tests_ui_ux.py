@@ -98,9 +98,14 @@ class UIUXTest(unittest.TestCase):
         screen.show()
         self.app.processEvents()
         self.assertTrue(screen.rect().contains(screen.go_btn.mapTo(screen, screen.go_btn.rect().bottomRight())))
-        self.assertFalse(screen.landing_box.isVisible())
+        self.assertTrue(screen.landing_box.isVisible())          # 착지음 세부는 항상 보임
+        self.assertFalse(screen.landing_box.isEnabled())
+        free, landing = screen.method_btns["free"], screen.method_btns["landing"]
+        self.assertLess(free.mapTo(screen, free.rect().topRight()).x(),
+                        landing.mapTo(screen, landing.rect().topLeft()).x())   # 좌우 두 열
+        self.assertGreater(landing.mapTo(screen, landing.rect().topLeft()).x(), screen.width() * .4)
         screen._pick_method("landing")
-        self.assertTrue(screen.landing_box.isVisible())
+        self.assertTrue(screen.landing_box.isEnabled())
 
     def test_long_loop_lists_stay_within_window(self):
         tl = build_dummy_timeline()

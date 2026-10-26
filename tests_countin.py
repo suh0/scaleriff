@@ -269,9 +269,8 @@ class CountInTest(unittest.TestCase):
         QTest.mouseRelease(zoom, Qt.MouseButton.LeftButton, pos=QPoint(x2, 40))
         self.assertEqual(screen._end_bar, 3)       # 5.3초 → 가장 가까운 마디선 6초
         self.assertAlmostEqual(zoom._end, 6.0)
-        # 놓으면 끝선이 처음 자리(창 가운데)로 — 창이 6초 기준(1~11초)으로 이동
-        self.assertAlmostEqual((zoom._t0, zoom._t1), (1.0, 11.0))
-        self.assertAlmostEqual(zoom._sec_to_x(6.0), zoom.width() / 2)
+        # 놓으면 끝선이 예비박 선과 대칭(창 오른쪽 끝) 자리로 — 음원 앞(0초)은 넘지 않음
+        self.assertEqual((zoom._t0, zoom._t1), (0.0, 10.0))
         self.assertAlmostEqual((zoom._wave_t0, zoom._wave_t1), (0.0, 8.0))   # 파형은 곡 전체
         x = round(zoom._sec_to_x(6.0))             # 다시 끌어 더 앞으로(새 창 기준)
         QTest.mousePress(zoom, Qt.MouseButton.LeftButton, pos=QPoint(x, 40))
@@ -320,13 +319,13 @@ class CountInTest(unittest.TestCase):
         screen._show_step(2)
         zr = screen.zoom_r
         self.assertAlmostEqual(zr._t1 - zr._t0, zl._t1 - zl._t0)   # 처음 창과 같은 축척
-        bar_len, t0 = screen.bar_len, zr._t0
+        t0 = zr._t0
         x = round(zr._sec_to_x(screen.beat_at(4 * 4)))
         QTest.mousePress(zr, Qt.MouseButton.LeftButton, pos=QPoint(x - 30, 40))
         QTest.mouseMove(zr, QPoint(x - 60, 40))   # 2단계 마디선은 선이 마우스를 따라감
         QTest.mouseMove(zr, QPoint(-5000, 40))
         QTest.mouseRelease(zr, Qt.MouseButton.LeftButton, pos=QPoint(-5000, 40))
-        self.assertGreater(screen.bar_len, bar_len * 0.5)         # 창 시작에서 멈춤(간격 폭주 없음)
+        self.assertGreaterEqual(screen.beat_at(4 * 4), t0 - 1e-6)  # 창 시작에서 멈춤(간격 폭주 없음)
         self.assertAlmostEqual(zr._t0, t0)                        # 창은 그대로
 
     def test_step2_end_drag_keeps_start_and_changes_bpm(self):
@@ -479,7 +478,7 @@ class CountInTest(unittest.TestCase):
         self.assertEqual((screen._step, en()), (2, [True, True, False]))
         QTest.keyClick(win, Qt.Key.Key_Enter)
         self.assertEqual((screen._step, en()), (3, [True, True, True]))
-        self.assertTrue(screen.confirm_btn.isVisible() and not screen.next_btn.isVisible())
+        self.assertEqual([b.isVisible() for b in screen.step_btns], [False, False, True])
         QTest.keyClick(win, Qt.Key.Key_Backspace)
         self.assertEqual((screen._step, en()), (2, [True, True, False]))
         screen.bpm_edit.setFocus()                 # BPM 칸 안의 Backspace는 글자 지우기
@@ -530,6 +529,24 @@ class CountInTest(unittest.TestCase):
         self.assertEqual(screen.bpm_edit.text(), "120.0")
         self.assertEqual(screen.sig_box.currentData(), tl.time_sig)
         self.assertIn(round(screen.anchor, 6), [round(t, 6) for t in screen.zoom_l._ghost])
+        screen.close()
+
+    def test_count_in_window_returns_and_end_mirrors_lead(self):
+        tl = build_dummy_timeline()
+        tl.beat_times = [0.3 + 0.5 * i for i in range(60)]
+        tl.bar_times = [0.3, 30.0]
+        tl.chord_spans = [[0, 30, "C"]]
+        screen = BeatScreen()
+        screen.set_timeline(tl)
+        t0 = screen.zoom_l._t0
+        screen._set_count_in(3)                 # 예비박이 창 왼쪽을 넘어 창이 밀림
+        self.assertLess(screen.zoom_l._t0, t0)
+        screen._set_count_in(1)                 # 줄이면 민 만큼 되돌아옴
+        self.assertAlmostEqual(screen.zoom_l._t0, t0)
+        # 끝선의 오른쪽 여백 = 예비박 첫 마디선의 왼쪽 여백
+        screen._center_end_window()
+        lead = screen.beat_at(-screen.count_in * screen._beats())
+        self.assertAlmostEqual(screen.zoom_r._t1 - screen._end_time(), lead - screen.zoom_l._t0)
         screen.close()
 
     def test_virtual_preroll_pause_and_resume(self):

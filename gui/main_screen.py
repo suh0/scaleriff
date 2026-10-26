@@ -132,7 +132,7 @@ class MainScreen(QWidget):
         for b in (self.back_btn, self.settings_btn):
             b.setFixedSize(48, 48)
             b.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-            b.setStyleSheet(self._icon_qss(T.TEXT_PRIMARY))
+            b.setStyleSheet(T.qss_icon_btn())
             icons.addWidget(b)
         rv.addLayout(icons)
         rv.addSpacing(6)
@@ -251,15 +251,6 @@ class MainScreen(QWidget):
         layout.addWidget(cap)
         layout.addWidget(value)
         return value
-
-    @staticmethod
-    def _icon_qss(color):
-        """우상단 원형 아이콘 버튼(←, ⚙)."""
-        return (f"QPushButton{{background:transparent;color:{color};border:2px solid {color};"
-                f"border-radius:24px;font-family:'Segoe UI Symbol';font-size:22px;padding:0 0 3px 0;"
-                "min-width:44px;max-width:44px;min-height:44px;max-height:44px;}"
-                "QPushButton:hover{background:rgba(255,255,255,0.08);}"
-                f"QPushButton:pressed{{border-color:{T.BORDER_ACTIVE};color:{T.BORDER_ACTIVE};}}")
 
     def _set_time(self, sec):
         self.pos_lbl.setText(_fmt_sec(sec))
@@ -669,7 +660,7 @@ class MainScreen(QWidget):
 
     def set_midi_status(self, ports, name="", error=""):
         self._midi_ports, self._midi_name = list(ports), name
-        self.settings_btn.setStyleSheet(self._icon_qss(T.TEXT_PRIMARY if name else T.TEXT_DIM))
+        self.settings_btn.setStyleSheet(T.qss_icon_btn(T.TEXT_PRIMARY if name else T.TEXT_DIM))
         self.settings_btn.setToolTip(error or (f"MIDI: {name}" if name else "MIDI 미연결 · 화면 건반으로 연습 가능"))
 
     def _show_settings(self):

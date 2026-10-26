@@ -1,17 +1,21 @@
 """다크 스튜디오 디자인 토큰. 현행 기준: 이 파일."""
 from __future__ import annotations
 import os
-from PyQt6.QtGui import QFontDatabase, QPalette, QColor
-from PyQt6.QtWidgets import QWidget, QHBoxLayout
+from PyQt6.QtCore import Qt, QPointF
+from PyQt6.QtGui import QFontDatabase, QPalette, QColor, QPainter, QLinearGradient, QRadialGradient, QPen, QIcon
+from PyQt6.QtWidgets import QWidget, QHBoxLayout, QVBoxLayout, QGridLayout, QLabel
 
 # ── §3.1 표면 / 배경 ─────────────────────────────────────────────
-BG_BASE        = "#11161d"
-BG_SURFACE     = "#1a222c"
-BG_SURFACE_ALT = "#242f3d"
-BG_INSET       = "#0c1117"
-BORDER_SUBTLE  = "#2b3542"
-BORDER_DEFAULT = "#394656"
-BORDER_ACTIVE  = "#cfb68b"
+BG_BASE        = "#0d1421"
+BG_SURFACE     = "#151e2e"
+BG_SURFACE_ALT = "#1e283a"
+BG_INSET       = "#0a0f19"
+BORDER_SUBTLE  = "#232f44"
+BORDER_DEFAULT = "#2e3c55"
+ACCENT         = "#5b84ff"   # 남색 배경 위 포인트 파랑(주 버튼·포커스·선택)
+ACCENT_LIGHT   = "#8b9cff"
+BORDER_ACTIVE  = ACCENT
+ACCENT_GRAD    = f"qlineargradient(x1:0,y1:0,x2:1,y2:0,stop:0 #4f7bff,stop:1 {ACCENT_LIGHT})"
 
 # ── §3.2 텍스트 ──────────────────────────────────────────────────
 TEXT_PRIMARY = "#f1f5f9"
@@ -43,7 +47,7 @@ KEY_PRESSED_OUT   = "#ef4444"  # 스케일 밖 친 건반 테두리
 # ── 공통 UI 엘리먼트 ─────────────────────────────────────────────
 WHITE        = "#ffffff"
 SCRUB_FILL   = "#7e92a9"
-SCRUB_HEAD   = "#cfb68b"
+SCRUB_HEAD   = ACCENT_LIGHT
 HOVER_OVERLAY = "rgba(255,255,255,0.08)"  # 버튼 hover 반투명 오버레이
 
 # ── 하위 호환 별칭 ────────────────────────────────────────────────
@@ -94,8 +98,7 @@ def compact_content(parent: QWidget, max_width: int | None = None) -> QWidget:
     palette.setColor(QPalette.ColorRole.AlternateBase, QColor(BG_SURFACE))
     palette.setColor(QPalette.ColorRole.WindowText, QColor(TEXT_BODY))
     palette.setColor(QPalette.ColorRole.Text, QColor(TEXT_BODY))
-    parent.setPalette(palette)
-    parent.setAutoFillBackground(True)
+    parent.setPalette(palette)   # 배경은 칠하지 않음 — 창 공통 Backdrop이 비친다
     outer = QHBoxLayout(parent)
     outer.setContentsMargins(0, 0, 0, 0)
     outer.setSpacing(0)
@@ -111,14 +114,92 @@ def compact_content(parent: QWidget, max_width: int | None = None) -> QWidget:
     return content
 
 
+class Backdrop(QWidget):
+    """전 화면 공통 배경: 남색 세로 그라데이션 + 좌상·우하 모서리의 큰 원."""
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        w, h = self.width(), self.height()
+        g = QLinearGradient(0, 0, w * 0.3, h)
+        g.setColorAt(0, QColor("#121b2c"))
+        g.setColorAt(1, QColor(BG_BASE))
+        p.fillRect(self.rect(), g)
+        r = max(w, h) * 0.32
+        for c in (QPointF(-r * 0.35, -r * 0.45), QPointF(w + r * 0.3, h + r * 0.25)):
+            rg = QRadialGradient(c, r)
+            rg.setColorAt(0.0, QColor(120, 150, 230, 4))
+            rg.setColorAt(1.0, QColor(120, 150, 230, 15))
+            p.setBrush(rg)
+            p.setPen(QPen(QColor(140, 165, 255, 20), 1.2))
+            p.drawEllipse(c, r, r)
+
+
+def centered_column(parent: QWidget, max_width: int) -> QWidget:
+    """parent 안에 최대 폭 max_width의 가운데 열을 만든다(링크 화면과 같은 읽기 폭)."""
+    row = QHBoxLayout(parent)
+    row.setContentsMargins(0, 0, 0, 0)
+    col = QWidget(parent)
+    col.setMaximumWidth(max_width)
+    row.addStretch(1)
+    row.addWidget(col, 100)
+    row.addStretch(1)
+    return col
+
+
+def header_row(left: QWidget, title: QWidget, right: QWidget | None = None) -> QGridLayout:
+    """좌·우 칸을 같은 비율로 늘려 제목이 정확히 가운데 오는 머리줄."""
+    g = QGridLayout()
+    g.setContentsMargins(0, 0, 0, 0)
+    g.setColumnStretch(0, 1)
+    g.setColumnStretch(2, 1)
+    g.addWidget(left, 0, 0, Qt.AlignmentFlag.AlignLeft)
+    g.addWidget(title, 0, 1)
+    if right is not None:
+        g.addWidget(right, 0, 2, Qt.AlignmentFlag.AlignRight)
+    return g
+
+
+def title_block(title: str, sub: QLabel | str) -> QWidget:
+    """가운데 제목 + 보조 한 줄."""
+    w = QWidget()
+    lay = QVBoxLayout(w)
+    lay.setContentsMargins(0, 0, 0, 0)
+    lay.setSpacing(2)
+    t = QLabel(title)
+    t.setStyleSheet(f"color:{TEXT_PRIMARY};font-size:20px;font-weight:700;")
+    sub = sub if isinstance(sub, QLabel) else QLabel(sub)
+    sub.setStyleSheet(f"color:{TEXT_MUTED};font-size:12px;")
+    for lab in (t, sub):
+        lab.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lay.addWidget(lab)
+    w.title = t
+    return w
+
+
+def icon(name: str) -> QIcon:
+    return QIcon(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                              "assets", "icons", name))
+
+
 # ── 공통 QSS 스니펫 ──────────────────────────────────────────────
+def qss_card(name: str, border: str = BORDER_DEFAULT) -> str:
+    """objectName이 name인 QFrame 카드(링크 화면 입력 바·최근 분석과 같은 표면)."""
+    return (f"QFrame#{name}{{background:{BG_SURFACE};border:1px solid {border};"
+            "border-radius:16px;}")
+
+
+def qss_section_title() -> str:
+    return f"color:{TEXT_PRIMARY};font-size:15px;font-weight:700;"
+
+
 def qss_primary_btn() -> str:
     return (
-        f"QPushButton{{background:{TEXT_PRIMARY};color:{BG_BASE};border:1px solid {TEXT_PRIMARY};"
-        "border-radius:9px;padding:10px 24px;min-height:18px;font-size:14px;font-weight:700;}"
-        f"QPushButton:hover{{background:{WHITE};border-color:{WHITE};}}"
-        f"QPushButton:pressed{{background:{BORDER_ACTIVE};border-color:{BORDER_ACTIVE};}}"
-        f"QPushButton:focus{{border:1px solid {BORDER_ACTIVE};}}"
+        f"QPushButton{{background:{ACCENT_GRAD};color:{WHITE};border:1px solid transparent;"
+        "border-radius:19px;padding:10px 24px;min-height:18px;font-size:14px;font-weight:700;}"
+        "QPushButton:hover{background:qlineargradient(x1:0,y1:0,x2:1,y2:0,stop:0 #6b91ff,stop:1 #9eacff);}"
+        f"QPushButton:pressed{{background:{ACCENT};}}"
+        f"QPushButton:focus{{border:1px solid {WHITE};}}"
         f"QPushButton:disabled{{background:{BG_SURFACE_ALT};color:{TEXT_DIM};border-color:{BORDER_SUBTLE};}}"
     )
 
@@ -126,19 +207,29 @@ def qss_primary_btn() -> str:
 def qss_ghost_btn() -> str:
     return (
         f"QPushButton{{background:{BG_SURFACE_ALT};color:{TEXT_BODY};"
-        f"border:1px solid {BORDER_DEFAULT};border-radius:7px;padding:7px 12px;min-height:18px;font-size:12px;}}"
+        f"border:1px solid {BORDER_DEFAULT};border-radius:10px;padding:7px 14px;min-height:18px;font-size:12px;}}"
         f"QPushButton:hover{{background:{BORDER_DEFAULT};color:{TEXT_PRIMARY};}}"
         f"QPushButton:pressed{{background:{BG_INSET};border-color:{BORDER_ACTIVE};}}"
         f"QPushButton:focus{{border-color:{BORDER_ACTIVE};}}"
-        f"QPushButton:checked{{background:{TEXT_PRIMARY};color:{BG_BASE};border-color:{TEXT_PRIMARY};}}"
+        f"QPushButton:checked{{background:{ACCENT_GRAD};color:{WHITE};border-color:{ACCENT};}}"
         f"QPushButton:disabled{{background:{BG_INSET};color:{TEXT_DIM};border-color:{BORDER_SUBTLE};}}"
     )
+
+
+def qss_icon_btn(color: str = TEXT_PRIMARY) -> str:
+    """원형 아이콘 버튼(←, ⚙). 48×48 고정 크기와 함께 쓴다."""
+    return (f"QPushButton{{background:{BG_SURFACE};color:{color};border:1px solid {BORDER_DEFAULT};"
+            f"border-radius:23px;font-family:'Segoe UI Symbol';font-size:20px;padding:0 0 3px 0;"
+            "min-width:44px;max-width:44px;min-height:44px;max-height:44px;}"
+            f"QPushButton:hover{{background:{BG_SURFACE_ALT};border-color:{ACCENT};}}"
+            f"QPushButton:focus{{border-color:{ACCENT};}}"
+            f"QPushButton:pressed{{border-color:{ACCENT_LIGHT};color:{ACCENT_LIGHT};}}")
 
 
 def qss_input() -> str:
     return (
         f"QLineEdit{{background:{BG_SURFACE};color:{TEXT_PRIMARY};"
-        f"border:1px solid {BORDER_DEFAULT};border-radius:9px;padding:12px;font-size:14px;"
+        f"border:1px solid {BORDER_DEFAULT};border-radius:12px;padding:12px;font-size:14px;"
         f"selection-background-color:{BORDER_ACTIVE};selection-color:{BG_BASE};}}"
         f"QLineEdit:hover{{border-color:{TEXT_MUTED};}}"
         f"QLineEdit:focus{{border:1px solid {BORDER_ACTIVE};}}"

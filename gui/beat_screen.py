@@ -146,7 +146,8 @@ class ZoomBar(QWidget):
             if not self._moved:
                 self._moved = True
                 self.dragStarted.emit()
-            self.endDragged.emit(self._clamp(self._x_to_sec(e.position().x())))
+            # 오른쪽은 창 밖으로도(끝선이 창 끝에 붙어 있어도 늘릴 수 있게) — 음원 끝 제한은 화면 쪽
+            self.endDragged.emit(max(self._drag_win[0], self._x_to_sec(e.position().x())))
         elif self._drag_k is not None:
             started = not self._moved
             self._moved = self.draggable and (self._moved or abs(dx) > CLICK_PX)
@@ -187,7 +188,7 @@ class ZoomBar(QWidget):
         w, h = self.width(), self.height()
         p.setBrush(QColor(T.BG_INSET))
         p.setPen(QPen(QColor(T.BORDER_SUBTLE), 1))
-        p.drawRoundedRect(QRectF(0.5, 0.5, w - 1, h - 1), 8, 8)
+        p.drawRoundedRect(QRectF(0.5, 0.5, w - 1, h - 1), 12, 12)
         # 파형(피크) — 격자 아래에 깔림
         if self._peaks:
             mid, amp = h / 2, h / 2 - 12
@@ -280,6 +281,7 @@ class BeatScreen(QWidget):
         self._drag_loop = False             # 시작 칸을 벗어나면 루프 모드
         self._step = 1           # 박자 단계: 1 시작점 · 2 끝부분 박자 · 3 예비박
         self.count_in = 1        # 예비박 마디 수
+        self._l_shift = 0.0      # 예비박이 넘쳐 처음 창을 왼쪽으로 민 양(줄이면 되돌림)
         self._metro_next: int | None = None     # 다음에 예약할 박 번호(anchor 기준)
         self._metro_gen = 0                     # 시킹/정지 시 예약 클릭 무효화
         self._clock = QElapsedTimer()           # 오디오 위치 갱신 사이 보간
@@ -306,23 +308,17 @@ class BeatScreen(QWidget):
         self.chord_dialog.setStyleSheet(f"QDialog{{background:{T.BG_BASE};}}")
         self.chord_dialog.resize(980, 640)
         QVBoxLayout(self.chord_dialog).addWidget(self.chord_page)
-        root = QVBoxLayout(self.beat_page)
+        root = QVBoxLayout(T.centered_column(self.beat_page, 860))
         root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(10)
+        root.setSpacing(12)
 
-        top = QHBoxLayout()
-        self.link_btn = QPushButton("← 링크")
-        self.link_btn.setStyleSheet(T.qss_ghost_btn())
+        self.link_btn = QPushButton("←")
+        self.link_btn.setToolTip("링크 입력으로")
+        self.link_btn.setFixedSize(48, 48)
+        self.link_btn.setStyleSheet(T.qss_icon_btn())
         self.link_btn.clicked.connect(self.backToLinkRequested.emit)
-        top.addWidget(self.link_btn)
-        title = QLabel("박자 조정")
-        title.setStyleSheet(
-            f"color:{T.TEXT_PRIMARY};font-family:'{T.FONT_SANS}';"
-            "font-size:18px;font-weight:700;")
-        top.addSpacing(8)
-        top.addWidget(title)
-        top.addStretch(1)
-        root.addLayout(top)
+        root.addLayout(T.header_row(self.link_btn, T.title_block(
+            "박자 조정", "3단계 · Enter 다음 · Backspace 이전 · Space 재생")))
 
         self.warn_lbl = QLabel(
             "비트 검출이 부족해 기본 격자를 사용했습니다. BPM과 시작박을 직접 확인해 주세요.")
@@ -352,9 +348,11 @@ class BeatScreen(QWidget):
             f"padding:4px 10px;font-family:'{T.FONT_MONO}';font-size:12px;}}"
             f"QComboBox QAbstractItemView{{background:{T.BG_SURFACE_ALT};"
             f"color:{T.TEXT_BODY};selection-background-color:{T.BORDER_DEFAULT};}}")
-        self.tempo_row = QWidget()
+        self.tempo_row = QFrame()
+        self.tempo_row.setObjectName("tempoCard")
+        self.tempo_row.setStyleSheet(T.qss_card("tempoCard"))
         ctrl = QHBoxLayout(self.tempo_row)
-        ctrl.setContentsMargins(0, 0, 0, 0)
+        ctrl.setContentsMargins(14, 8, 8, 8)
         self.sig_box = QComboBox()
         for sig in ("3/4", "4/4"):
             self.sig_box.addItem(f"박자 {sig}", sig)
@@ -382,19 +380,25 @@ class BeatScreen(QWidget):
         self.auto_bpm_lbl.setStyleSheet(f"color:{T.TEXT_DIM};font-size:12px;")
         ctrl.addSpacing(12)
         ctrl.addWidget(self.auto_bpm_lbl)
-        self.reset_btn = QPushButton("자동추정값 초기화")
-        self.reset_btn.setStyleSheet(T.qss_ghost_btn())
+        self.reset_btn = QPushButton("  자동값으로")
+        self.reset_btn.setIcon(T.icon("reset.svg"))
+        self.reset_btn.setAccessibleName("자동추정값 초기화")
+        self.reset_btn.setStyleSheet(T.qss_ghost_btn() +
+            "QPushButton{background:transparent;border-radius:15px;font-size:12px;padding:0 14px;min-height:30px;}")
         self.reset_btn.setToolTip("박자·BPM·격자를 컴퓨터가 추정한 값으로 되돌립니다")
         self.reset_btn.clicked.connect(self._reset_auto)
-        ctrl.addSpacing(8)
-        ctrl.addWidget(self.reset_btn)
         ctrl.addStretch(1)
+        ctrl.addWidget(self.reset_btn)
         root.insertWidget(1, self.tempo_row)    # '박자 조정' 제목 바로 아래(단계와 무관하게 항상 활성)
 
         # ── 예비박 마디 수(3단계) ─────────────────────────────────
-        self.count_row = QWidget()
+        self.count_row = QFrame()
+        self.count_row.setObjectName("stepper")
+        self.count_row.setStyleSheet(f"QFrame#stepper{{background:{T.BG_INSET};"
+                                     f"border:1px solid {T.BORDER_SUBTLE};border-radius:12px;}}")
         cnt = QHBoxLayout(self.count_row)
-        cnt.setContentsMargins(0, 0, 0, 0)
+        cnt.setContentsMargins(4, 4, 4, 4)
+        cnt.setSpacing(4)
         self.count_minus = QPushButton("−")
         self.count_plus = QPushButton("+")
         self.count_lbl = QLabel()
@@ -403,51 +407,76 @@ class BeatScreen(QWidget):
             "font-weight:700;")
         for btn, d, name in ((self.count_minus, -1, "예비박 한 마디 줄이기"),
                              (self.count_plus, 1, "예비박 한 마디 늘리기")):
-            btn.setStyleSheet(T.qss_ghost_btn())
-            btn.setFixedWidth(40)
+            btn.setStyleSheet(T.qss_ghost_btn() + "QPushButton{border:none;border-radius:9px;"
+                              "font-size:16px;padding:0;min-height:34px;}")
+            btn.setFixedWidth(36)
             btn.setAccessibleName(name)
             btn.clicked.connect(lambda _, d=d: self._set_count_in(self.count_in + d))
+        self.count_lbl.setMinimumWidth(64)
+        self.count_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         cnt.addWidget(self.count_minus)
         cnt.addWidget(self.count_lbl)
         cnt.addWidget(self.count_plus)
-        cnt.addStretch(1)
 
         # ── 세로 3단계: 현재 단계 아래는 흐리게·비활성(Enter 다음, Backspace 이전) ──
         self.sections: list[QWidget] = []
-        self._sec_titles: list[QLabel] = []
-        for name, widgets in (("1. 코드시작 선택", (self.zoom_l,)),
-                              ("2. 코드종료 선택", (self.zoom_r,)),
-                              ("3. 예비박 설정", (self.count_row,))):
-            sec = QWidget()
+        self._sec_badges: list[QLabel] = []
+        self.step_btns: list[QPushButton] = []   # 단계별 오른쪽 버튼(다음·다음·확인)
+        for n, (name, desc, body, btn_text) in enumerate((
+                ("코드시작 선택", "파형을 좌우로 끌어 첫 코드가 1마디 선에 오게 맞춰요", self.zoom_l, "다음 (Enter)"),
+                ("코드종료 선택", "끝 핸들을 마지막 코드가 끝나는 마디선에 놓아요", self.zoom_r, "다음 (Enter)"),
+                ("예비박 설정", "연주 전에 들을 카운트인 길이", self.count_row, "확인 (Enter)")), 1):
+            sec = QFrame()
+            sec.setObjectName("stepCard")
             col = QVBoxLayout(sec)
-            col.setContentsMargins(0, 0, 0, 0)
-            col.setSpacing(6)
+            col.setContentsMargins(18, 14, 18, 14)
+            col.setSpacing(10)
+            head = QHBoxLayout()
+            head.setSpacing(12)
+            badge = QLabel(str(n))
+            badge.setFixedSize(28, 28)
+            badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            head.addWidget(badge)
+            words = QVBoxLayout()
+            words.setSpacing(1)
             lbl = QLabel(name)
-            col.addWidget(lbl)
-            for w in widgets:
-                col.addWidget(w)
+            lbl.setStyleSheet(T.qss_section_title())
+            sub = QLabel(desc)
+            sub.setStyleSheet(f"color:{T.TEXT_MUTED};font-size:12px;")
+            words.addWidget(lbl)
+            words.addWidget(sub)
+            head.addLayout(words, 1)
+            col.addLayout(head)
+            btn = QPushButton(btn_text)
+            btn.setStyleSheet(T.qss_primary_btn() + "QPushButton{padding:0 22px;min-height:38px;}")
+            keep = btn.sizePolicy()
+            keep.setRetainSizeWhenHidden(True)  # 현재 단계 버튼만 보여도 자리는 유지(화면 안 흔들림)
+            btn.setSizePolicy(keep)
+            if n < 3:
+                col.addWidget(body)
+                btn_row = QHBoxLayout()
+                btn_row.addStretch(1)
+                btn_row.addWidget(btn)
+                col.addLayout(btn_row)
+            else:                               # 예비박은 한 줄: 제목 · 스테퍼 · 확인
+                head.addWidget(body)
+                head.addSpacing(8)
+                head.addWidget(btn)
+            self.step_btns.append(btn)
             root.addWidget(sec)
             self.sections.append(sec)
-            self._sec_titles.append(lbl)
+            self._sec_badges.append(badge)
+        for btn in self.step_btns[:2]:
+            btn.clicked.connect(self._advance)
+        self.confirm_btn = self.step_btns[2]
+        self.confirm_btn.setToolTip("변경한 박자를 반영하고 학습 설정으로 이동")
+        self.confirm_btn.clicked.connect(self._on_confirm)
         # 이전 단계의 UI를 누르면 그 단계로 돌아가고 아랫단계는 다시 비활성
         for step, widgets in ((1, (self.zoom_l,)), (2, (self.zoom_r,))):
             for w in widgets:
                 w._beat_step = step
                 w.installEventFilter(self)
         root.addStretch(1)
-
-        nav = QHBoxLayout()
-        nav.addStretch(1)
-        self.next_btn = QPushButton("다음 (Enter)")
-        self.next_btn.setStyleSheet(T.qss_primary_btn())
-        self.next_btn.clicked.connect(self._advance)
-        nav.addWidget(self.next_btn)
-        self.confirm_btn = QPushButton("확인 (Enter)")
-        self.confirm_btn.setStyleSheet(T.qss_primary_btn())
-        self.confirm_btn.setToolTip("변경한 박자를 반영하고 학습 설정으로 이동")
-        self.confirm_btn.clicked.connect(self._on_confirm)
-        nav.addWidget(self.confirm_btn)
-        root.addLayout(nav)
         for key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
             QShortcut(QKeySequence(key), self, self._advance,
                       context=Qt.ShortcutContext.WidgetWithChildrenShortcut)
@@ -465,7 +494,7 @@ class BeatScreen(QWidget):
         root.setSpacing(10)
         chord_top = QHBoxLayout()
         chord_title = QLabel("코드 편집")
-        chord_title.setStyleSheet(title.styleSheet())
+        chord_title.setStyleSheet(f"color:{T.TEXT_PRIMARY};font-size:18px;font-weight:700;")
         chord_top.addWidget(chord_title)
         chord_top.addStretch(1)
         self.key_box = QComboBox()
@@ -635,7 +664,10 @@ class BeatScreen(QWidget):
         if lead < -EDGE_SEC:                    # 예비박이 음원 앞 5초 밖이면 격자를 뒤로
             self.anchor = self.anchor + (-EDGE_SEC - lead)
             lead = -EDGE_SEC
-        start = min(self.zoom_l._t0, lead)     # 창은 드래그로 따라가고, 예비박이 넘치면 왼쪽으로
+        # 창은 드래그로 따라가고, 예비박이 넘치면 왼쪽으로 — 줄이면 민 만큼 되돌림
+        base = self.zoom_l._t0 + self._l_shift
+        start = min(base, lead)
+        self._l_shift = base - start
         self.zoom_l.set_window(start, start + ZOOM_SEC)   # 끝부분 창과 같은 10초 축척
         for z in (self.zoom_l, self.zoom_r):
             z.set_grid(self.beat_at, self.index_at, self._beats(), self.count_in)
@@ -649,11 +681,13 @@ class BeatScreen(QWidget):
         return self._dur if self._end_bar is None else self.beat_at(self._end_bar * self._beats())
 
     def _center_end_window(self):
-        """끝부분 창 = 끝선이 처음 자리(창 가운데)에 오도록.
+        """끝부분 창 = 끝선이 예비박 첫 마디선과 좌우 대칭 자리에 오도록.
 
         창은 처음 창과 같은 10초, 음원 끝 + EDGE_SEC를 넘지 않는다.
         """
-        r0 = max(0.0, min(self._end_time() - EDGE_SEC, self._dur + EDGE_SEC - ZOOM_SEC))
+        lead = self.beat_at(-self.count_in * self._beats())
+        gap = min(max(0.0, lead - self.zoom_l._t0), ZOOM_SEC / 2)   # 예비박 선의 왼쪽 여백
+        r0 = max(0.0, min(self._end_time() - ZOOM_SEC + gap, self._dur + EDGE_SEC - ZOOM_SEC))
         self.zoom_r.set_window(r0, r0 + ZOOM_SEC)
 
     def _on_end_drag(self, sec: float):
@@ -674,14 +708,18 @@ class BeatScreen(QWidget):
         """현재 단계까지 활성, 아랫단계는 흐리게·비활성(값은 유지)."""
         self._step = max(1, min(3, step))
         self.pause()
-        for i, (sec, lbl) in enumerate(zip(self.sections, self._sec_titles), 1):
+        for i, (sec, badge) in enumerate(zip(self.sections, self._sec_badges), 1):
             self._dim(sec, i > self._step)
-            lbl.setStyleSheet(
-                f"color:{T.TEXT_PRIMARY if i == self._step else T.TEXT_MUTED};"
-                f"font-size:{15 if i == self._step else 13}px;font-weight:700;")
+            cur = i == self._step                 # 현재 단계 = 파랑 테두리·채운 번호
+            sec.setStyleSheet(T.qss_card("stepCard", T.ACCENT if cur else T.BORDER_SUBTLE))
+            badge.setStyleSheet(
+                f"background:{T.ACCENT_GRAD};color:{T.WHITE};border-radius:14px;font-size:13px;font-weight:700;"
+                if cur else
+                f"background:transparent;color:{T.TEXT_BODY};border:1px solid {T.TEXT_DIM};"
+                "border-radius:14px;font-size:13px;font-weight:700;")
         self.zoom_r.end_draggable = True
-        self.next_btn.setVisible(self._step < 3)
-        self.confirm_btn.setVisible(self._step == 3)
+        for i, btn in enumerate(self.step_btns, 1):
+            btn.setVisible(i == self._step)
         self._refresh()
 
     def _advance(self):
@@ -718,6 +756,7 @@ class BeatScreen(QWidget):
         self.sig_box.setCurrentIndex(idx if idx >= 0 else 1)
         self.sig_box.blockSignals(False)
         self.zoom_l.set_window(0.0, ZOOM_SEC)
+        self._l_shift = 0.0
         peaks = tl.wave_peaks                  # 세션 JSON에 저장된 곡 전체 파형
         for z in (self.zoom_l, self.zoom_r):
             z.set_wave(peaks, 0.0, len(peaks) / WAVE_RATE)
@@ -741,9 +780,9 @@ class BeatScreen(QWidget):
             self._lattice, self._u_anchor, self.beat_len = None, bar0, tl.beat_sec()
         self._end_bar = (None if tl.chord_end is None else
                          max(1, round(self.index_at(tl.chord_end) / self._beats())))
+        self.count_in = max(1, tl.count_in_bars)
         self._center_end_window()
         self._show_bpm()
-        self.count_in = max(1, tl.count_in_bars)
         self.playhead = Playhead(self._dur, tl.audio_ref, self)
         self.playhead.positionChanged.connect(self._on_tick)
         self._reset_drag()
@@ -925,7 +964,7 @@ class BeatScreen(QWidget):
         w.setEnabled(not dim)
         if dim:
             eff = QGraphicsOpacityEffect(w)
-            eff.setOpacity(0.35)
+            eff.setOpacity(0.45)
             w.setGraphicsEffect(eff)
         else:
             w.setGraphicsEffect(None)
