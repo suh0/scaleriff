@@ -1,8 +1,8 @@
 """연주 무대 — 건반과 노드 레인을 원근(3D로 기울인 하이웨이)으로 그린다.
 
 평면 좌표(world): 레인 y∈[0, lane_h], 건반 y∈[lane_h, lane_h+kh], x는 PianoWidget 좌표 그대로.
-변환 두 개(평면 직사각형 → 화면 사다리꼴)로 점만 변환한다: 레인은 강하게 소실(_xf),
-건반은 완만하게(_kxf). 둘은 판정선(건반 윗선)에서 같은 화면 선분을 공유해 이어진다.
+원근 변환 하나(건반 평면 직사각형 → 화면 사다리꼴)를 레인까지 위로 연장해 쓴다:
+레인 레일은 건반 양옆 기울기 그대로 이어지고, 레인 먼 끝이 화면 TOP_Y에 닿는 길이로 정한다.
 
 연주 중 비용: 벽·도로·레인 선·눌리지 않은 건반·배지는 QPixmap 캐시
 (창 크기·스케일이 바뀔 때만 다시 그림). 매 프레임엔 캐시 복사 + 노드·눌린 건반·빛기둥·예고만 그린다.
@@ -16,7 +16,6 @@ from PyQt6.QtWidgets import QWidget
 from gui import theme as T
 from gui.widgets.piano import BLACK_PCS, MIDI_HIGH, MIDI_LOW, PREVIEW_SPACE, WHITE_RATIO, _is_white
 
-TOP_RATIO = 0.3    # 레인 먼 끝 폭 ÷ 판정선 폭(소실 정도)
 TOP_Y = 0.15       # 레인 먼 끝의 화면 높이 비율
 KEYS_TOP = 0.63    # 건반 윗선(판정선)의 화면 높이 비율
 KEYS_TAPER = 0.06  # 판정선 쪽이 건반 앞쪽보다 양옆으로 좁아지는 비율(화면 폭 기준)
@@ -68,16 +67,17 @@ class Stage(QWidget):
         kw = w / 14
         self.piano.resize(w, int(kw * WHITE_RATIO) + PREVIEW_SPACE)
         _, _, _, _, kh = self.piano._geometry()
-        self._lane_h = kh * 3
-        self.riff.resize(w, max(1, int(self._lane_h)))
         # 건반 앞쪽은 화면 여백 안, 판정선은 그보다 좁게 → 원근을 유지하며 끝 건반까지 화면 안
-        half, hit = w * TOP_RATIO / 2, h * KEYS_TOP
+        hit = h * KEYS_TOP
         near_l, near_r = T.PAD_H, w - T.PAD_H
         hit_l, hit_r = near_l + w * KEYS_TAPER, near_r - w * KEYS_TAPER
-        self._xf = _quad(QRectF(0, 0, w, self._lane_h),
-                         [(w / 2 - half, h * TOP_Y), (w / 2 + half, h * TOP_Y), (hit_r, hit), (hit_l, hit)])
-        self._kxf = _quad(QRectF(0, self._lane_h, w, kh),
-                          [(hit_l, hit), (hit_r, hit), (near_r, h * (1 - LIP)), (near_l, h * (1 - LIP))])
+        corners = [(hit_l, hit), (hit_r, hit), (near_r, h * (1 - LIP)), (near_l, h * (1 - LIP))]
+        # 같은 평면을 위로 연장했을 때 화면 TOP_Y에 닿는 평면 거리 = 레인 길이
+        probe, _ = _quad(QRectF(0, 0, w, kh), corners).inverted()
+        self._lane_h = max(1.0, -probe.map(QPointF(w / 2, h * TOP_Y)).y())
+        self.riff.resize(w, max(1, int(self._lane_h)))
+        self._kxf = _quad(QRectF(0, self._lane_h, w, kh), corners)
+        self._xf = self._kxf                # 레인 = 건반과 같은 원근(레일 기울기 일치)
         self._kinv, _ = self._kxf.inverted()
         self._cache_key = None
 
@@ -185,11 +185,14 @@ class Stage(QWidget):
                 p.setPen(QPen(QColor(T.BORDER_SUBTLE), 1))
                 p.setBrush(QColor(WALL_TONES[i % len(WALL_TONES)]))
                 p.drawPolygon(QPolygonF([f0, f1, t1, t0]))
-                if (i, side) in ((3, 1), (1, 1)):   # 세로 네온 스트립 — 왼쪽 벽은 곡 정보 글자 자리라 생략
+                if i in (1, 3):    # 세로 네온 스트립 — 벽 아래쪽만(위쪽은 HUD 글자·버튼 자리)
                     mid0, mid1 = (f0 + f1) / 2, (t0 + t1) / 2
-                    neon = QColor(T.BADGE_ROOT if i == 3 else T.BADGE_CHORD)
+                    neon = QColor(T.BADGE_CHORD if (i == 1) == (side < 0) else T.BADGE_ROOT)
+                    p.save()
+                    p.setClipRect(QRectF(0, self.height() * 0.36, w, self.height()))   # HUD 아래만
                     p.setPen(QPen(neon, max(2.0, abs(s1) * w * 0.006)))
-                    p.drawLine(mid0 - (mid0 - mid1) * .25, mid0 - (mid0 - mid1) * .75)
+                    p.drawLine(mid0 - (mid0 - mid1) * .08, mid0 - (mid0 - mid1) * .3)
+                    p.restore()
 
     def _build_cache(self):
         dpr = self.devicePixelRatioF()
