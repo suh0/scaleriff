@@ -533,7 +533,7 @@ class MainScreen(QWidget):
         # 현재/다음 코드는 모니터박스가 그림(_update_monitor)
 
     def _update_scale_preview(self, sec: float, idx: int):
-        self.piano.set_preview()
+        """재생 위치 반영: 낙하 노드 위치 + 상단 코드(현재/다음). 다음 스케일 건반 예고는 없음."""
         self.stage.update()
         spans = self._loop_spans()
         self.riff.set_position(sec, spans)
@@ -558,13 +558,6 @@ class MainScreen(QWidget):
         lead = min(4 * self.tl.beat_sec(), boundary - (seg.start_sec if seg else sec - 4 * self.tl.beat_sec()))
         grow = (sec - boundary + lead) / lead if upcoming and lead > 0 and boundary - lead <= sec < boundary else 0.0
         self._update_monitor(sec, seg, upcoming, grow, change)
-        if self._mode == "practice" or seg is None or upcoming is None or grow <= 0:
-            return
-        if (seg.scale_name, seg.chord_tones(), set(seg.note_set)) == (
-                upcoming.scale_name, upcoming.chord_tones(), set(upcoming.note_set)):
-            return
-        self.piano.set_preview(upcoming.note_set, upcoming.chord_tones(),
-                               upcoming.scale_root, grow)
 
     def _update_monitor(self, sec, seg, upcoming, grow, change):
         """모니터박스 코드 표시 — 재생 중 코드가 바뀌면 이전 코드를 밀어내는 push(0.5박)."""

@@ -24,7 +24,6 @@ def main():
     screen.show()
     app.processEvents()
     screen._select_practice("riff")
-    assert screen.piano._preview_opacity == 0, "정지 중 모드 선택도 스케일 예고 제거"
     screen._on_seek(0)
     before = screen.riff._nodes()
     assert len(before) == 2
@@ -62,11 +61,11 @@ def main():
     assert len(screen.riff._nodes()) == 3, "지속 중인 음과 루프 다음 회차 리프 예고"
     screen._select_practice("riff")
     screen._render_at(1.0)
-    assert screen.riff.show_notes and screen.piano._preview_opacity == 0
+    assert screen.riff.show_notes
     tl.loops = []
     screen._select_practice("free")
     screen._render_at(1.0)
-    assert screen.stage.isVisible() and not screen.riff.show_notes and screen.piano._preview_opacity > 0
+    assert screen.stage.isVisible() and not screen.riff.show_notes
     assert not screen.riff._nodes(), "자유모드: 모니터박스는 있되 노드 없음"
     # 모니터박스 코드: 경계 4박 전부터 다음 코드가 커지고, 재생 중 바뀌면 이전 코드를 밀어냄
     seg0, seg1 = tl.segments[1], tl.segments[2]
@@ -88,6 +87,31 @@ def main():
         r = stage._key_rect(midi)
         y = r.top() + r.height() * (0.3 if midi % 12 in (1, 3, 6, 8, 10) else 0.85)
         assert stage._midi_at(stage._kxf.map(QPointF(r.center().x(), y))) == midi, midi
+    # 스케일 표시 = 건반 앞면 색(일반모드), 리프모드에선 없음
+    from gui import theme as T
+    from gui.widgets.stage import TONE_CHORD, TONE_ROOT, TONE_SCALE
+    screen._select_practice("free")
+    colors = {stage._state_color(m).name() for m in range(60, 84) if stage._state_color(m)}
+    assert colors == {TONE_ROOT, TONE_CHORD, TONE_SCALE}, colors
+    assert [stage._node_color(c).name() for c in (T.BADGE_ROOT, T.BADGE_CHORD, T.BADGE_SCALE)] ==         [TONE_ROOT, TONE_CHORD, TONE_SCALE], "노드도 같은 파란 계열 진하기"
+    screen._select_practice("riff")
+    assert all(stage._state_color(m) is None for m in range(60, 84)), "리프모드는 스케일 표시 없음"
+    screen._select_practice("free")
+    # 근음 반짝이: 일반모드엔 근음 건반 앞면에서 타이머 동작, 근음 없으면 정지
+    from PyQt6.QtGui import QImage as _Img
+    probe = _Img(stage.size(), _Img.Format.Format_ARGB32_Premultiplied)
+    stage.render(probe)
+    assert stage._sparkle_areas and stage._sparkle_timer.isActive(), "근음 반짝이 동작"
+    import time as _t
+    t0 = _t.perf_counter()
+    for area in stage._sparkle_areas * 10:
+        stage.render(probe, sourceRegion=QRegion(area))
+    print(f"  sparkle tick {(_t.perf_counter() - t0) / 10 * 1000:.2f}ms")
+    saved = dict(screen.piano._degrees)
+    screen.piano._degrees = {}                       # 근음 정보 없음 → 반짝이 없음
+    stage.render(probe)
+    assert not stage._sparkle_areas and not stage._sparkle_timer.isActive(), "근음 없으면 타이머 정지"
+    screen.piano._degrees = saved
     # 양 끝 건반(앞면 포함)까지 화면 안
     for midi in (60, 83):
         area = stage._kxf.mapRect(stage._key_rect(midi)).adjusted(0, 0, 0, stage._lip())

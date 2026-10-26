@@ -11,7 +11,6 @@
 - 범위: 오른손 2옥타브 C4–B5 (MIDI 60–83) — 리프 생성 음역과 동일
 - 흰 건반 가로:세로 비율 WHITE_RATIO 고정 → 어떤 창에서도 비율 유지(레터박스)
 - 배지는 가이드·연습 모드 모두 전체 표시(퀴즈 블러 제거 §10)
-- 전환 직전 다음 음의 건반 아래 둥근 막대가 건반 너비까지 넓어진다.
 """
 from __future__ import annotations
 
@@ -25,7 +24,7 @@ MIDI_LOW  = 60   # C4
 MIDI_HIGH = 83   # B5
 
 WHITE_RATIO = 4.2   # 흰 건반 가로:세로 고정 비율
-PREVIEW_SPACE = 16  # 흰 건반 아래 예고 막대 여백
+PREVIEW_SPACE = 16  # 흰 건반 아래 여백(구 예고 막대 자리 — 기하 유지)
 PREVIEW_HEIGHT = 4
 
 WHITE_PCS = {0, 2, 4, 5, 7, 9, 11}
@@ -48,11 +47,6 @@ class PianoWidget(QWidget):
         self._chord_tones: set[int] = set()
         self._degrees: dict[int, str] = {}
         self._pressed: set[int] = set()
-        self._preview_notes: set[int] = set()
-        self._preview_chords: set[int] = set()
-        self._preview_root = 0
-        self._preview_opacity = 0.0
-        self._preview_progress = 0.0
 
     # ── 상태 세터 ────────────────────────────────────────────────
     def set_scale(self, note_set, chord_tones):
@@ -67,34 +61,6 @@ class PianoWidget(QWidget):
     def set_pressed(self, pressed):
         self._pressed = set(pressed)
         self.update()
-
-    def set_preview(self, notes=(), chords=(), root=0, progress=0.0):
-        """다음 음의 하단 막대: 건반 너비까지 넓어지고 빠르게 선명해진다."""
-        self._preview_notes = set(notes)
-        self._preview_chords = set(chords)
-        self._preview_root = root
-        t = max(0.0, min(1.0, progress))
-        self._preview_progress = t
-        self._preview_opacity = 1 - (1 - t) ** 3
-        self.update()
-
-    def _draw_preview_bar(self, p: QPainter, midi: int, r: QRectF):
-        pc = midi % 12
-        if pc not in self._preview_notes or not self._preview_opacity:
-            return
-        if pc != self._preview_root and pc not in self._preview_chords:
-            return
-        tint = QColor(T.BADGE_ROOT if pc == self._preview_root else
-                      T.BADGE_CHORD)
-        tint.setAlphaF(self._preview_opacity)
-        p.save()
-        p.setBrush(tint)
-        p.setPen(Qt.PenStyle.NoPen)
-        width = r.width() * (0.3 + 0.7 * self._preview_progress)
-        y = r.bottom() + 4 if _is_white(midi) else r.bottom() - PREVIEW_HEIGHT
-        bar = QRectF(r.center().x() - width / 2, y, width, PREVIEW_HEIGHT)
-        p.drawRoundedRect(bar, 2, 2)
-        p.restore()
 
     # ── 기하: 비율 고정 + 가운데 정렬 ───────────────────────────
     def _geometry(self):
@@ -150,14 +116,12 @@ class PianoWidget(QWidget):
 
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        preview_rects = []
 
         # 흰 건반
         for i, midi in enumerate(white_midis):
             rx = self._wx(i, white_midis, x0, kw)
             r = QRectF(rx + 1, y0, kw - 2, kh - 1)
             self._draw_white(p, midi, r)
-            preview_rects.append((midi, r))
 
         # 검은 건반 (흰 건반 위에 덮어 그림)
         for i, wmidi in enumerate(white_midis):
@@ -168,10 +132,6 @@ class PianoWidget(QWidget):
                 rx = self._wx(i, white_midis, x0, kw) + kw - bw / 2
                 r = QRectF(rx, y0, bw, bh)
                 self._draw_black(p, bmidi, r)
-                preview_rects.append((bmidi, r))
-
-        for midi, r in preview_rects:
-            self._draw_preview_bar(p, midi, r)
 
     def _draw_white(self, p: QPainter, midi: int, r: QRectF):
         is_pressed = midi in self._pressed
