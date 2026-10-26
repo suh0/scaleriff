@@ -93,41 +93,45 @@ class MainScreen(QWidget):
         self.song_lbl.setStyleSheet(
             f"color:{T.TEXT_PRIMARY};font-family:'{T.FONT_SANS}';font-size:16px;font-weight:700;")
         lv.addWidget(self.song_lbl)
-        self.key_lbl, self.bpm_lbl, self.time_lbl = (
-            self._hud_stat(lv, cap) for cap in ("KEY", "BPM", "TIME"))
-        lv.addSpacing(10)
-        nav = QHBoxLayout()
-        self.link_btn = QPushButton("← 링크")
-        self.score_btn = QPushButton("← 학습 설정")
-        for b in (self.link_btn, self.score_btn):
-            b.setStyleSheet(T.qss_ghost_btn())
-            b.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-            nav.addWidget(b)
-        self.link_btn.clicked.connect(self.backToLinkRequested.emit)
-        self.score_btn.clicked.connect(self.backToSetupRequested.emit)
-        lv.addLayout(nav)
+        key_bpm = QHBoxLayout()
+        key_bpm.setSpacing(28)
+        for cap in ("KEY", "BPM"):
+            col = QVBoxLayout()
+            col.setSpacing(4)
+            key_bpm.addLayout(col)
+            if cap == "KEY":
+                self.key_lbl = self._hud_stat(col, cap)
+            else:
+                self.bpm_lbl = self._hud_stat(col, cap)
+        key_bpm.addStretch(1)
+        lv.addLayout(key_bpm)
+        self.time_lbl = self._hud_stat(lv, "TIME")
         root.addWidget(left, 0, 0, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
 
         # ── 상단 가운데: 현재/다음 코드 ──
         self.chord_hdr = ChordHeader()
         root.addWidget(self.chord_hdr, 0, 0, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter)
 
-        # ── 오른쪽 벽: 재생(원형) + 리프모드·루프·입력·소리 ──
+        # ── 오른쪽 벽: [←][⚙] + 리프모드·루프 ──
         right = QWidget()
         rv = QVBoxLayout(right)
         rv.setContentsMargins(0, 24, T.PAD_H + 8, 0)
         rv.setSpacing(8)
-        self.play_btn = QPushButton("▶")
-        self.play_btn.setFixedSize(64, 64)
-        self.play_btn.setAccessibleName("재생 또는 일시정지")
-        self.play_btn.setToolTip("재생 / 일시정지 (스페이스)")
-        self.play_btn.setStyleSheet(
-            f"QPushButton{{background:transparent;color:{T.TEXT_PRIMARY};border:2px solid {T.TEXT_PRIMARY};"
-            "border-radius:32px;font-size:22px;font-weight:700;padding:0;}"
-            "QPushButton:hover{background:rgba(255,255,255,0.08);}"
-            f"QPushButton:pressed{{border-color:{T.BORDER_ACTIVE};color:{T.BORDER_ACTIVE};}}")
-        self.play_btn.clicked.connect(self._toggle_play)
-        rv.addWidget(self.play_btn, 0, Qt.AlignmentFlag.AlignRight)
+        icons = QHBoxLayout()
+        icons.setSpacing(10)
+        icons.addStretch(1)
+        self.back_btn = QPushButton("←")
+        self.back_btn.setToolTip("학습 설정으로")
+        self.back_btn.clicked.connect(self.backToSetupRequested.emit)
+        self.settings_btn = QPushButton("⚙")
+        self.settings_btn.setAccessibleName("입력·소리 설정")
+        self.settings_btn.clicked.connect(self._show_settings)
+        for b in (self.back_btn, self.settings_btn):
+            b.setFixedSize(48, 48)
+            b.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            b.setStyleSheet(self._icon_qss(T.TEXT_PRIMARY))
+            icons.addWidget(b)
+        rv.addLayout(icons)
         rv.addSpacing(6)
         self.riff_btn = QPushButton("리프모드")
         self.riff_btn.clicked.connect(self._toggle_riff_mode)
@@ -135,14 +139,26 @@ class MainScreen(QWidget):
         self.loop_btn = QPushButton("루프")
         self.loop_btn.setCheckable(True)
         self.loop_btn.clicked.connect(self._toggle_loop_panel)
-        self.settings_btn = QPushButton("입력·소리")
-        self.settings_btn.clicked.connect(self._show_settings)
-        for b in (self.riff_btn, self.loop_btn, self.settings_btn):
+        for b in (self.riff_btn, self.loop_btn):
             b.setFixedSize(116, 36)
             b.setStyleSheet(T.qss_ghost_btn())
             b.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             rv.addWidget(b, 0, Qt.AlignmentFlag.AlignRight)
         root.addWidget(right, 0, 0, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignRight)
+
+        # ── 가운데 재생 아이콘: 멈춤일 때만 반투명하게 ──
+        self.play_btn = QPushButton("▶")
+        self.play_btn.setFixedSize(112, 112)
+        self.play_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.play_btn.setAccessibleName("재생")
+        self.play_btn.setToolTip("재생 (스페이스)")
+        self.play_btn.setStyleSheet(
+            "QPushButton{background:rgba(255,255,255,0.10);color:rgba(255,255,255,0.55);"
+            "border:2px solid rgba(255,255,255,0.35);border-radius:56px;font-size:44px;padding:0 0 0 8px;"
+            "min-width:108px;max-width:108px;min-height:108px;max-height:108px;}"
+            "QPushButton:hover{background:rgba(255,255,255,0.18);color:rgba(255,255,255,0.8);}")
+        self.play_btn.clicked.connect(self._toggle_play)
+        root.addWidget(self.play_btn, 0, 0, Qt.AlignmentFlag.AlignCenter)
 
         # ── 재생바: 기본 숨김, 스페이스로 잠깐 반투명 표시 ──
         self.scrub = ScrubBar()
@@ -215,7 +231,7 @@ class MainScreen(QWidget):
 
     def _place_loop_panel(self):
         w = 310      # 오른쪽 벽 버튼들 왼쪽에 띄운다
-        self.loop_panel.setGeometry(self.content.width() - w - 116 - T.PAD_H - 24, 24,
+        self.loop_panel.setGeometry(self.content.width() - w - 116 - T.PAD_H - 24, 84,
                                     w, min(380, self.content.height() - 130))
 
     # ── HUD ─────────────────────────────────────────────────────
@@ -232,6 +248,15 @@ class MainScreen(QWidget):
         layout.addWidget(cap)
         layout.addWidget(value)
         return value
+
+    @staticmethod
+    def _icon_qss(color):
+        """우상단 원형 아이콘 버튼(←, ⚙)."""
+        return (f"QPushButton{{background:transparent;color:{color};border:2px solid {color};"
+                f"border-radius:24px;font-family:'Segoe UI Symbol';font-size:22px;padding:0 0 3px 0;"
+                "min-width:44px;max-width:44px;min-height:44px;max-height:44px;}"
+                "QPushButton:hover{background:rgba(255,255,255,0.08);}"
+                f"QPushButton:pressed{{border-color:{T.BORDER_ACTIVE};color:{T.BORDER_ACTIVE};}}")
 
     def _set_time(self, sec):
         self.pos_lbl.setText(_fmt_sec(sec))
@@ -439,10 +464,7 @@ class MainScreen(QWidget):
             self._held_keys.clear()
             self.piano.set_pressed(set())
             self.stage.update()
-        self.play_btn.setText("⏸" if playing else "▶")
-        action = "일시정지" if playing else "재생"
-        self.play_btn.setAccessibleName(action)
-        self.play_btn.setToolTip(action)
+        self.play_btn.setVisible(not playing)    # 멈춤일 때만 가운데 재생 아이콘
 
     def _on_seek(self, sec: float):
         self._seek_to(sec)
@@ -586,7 +608,7 @@ class MainScreen(QWidget):
 
     def set_midi_status(self, ports, name="", error=""):
         self._midi_ports, self._midi_name = list(ports), name
-        self.settings_btn.setText("입력·소리 ●" if name else "입력·소리 ○")
+        self.settings_btn.setStyleSheet(self._icon_qss(T.TEXT_PRIMARY if name else T.TEXT_DIM))
         self.settings_btn.setToolTip(error or (f"MIDI: {name}" if name else "MIDI 미연결 · 화면 건반으로 연습 가능"))
 
     def _show_settings(self):

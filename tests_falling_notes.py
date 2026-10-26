@@ -97,6 +97,7 @@ def main():
     playing = screen.playhead.is_playing()
     screen._on_space()
     assert screen.playhead.is_playing() != playing and not screen.scrub_row.isHidden()
+    assert screen.play_btn.isHidden() == screen.playhead.is_playing(), "가운데 재생 아이콘은 멈춤일 때만"
     screen.playhead.pause()
     screen._hide_scrub()
     assert screen.scrub_row.isHidden(), "타이머 만료 후 재생바 숨김"
