@@ -1,8 +1,8 @@
 """연주 무대 — 건반과 노드 레인을 원근(3D로 기울인 하이웨이)으로 그린다.
 
 평면 좌표(world): 레인 y∈[0, lane_h], 건반 y∈[lane_h, lane_h+kh], x는 PianoWidget 좌표 그대로.
-원근 변환 하나(건반 평면 직사각형 → 화면 사다리꼴)를 레인까지 위로 연장해 쓴다:
-레인 레일은 건반 양옆 기울기 그대로 이어지고, 레인 먼 끝이 화면 TOP_Y에 닿는 길이로 정한다.
+원근 변환 하나(평면 → 화면 사다리꼴, 참고 이미지 실측 비율)를 레인과 건반이 함께 쓴다:
+건반 양옆이 레일 기울기 그대로 이어지고, 넓어진 건반 앞쪽이 화면에 들어오도록 무대 전체를 축소한다.
 
 연주 중 비용: 벽·도로·레인 선·눌리지 않은 건반·배지는 QPixmap 캐시
 (창 크기·스케일이 바뀔 때만 다시 그림). 매 프레임엔 캐시 복사 + 노드·눌린 건반·빛기둥·예고만 그린다.
@@ -16,10 +16,13 @@ from PyQt6.QtWidgets import QWidget
 from gui import theme as T
 from gui.widgets.piano import BLACK_PCS, MIDI_HIGH, MIDI_LOW, PREVIEW_SPACE, WHITE_RATIO, _is_white
 
-TOP_Y = 0.15       # 레인 먼 끝의 화면 높이 비율
-KEYS_TOP = 0.63    # 건반 윗선(판정선)의 화면 높이 비율
-KEYS_TAPER = 0.06  # 판정선 쪽이 건반 앞쪽보다 양옆으로 좁아지는 비율(화면 폭 기준)
-LIP = 0.035        # 흰 건반 앞면 두께(화면 높이 비율)
+# 참고 이미지 실측(화면 비율): 레인 먼 끝 y≈0.13·폭≈0.18, 판정선 y≈0.64, 건반 앞 y≈0.93, 앞면 ≈0.033
+TOP_Y = 0.13       # 레인 먼 끝의 화면 높이 비율
+TOP_WIDTH = 0.34   # 레인 먼 끝의 폭(화면 폭 비율) = 시점 높이: 클수록 위에서 내려다본 원근(이미지는 0.18)
+KEYS_TOP = 0.64    # 건반 윗선(판정선)의 화면 높이 비율
+KEYS_BOTTOM = 0.925  # 건반 윗면 앞 모서리의 화면 높이 비율(그 아래 앞면 두께)
+LIP = 0.033        # 흰 건반 앞면 두께(화면 높이 비율)
+RAIL = 0.022       # 도로 양옆 레일 폭(평면 폭 비율)
 BEAM = 0.45        # 빛기둥 길이(레인 길이 비율)
 
 SCALE_NODE = "#dfe6ee"   # 스케일음 노드(이미지의 흰 노드)
@@ -55,6 +58,7 @@ class Stage(QWidget):
         self._kxf = QTransform()           # 건반(평면 → 화면)
         self._kinv = QTransform()
         self._lane_h = 1.0
+        self._scale = 1.0                  # 화면 맞춤 축소 비율
         self._cache = None
         self._cache_key = None
         self.cache_builds = 0              # 캐시 재생성 횟수(비용 측정용)
@@ -67,17 +71,20 @@ class Stage(QWidget):
         kw = w / 14
         self.piano.resize(w, int(kw * WHITE_RATIO) + PREVIEW_SPACE)
         _, _, _, _, kh = self.piano._geometry()
-        # 건반 앞쪽은 화면 여백 안, 판정선은 그보다 좁게 → 원근을 유지하며 끝 건반까지 화면 안
-        hit = h * KEYS_TOP
-        near_l, near_r = T.PAD_H, w - T.PAD_H
-        hit_l, hit_r = near_l + w * KEYS_TAPER, near_r - w * KEYS_TAPER
-        corners = [(hit_l, hit), (hit_r, hit), (near_r, h * (1 - LIP)), (near_l, h * (1 - LIP))]
-        # 같은 평면을 위로 연장했을 때 화면 TOP_Y에 닿는 평면 거리 = 레인 길이
-        probe, _ = _quad(QRectF(0, 0, w, kh), corners).inverted()
-        self._lane_h = max(1.0, -probe.map(QPointF(w / 2, h * TOP_Y)).y())
+        half, hit = w * TOP_WIDTH / 2, h * KEYS_TOP
+        trap = [(w / 2 - half, h * TOP_Y), (w / 2 + half, h * TOP_Y), (w, hit), (0, hit)]
+        # 레인 평면을 건반까지 연장했을 때 건반 앞 모서리가 KEYS_BOTTOM에 오도록 레인 길이를 정한다
+        probe, _ = _quad(QRectF(0, 0, w, 1), trap).inverted()
+        t = probe.map(QPointF(w / 2, h * KEYS_BOTTOM)).y()        # 레인 길이 1 기준 평면 깊이(>1)
+        self._lane_h = kh / (t - 1)
         self.riff.resize(w, max(1, int(self._lane_h)))
-        self._kxf = _quad(QRectF(0, self._lane_h, w, kh), corners)
-        self._xf = self._kxf                # 레인 = 건반과 같은 원근(레일 기울기 일치)
+        xf = _quad(QRectF(0, 0, w, self._lane_h), trap)
+        # 레일 기울기로 넓어진 건반 앞쪽(앞면 포함)이 좌우 여백 안에 들도록 아래 가운데 기준으로 전체 축소
+        left = xf.map(QPointF(0, self._lane_h + kh)).x()
+        bottom = h * (KEYS_BOTTOM + LIP)
+        self._scale = min(1.0, (w - 2 * T.PAD_H) / (w - 2 * left))
+        fit = QTransform().translate(w / 2, bottom).scale(self._scale, self._scale).translate(-w / 2, -bottom)
+        self._xf = self._kxf = xf * fit
         self._kinv, _ = self._kxf.inverted()
         self._cache_key = None
 
@@ -95,7 +102,7 @@ class Stage(QWidget):
         return whites, blacks
 
     def _lip(self):
-        return self.height() * LIP
+        return self.height() * LIP * self._scale
 
     def _screen_rect(self, midi):
         """그 건반(앞면·빛기둥 포함)이 차지하는 화면 영역 — 부분 다시 그리기용."""
@@ -216,9 +223,16 @@ class Stage(QWidget):
         for i in range(1, len(whites)):
             x = x0 + i * kw
             p.drawLine(QPointF(x, 0), QPointF(x, self._lane_h))
-        p.setPen(_hair(QColor("#4a5668"), 2))
-        p.drawLine(QPointF(0, 0), QPointF(0, self._lane_h))
-        p.drawLine(QPointF(w, 0), QPointF(w, self._lane_h))
+        # 도로 양옆 레일(이미지의 밝은 테두리 띠): 바깥쪽에 폭 RAIL의 경사면
+        rail = w * RAIL
+        p.setPen(Qt.PenStyle.NoPen)
+        for outer, inner in ((-rail, 0), (w + rail, w)):    # 도로 쪽이 밝게
+            g = QLinearGradient(outer, 0, inner, 0)
+            g.setColorAt(0, QColor("#2c3542"))
+            g.setColorAt(1, QColor("#4b5667"))
+            p.setBrush(g)
+            x0r = min(outer, inner)
+            p.drawRect(QRectF(x0r, 0, rail, self._lane_h))
         whites, blacks = self._keys()
         for midi in whites:
             self._draw_white(p, midi)
