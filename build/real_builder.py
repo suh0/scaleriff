@@ -98,7 +98,8 @@ def build_real_timeline(source: str, progress_cb=None) -> Timeline:
         analysis_info={"beat_backend": mir.beat_source,
                        "beat_detected": mir.beat_detected,
                        "chord_backend": "madmom" if backend.use_madmom else "librosa",
-                       "chord_vocabulary": "maj/min", "estimated": True},
+                       "chord_vocabulary": "maj/min", "estimated": True,
+                       "key": mir.key or "C major", "key_root": key_root},   # 코드 되돌리기용
     )
     cb(100, "완료")
     return tl
@@ -158,6 +159,20 @@ def apply_chord_edit(tl: Timeline, start: float, end: float, name: str):
         length = tl.beat_sec() * tl.time_sig_beats()
         tl.bar_times = [i * length for i in range(tl.total_bars() + 1)]
     tl.chord_overrides.append([start, end, name])
+    _rebuild_chords(tl)
+
+
+def reset_chord_edits(tl: Timeline):
+    """수동 코드 수정을 모두 지우고 분석 결과(원시 코드·추정 키)로 되돌린다. 마디선은 유지."""
+    tl.chord_overrides = []
+    if "key" in tl.analysis_info:      # 이전 세션엔 없음 → 코드만 되돌림
+        tl.key, tl.key_root = tl.analysis_info["key"], tl.analysis_info["key_root"]
+        tl.key_override = False
+    if tl.chord_spans and len(tl.bar_times) >= 2:
+        _rebuild_chords(tl)
+
+
+def _rebuild_chords(tl: Timeline):
     st = _structure_with_preroll(tl.bar_times, [_Span(*c) for c in tl.effective_chord_spans()],
                                tl.bar_times[-1], tl.time_sig_beats(), tl.chord_end)
     mode = "minor" if "minor" in tl.key.lower() else "major"

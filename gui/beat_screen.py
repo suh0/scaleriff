@@ -18,7 +18,7 @@ import bisect
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QPushButton,
-    QComboBox, QLineEdit, QScrollArea, QFrame,
+    QComboBox, QLineEdit, QScrollArea, QFrame, QCheckBox,
     QGraphicsOpacityEffect, QLayout, QMenu, QStackedWidget, QDialog
 )
 from PyQt6.QtGui import QPainter, QColor, QPen, QFont, QCursor, QShortcut, QKeySequence
@@ -49,6 +49,18 @@ METRO_HI_HZ, METRO_LO_HZ = 1760.0, 1320.0   # 강박/약박 클릭 높이
 METRO_AHEAD = 0.05   # 클릭 예약 선행 시간(초) — 틱 간격(25ms)보다 길게
 # 수동 코드 수정 선택지(접미사). parse_chord가 인식하는 표기.
 _EDIT_SUFFIXES = ["", "m", "7", "maj7", "m7", "m7b5", "dim", "6", "m6", "sus4"]
+
+
+def nearest_diatonic(chord, key_root: int, mode: str) -> str:
+    """키 밖 코드와 구성음이 가장 많이 겹치는 다이아토닉 코드(같은 근음·비슷한 구성 우선)."""
+    home = set(scale_pcs(key_root, mode))
+    tones = set(chord.chord_tones())
+
+    def score(c):
+        t = set(c.chord_tones())
+        return len(t & tones), c.root == chord.root, -len(t ^ tones)
+    cands = (parse_chord(pc_name(r) + s) for r in range(12) for s in _EDIT_SUFFIXES)
+    return max((c for c in cands if set(c.chord_tones()) <= home), key=score).name
 
 
 class ZoomBar(QWidget):
@@ -502,11 +514,26 @@ class BeatScreen(QWidget):
         self.key_box.setToolTip("분석된 키를 확인하거나 직접 선택합니다. 코드와 박자는 유지됩니다.")
         self.key_box.currentIndexChanged.connect(self._on_key_changed)
         chord_top.addWidget(self.key_box)
+        self.fix_btn = QPushButton("키 밖 코드 고치기…")
+        self.fix_btn.setStyleSheet(T.qss_ghost_btn())
+        self.fix_btn.setToolTip("빨간 코드를 키 안의 가장 가까운 코드로 바꿀 후보를 보여주고, 체크한 것만 바꿉니다.")
+        self.fix_btn.clicked.connect(self._fix_detours)
+        chord_top.addWidget(self.fix_btn)
+        self.revert_btn = QPushButton("분석 결과로 되돌리기")
+        self.revert_btn.setStyleSheet(T.qss_ghost_btn())
+        self.revert_btn.setToolTip("직접 고친 코드와 키를 모두 지우고 처음 분석한 결과로 돌아갑니다. 마디선은 유지합니다.")
+        self.revert_btn.clicked.connect(self._revert_chords)
+        chord_top.addWidget(self.revert_btn)
         root.addLayout(chord_top)
         chord_hint = QLabel("분석된 코드를 확인하세요. 칸을 클릭하면 수정합니다. 자동 인식은 장·단 3화음 추정입니다.")
         chord_hint.setStyleSheet(f"color:{T.TEXT_MUTED};font-size:12px;")
         chord_hint.setWordWrap(True)
         root.addWidget(chord_hint)
+        # 빨간 코드 가이드 — 잘못 인식이 아니라 곡의 의도일 수 있음
+        self.detour_guide = QLabel("")
+        self.detour_guide.setStyleSheet(f"color:{T.BADGE_OUT};font-size:12px;")
+        self.detour_guide.setWordWrap(True)
+        root.addWidget(self.detour_guide)
 
         # ── 아래: 마디별 코드표(세로 스크롤) ───────
         right = QVBoxLayout()
@@ -984,8 +1011,19 @@ class BeatScreen(QWidget):
             it = self.grid.takeAt(0)
             if it.widget():
                 it.widget().deleteLater()
+        has_detour = bool(self.tl and any(s.is_detour for s in self.tl.segments))
+        self.fix_btn.setEnabled(has_detour)
+        self.detour_guide.setVisible(has_detour)
+        self.revert_btn.setEnabled(bool(self.tl and (
+            self.tl.chord_overrides or self.tl.analysis_info.get("key", self.tl.key) != self.tl.key)))
         if not self.tl or not self.tl.segments:
             return
+        if has_detour:
+            minor = "minor" in (self.tl.key or "").lower()
+            self.detour_guide.setText(
+                f"빨간 칸은 곡의 키({pc_name(self.tl.key_root)} {'단조' if minor else '장조'}) 밖 코드예요. "
+                "곡 전체 분위기와 다른 소리지만, 잘못 인식한 게 아니라 곡이 의도한 코드일 수 있어요"
+                "(예: 단조의 V 장화음, 잠깐 다른 조로 가거나 빌려온 화음). 들어보고 확실히 틀린 것만 고치세요.")
         total = self.tl.total_bars()
         prev_seg = None
         last_row = 0
@@ -1139,6 +1177,67 @@ class BeatScreen(QWidget):
             end = min(end, self.tl.bar_times[bar + 1])
         run_busy(self.chord_page, lambda: apply_chord_edit(self.tl, start, end, name),
                  lambda _: self._build_grid())
+
+    def _fix_detours(self):
+        """키 밖 코드 → 가장 가까운 다이아토닉 후보 목록. 곡의 의도일 수 있어 체크한 것만 바꾼다."""
+        mode = "minor" if "minor" in (self.tl.key or "").lower() else "major"
+        rows = [(s, nearest_diatonic(s.chord, self.tl.key_root, mode))
+                for s in self.tl.segments if s.is_detour]
+        dlg = QDialog(self.chord_dialog)
+        dlg.setWindowTitle("키 밖 코드 고치기")
+        dlg.setStyleSheet(f"QDialog{{background:{T.BG_BASE};}}")
+        lay = QVBoxLayout(dlg)
+        hint = QLabel("잘못 인식했다고 확실한 코드만 체크하세요. 체크한 코드는 키 안의 가장 가까운 코드로 바뀌어요.")
+        hint.setStyleSheet(f"color:{T.TEXT_MUTED};font-size:12px;")
+        hint.setWordWrap(True)
+        lay.addWidget(hint)
+        all_chk = QCheckBox("전체 선택")
+        lay.addWidget(all_chk)
+        box = QWidget()
+        box_lay = QVBoxLayout(box)
+        checks = []
+        for seg, name in rows:
+            bars = (f"{seg.start_bar + 1}마디" if seg.end_bar - seg.start_bar <= 1
+                    else f"{seg.start_bar + 1}–{seg.end_bar}마디")
+            chk = QCheckBox(f"{bars}   {seg.chord.name} → {name}")
+            box_lay.addWidget(chk)
+            checks.append(chk)
+        box_lay.addStretch(1)
+        all_chk.toggled.connect(lambda on: [c.setChecked(on) for c in checks])
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(box)
+        lay.addWidget(scroll, 1)
+        btn_row = QHBoxLayout()
+        btn_row.addStretch(1)
+        cancel = QPushButton("취소")
+        cancel.setStyleSheet(T.qss_ghost_btn())
+        cancel.clicked.connect(dlg.reject)
+        btn_row.addWidget(cancel)
+        ok = QPushButton("체크한 코드 바꾸기")
+        ok.setStyleSheet(T.qss_primary_btn())
+        ok.clicked.connect(dlg.accept)
+        btn_row.addWidget(ok)
+        lay.addLayout(btn_row)
+        dlg.resize(420, 480)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        # apply_chord_edit가 segments를 새로 만들므로 시간 구간을 먼저 모은다
+        edits = [(seg.start_sec, seg.end_sec, name)
+                 for (seg, name), c in zip(rows, checks) if c.isChecked()]
+        if not edits:
+            return
+        from build.real_builder import apply_chord_edit
+        run_busy(self.chord_page, lambda: [apply_chord_edit(self.tl, *e) for e in edits],
+                 lambda _: self._build_grid())
+
+    def _revert_chords(self):
+        """직접 고친 코드·키 → 분석 결과. 창의 취소로는 이 되돌리기도 다시 취소된다."""
+        from build.real_builder import reset_chord_edits
+        self.pause()
+        reset_chord_edits(self.tl)
+        self._sync_key_box()
+        self._build_grid()
 
     def _cell_clicked(self, bar: int, seg):
         """칸 클릭 → 코드 수정. 마디 안에 코드가 여럿이면 고를 코드부터."""

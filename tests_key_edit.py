@@ -87,6 +87,60 @@ class KeyEditTest(unittest.TestCase):
             self.assertEqual(tl.key, "E minor")
             win.close()
 
+    def test_fix_detours_applies_only_checked(self):
+        from PyQt6.QtCore import QTimer
+        from PyQt6.QtWidgets import QCheckBox
+        from gui.beat_screen import BeatScreen, nearest_diatonic
+        from analyze.theory import parse_chord
+        self.assertEqual(nearest_diatonic(parse_chord("D"), 7, "minor"), "Dm")
+        self.assertEqual(nearest_diatonic(parse_chord("D7"), 7, "minor"), "Dm7")
+        self.assertEqual(nearest_diatonic(parse_chord("G7"), 0, "minor"), "Gm7")
+        tl = build_dummy_timeline()
+        screen = BeatScreen()
+        screen.set_timeline(tl)
+        screen.key_box.setCurrentIndex(screen.key_box.findData("C minor"))
+        self.assertTrue(screen.fix_btn.isEnabled() and not screen.detour_guide.isHidden())
+        before = [s.chord.name for s in tl.segments if s.is_detour]
+        self.assertIn("G7", before)
+
+        def answer(check_all):
+            def run():
+                dlg = QApplication.activeModalWidget()
+                if check_all:
+                    dlg.findChildren(QCheckBox)[0].setChecked(True)   # 전체 선택
+                dlg.accept()
+            QTimer.singleShot(0, run)
+            screen.fix_btn.click()
+        answer(False)                       # 체크 안 함 → 그대로
+        self.assertEqual(before, [s.chord.name for s in tl.segments if s.is_detour])
+        answer(True)
+        self.assertFalse(any(s.is_detour for s in tl.segments))
+        self.assertIn("Gm7", [s.chord.name for s in tl.segments])
+        self.assertFalse(screen.fix_btn.isEnabled())
+
+    def test_revert_to_analysis(self):
+        from gui.beat_screen import BeatScreen
+        tl = build_dummy_timeline()
+        tl.bpm = 120
+        tl.bar_times = [0, 2, 4, 6]
+        tl.chord_spans = [[0, 2, "Dm7"], [2, 4, "G7"], [4, 6, "Cmaj7"]]
+        tl.analysis_info["key"], tl.analysis_info["key_root"] = "C major", 0
+        screen = BeatScreen()
+        screen.set_timeline(tl)
+        screen._build_grid()
+        self.assertFalse(screen.revert_btn.isEnabled())
+        screen.key_box.setCurrentIndex(screen.key_box.findData("E minor"))
+        screen._apply_chord(tl.segments[1], "Em", 1)
+        self.assertTrue(screen.revert_btn.isEnabled())
+        bars = list(tl.bar_times)
+        screen.revert_btn.click()
+        self.assertEqual([s.chord.name for s in tl.segments], ["Dm7", "G7", "Cmaj7"])
+        self.assertEqual((tl.key, tl.key_root, tl.key_override), ("C major", 0, False))
+        self.assertEqual(screen.key_box.currentData(), "C major")
+        self.assertFalse(any(s.is_detour for s in tl.segments))
+        self.assertEqual(tl.bar_times, bars)
+        self.assertFalse(screen.revert_btn.isEnabled())
+
     def test_manual_key_survives_regrid(self):
         from gui.beat_screen import BeatScreen
         tl = build_dummy_timeline()
