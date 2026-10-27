@@ -31,6 +31,7 @@ BLACK_RISE = 0.65  # 흑건이 흰 건반 윗면보다 솟은 높이(흰 건반 
 DIP = 0.42         # 눌림 깊이(흰 건반 앞면 두께 대비, 실측 10mm) — 뒤쪽 축 기준으로 앞이 내려감
 RAIL = 0.022       # 도로 양옆 레일 폭(평면 폭 비율)
 BEAM = 0.45        # 빛기둥 길이(레인 길이 비율)
+CHORD_LINE = QColor(255, 255, 255, 90)   # 코드 전환선(박자선보다 밝게)
 
 # 근음·코드톤·스케일음 = 같은 파란 계열, 진하기로 구분(앞면·노드·눌림 공통)
 TONE_ROOT = "#1f4bff"    # 진함 + 형광(채도·밝기 높임)
@@ -369,10 +370,12 @@ class Stage(QWidget):
         glows = {m: self._pressed_color(m) for m in piano._pressed if MIDI_LOW <= m <= MIDI_HIGH}
 
         p.setClipRect(lane)
-        if self.riff.show_notes:
-            p.setPen(_hair(QColor(255, 255, 255, 22)))
-            for y in self.riff._beat_lines():
-                p.drawLine(QPointF(0, y), QPointF(lane.width(), y))
+        p.setPen(_hair(QColor(255, 255, 255, 22)))
+        for y in self.riff._beat_lines():
+            p.drawLine(QPointF(0, y), QPointF(lane.width(), y))
+        p.setPen(_hair(CHORD_LINE, 1.5))
+        for y in self.riff._chord_lines():
+            p.drawLine(QPointF(0, y), QPointF(lane.width(), y))
         sparkle = []                                    # (화면 다각형, 시드) — 근음 반짝이 자리
         for x, y, size, length, color in self.riff._nodes():
             c = self._node_color(color)

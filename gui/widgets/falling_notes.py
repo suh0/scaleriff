@@ -15,16 +15,18 @@ class FallingNotes(QWidget):
         self._lead = 1.0
         self._beat = .5
         self._beat_grid = []
+        self._chord_grid = []
         self._loops = []
         self.show_notes = False            # 리프모드에서만 노드 낙하
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self.hide()                        # 화면엔 Stage가 그림
 
-    def set_events(self, events, beat_sec, beat_grid=()):
+    def set_events(self, events, beat_sec, beat_grid=(), chord_grid=()):
         self._events = events
         self._lead = 4 * beat_sec
         self._beat = beat_sec
         self._beat_grid = list(beat_grid)
+        self._chord_grid = list(chord_grid)
         self.update()
 
     def set_position(self, sec, loops=()):
@@ -32,12 +34,15 @@ class FallingNotes(QWidget):
         self._loops = loops
         self.update()
 
-    def _beat_lines(self):
+    def _chord_lines(self):
+        return self._beat_lines(self._chord_grid) if self._chord_grid else []
+
+    def _beat_lines(self, grid=None):
         if self._lead <= 0 or self._beat <= 0:
             return []
         loop = next(((start, end) for start, end in self._loops
                      if start <= self._sec < end), None)
-        grid = self._beat_grid
+        grid = self._beat_grid if grid is None else grid
         if not grid:
             first = int(self._sec // self._beat)
             times = [(first + i) * self._beat for i in range(6)]
