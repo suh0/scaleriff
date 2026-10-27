@@ -19,7 +19,7 @@ import json
 from ml.representation import (
     BOS, REST, HOLD, ONSET0, VOCAB, onset_token, is_onset, token_degree, decode,
     SCALE_DEGREES, QFAM_CHORD_TONES,
-    STEPS_PER_BAR, quality_family,
+    STEPS_PER_BAR, quality_family, _nearest_midi,
 )
 from ml.model import is_trained
 from analyze.theory import Chord, CHORD_SPECS
@@ -457,6 +457,31 @@ def _landing_pc(seg, goal):
                  if (seg.chord.root + d) % 12 in seg.note_set), None)
 
 
+def _off(beat) -> bool:
+    return abs(beat - round(beat)) > 1e-7
+
+
+def _onsets_ok(beats, end) -> bool:
+    """리프 온셋 규칙 — 인접 간격 4박 미만(마지막 음~구간 끝 포함), 엇박 연속 금지."""
+    return (all(b - a < 4 for a, b in zip(beats, beats[1:] + [end]))
+            and not any(_off(a) and _off(b) for a, b in zip(beats, beats[1:])))
+
+
+def _fill_onsets(beats, end) -> list:
+    """규칙 위반 보정 — 4박 공백 가운데·엇박 연속 사이에 정박 추가(정박은 두 규칙을 깨지 않음)."""
+    beats = sorted(beats)
+    i = 0
+    while i < len(beats):
+        a, b = beats[i], beats[i + 1] if i + 1 < len(beats) else end
+        if b - a >= 4:
+            beats.insert(i + 1, float(round((a + b) / 2)))
+        elif i + 1 < len(beats) and _off(a) and _off(b) and a < math.floor(b):
+            beats.insert(i + 1, float(math.floor(b)))
+        else:
+            i += 1
+    return beats
+
+
 def bake_progression(timeline, model, start_sec, end_sec, goal="third", variant=0, density=1.0,
                      count=None):
     """Bake the selected source interval using its actual chords and assigned note sets.
@@ -467,7 +492,11 @@ def bake_progression(timeline, model, start_sec, end_sec, goal="third", variant=
     and supported=False when that chord/assigned scale cannot support the requested goal.
     seg.example remains in segment-relative beats; examples outside the selection survive.
     goal=None: no landing constraint (free practice, scale notes only).
-    count=(lo, hi): each chord gets lo..hi notes (its entry included) instead of density.
+    count=(lo, hi): the whole selection (= one riff) gets lo..hi notes (chord entries included,
+    so never fewer than the chord count) instead of density.
+    Riff rules: 8th-note grid, gaps < 4 beats, no two offbeats in a row, adjacent leaps < 12
+    semitones, no pitch three times in a row. If 20 draws miss the onset rules, downbeats are
+    added (the count may then exceed hi).
     Call during preparation or an explicit user action, never from a playback tick.
     """
     if goal not in (None, "third", "seventh", "root", "chord_tone"):
@@ -502,30 +531,35 @@ def bake_progression(timeline, model, start_sec, end_sec, goal="third", variant=
     boundaries = sorted({start_sec, end_sec} | {t for _, a, b in parts for t in (a, b)})
     candidates = set(mandatory)
     preferred = []
-    for step in range(int(math.ceil((b1 - b0) * 4))):
-        beat = b0 + step / 4
+    for step in range(int(math.ceil((b1 - b0) * 2))):      # 8분음표 격자
+        beat = b0 + step / 2
         sec = timeline.time_at_beat(beat)
         # Beat interpolation can differ from a manual chord boundary by one float ULP.
         sec = next((t for t in boundaries if abs(sec - t) < 1e-9), sec)
         if any(a <= sec < b for _, a, b in parts):
             candidates.add(sec)
-            if step % 4 in cells[(step // 4) % bpb]:
+            if step % 2 * 2 in cells[(step // 2) % bpb]:
                 preferred.append(sec)
     extra = sorted(candidates - mandatory - set(preferred))
     preferred = sorted(set(preferred) - mandatory)
-    rng.shuffle(preferred)
-    rng.shuffle(extra)
-    if count:
-        onsets = set(mandatory)
-        for _, a, b in parts:
-            n = rng.randint(*count) - 1
-            onsets |= set([t for t in preferred + extra if a <= t < b][:n])
-        onsets = sorted(onsets)
-    else:
-        total = max(len(mandatory), min(len(candidates), int(round((b1 - b0) * 1.5 * density))))
+    total = min(len(candidates), max(len(mandatory), rng.randint(*count) if count
+                                     else int(round((b1 - b0) * 1.5 * density))))
+    for _ in range(20):
+        rng.shuffle(preferred)
+        rng.shuffle(extra)
         onsets = sorted(mandatory | set((preferred + extra)[:total - len(mandatory)]))
+        if _onsets_ok([timeline.beat_at(t) for t in onsets], b1):
+            break
+    else:
+        known = {timeline.beat_at(t): t for t in onsets}
+        onsets = [known.get(b, timeline.time_at_beat(b)) for b in _fill_onsets(list(known), b1)]
+        onsets = [t for t in onsets if any(a <= t < b for _, a, b in parts)]
     shape = rng.choice(("arch", "asc", "desc", "wave"))
-    prev_midi, prev_tokens, previous_end = 71, [BOS, BOS], b0
+    prev_midi, prev2, prev_tokens, previous_end = 71, None, [BOS, BOS], b0
+    forced = [_landing_pc(next(p for p in parts if p[1] <= t < p[2])[0], goal)
+              if goal in ("third", "seventh", "root") and (
+                  k == len(onsets) - 1 or (t in mandatory and t > start_sec)) else None
+              for k, t in enumerate(onsets)] + [None, None]
     for i, sec in enumerate(onsets):
         seg, _, boundary = next(p for p in parts if p[1] <= sec < p[2])
         beat = timeline.beat_at(sec)
@@ -537,7 +571,13 @@ def bake_progression(timeline, model, start_sec, end_sec, goal="third", variant=
         if landing_kind:
             pool = (chord_pool or pool) if goal == "chord_tone" or target is None else [
                 m for m in pool if m % 12 == target]
-        gap = max(0, int(round((beat - previous_end) * 4)))
+        if i:   # 인접 도약 1옥타브 미만, 같은 음 3연속 금지(못 지키면 3연속부터 푼다)
+            # 뒤따르는 착지음(목표 고정)과 합쳐 3연속이 되는 음도 미리 피한다
+            f1, f2 = forced[i + 1], forced[i + 2]
+            near = [m for m in pool if abs(m - prev_midi) < 12]
+            pool = [m for m in near if not m == prev_midi == prev2
+                    and not (m % 12 == f1 and (m == prev_midi or f1 == f2))] or near or pool
+        gap =max(0, int(round((beat - previous_end) * 4)))
         prev_tokens.extend([REST] * min(2, gap))
         prior = {}
         if trained:
@@ -567,7 +607,7 @@ def bake_progression(timeline, model, start_sec, end_sec, goal="third", variant=
             result["landings"].append({"at_sec": sec, "chord": seg.chord.name,
                                        "kind": landing_kind, "target_pc": target,
                                        "supported": target is not None, "actual_pc": midi % 12})
-        prev_midi = midi
+        prev2, prev_midi = prev_midi, midi
         prev_tokens.append(onset_token((midi - seg.chord.root) % 12))
         prev_tokens.extend([HOLD] * min(2, max(0, int(timeline.beats_between(sec, note_end) * 4) - 1)))
         previous_end = timeline.beat_at(note_end)
@@ -679,10 +719,10 @@ def transpose_riff(timeline, notes, src_a, dst_a, goal=None, landing_secs=()):
                 if targets:
                     midi = min((m for m in range(midi - 6, midi + 7) if m % 12 in targets),
                                key=lambda m: abs(m - midi))
-            while midi < 60:
-                midi += 12
-            while midi > 83:
-                midi -= 12
+            # 범위 밖이거나 직전 음과 1옥타브 이상 벌어지면 직전 음에 가까운 옥타브로
+            prev = out[-1]["midi"] if out else midi
+            if not 60 <= midi <= 83 or abs(midi - prev) >= 12:
+                midi = _nearest_midi(midi % 12, prev, 60, 83)
         out.append({**n, "midi": midi, "start_sec": s_new, "duration_sec": e_new - s_new})
     return out
 

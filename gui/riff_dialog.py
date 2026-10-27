@@ -35,8 +35,8 @@ class RiffDialog(QDialog):
         if p.get("method") == "landing":
             count = p.get("count")
             cond = f"착지음 {GOAL_KR[p['goal']]}" + (
-                "" if not count else f" · 코드당 {count[0]}음" if count[0] == count[1]
-                else f" · 코드당 {count[0]}~{count[1]}음")
+                "" if not count else f" · 리프당 {count[0]}음" if count[0] == count[1]
+                else f" · 리프당 {count[0]}~{count[1]}음")
         else:
             cond = "자유연습 · 스케일 안의 음"
         scale = p.get("scale", {}).get("name", "")

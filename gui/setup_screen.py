@@ -2,7 +2,7 @@
 
 - 스케일: 펜타토닉(추천) · 키 스케일 7음 · 블루스. 키 밖 코드(예외 구간)는 로컬 스케일 유지.
 - 착지음 목표는 선택한 스케일로 곡의 모든 코드에서 가능한 것만 켠다.
-- 음 개수(코드 하나에서 칠 스케일 음): 사용안함 / 정해진 개수 / 개수 범위.
+- 음 개수(리프 하나에서 칠 스케일 음, 최소 3): 사용안함 / 정해진 개수 / 개수 범위.
 """
 from __future__ import annotations
 
@@ -250,7 +250,7 @@ class SetupScreen(QWidget):
             seg.addWidget(btn)
             self.goal_btns[key] = btn
         form.addWidget(segment, 0, 1)
-        form.addWidget(self._caption("코드당 음 개수"), 1, 0)
+        form.addWidget(self._caption("리프당 음 개수"), 1, 0)
         count_row = QHBoxLayout()
         count_row.setSpacing(8)
         self.count_mode = QComboBox()
@@ -260,7 +260,7 @@ class SetupScreen(QWidget):
         count_row.addWidget(self.count_mode)
         self.count_lo, self.count_hi = QSpinBox(), QSpinBox()
         for spin, value in ((self.count_lo, 3), (self.count_hi, 5)):
-            spin.setRange(1, 8)
+            spin.setRange(3, 8)
             spin.setValue(value)
             spin.valueChanged.connect(self._sync_count)
         self.count_dash = QLabel("~")

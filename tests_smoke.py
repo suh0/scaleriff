@@ -165,8 +165,8 @@ def main():
     assert su.landing_box.isEnabled()
     assert su.goal_btns["chord_tone"].isEnabled()
     su.count_mode.setCurrentIndex(2)
-    su.count_lo.setValue(2)
-    su.count_hi.setValue(3)
+    su.count_lo.setValue(3)
+    su.count_hi.setValue(4)
     # 코드 수정 창: 취소 = 되돌림, 확인 = 반영 + 학습 설정 새로고침(화면 선택 유지)
     from PyQt6.QtCore import QTimer as _QT
 
@@ -182,7 +182,7 @@ def main():
     assert tl.segments[0].chord.name == first, "취소했는데 코드 수정이 남음"
     _edit(True)
     assert tl.segments[0].chord.name == "Em", "확인했는데 코드 수정이 반영 안 됨"
-    assert su._method == "landing" and su.count() == [2, 3], "새로고침 후 선택이 초기화됨"
+    assert su._method == "landing" and su.count() == [3, 4], "새로고침 후 선택이 초기화됨"
     # ← 박자 조정 버튼 = 박자 조정 화면으로
     su.backToBeatRequested.emit()
     assert win.stack.currentWidget() is win.beat
@@ -191,12 +191,12 @@ def main():
     su._pick_method("landing")
     su._pick_goal("chord_tone")
     su.count_mode.setCurrentIndex(2)
-    su.count_lo.setValue(2)
-    su.count_hi.setValue(3)
+    su.count_lo.setValue(3)
+    su.count_hi.setValue(4)
     su._pick_scale(0)
     su.go_btn.click()
     pent = su._options[0]
-    assert tl.practice == {"scale": pent, "method": "landing", "goal": "chord_tone", "count": [2, 3]}
+    assert tl.practice == {"scale": pent, "method": "landing", "goal": "chord_tone", "count": [3, 4]}
     assert all(s.note_set == pent["note_set"] for s in tl.segments if not s.is_detour)
     assert not any(s.example for s in tl.segments), "스케일 변경 후 이전 리프가 남음"
     assert win.stack.currentWidget() is win.main_screen

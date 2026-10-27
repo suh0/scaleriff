@@ -1,4 +1,4 @@
-"""곡 전체 스케일 · 착지 목표 가능 판정 · 코드당 음 개수 리프."""
+"""곡 전체 스케일 · 착지 목표 가능 판정 · 리프당 음 개수 리프."""
 import unittest
 
 from analyze.theory import parse_chord, song_scale_options, scale_pcs
@@ -62,16 +62,35 @@ class SongScaleTest(unittest.TestCase):
             for option in song_scale_options(root, mode):
                 self.assertIn(option["kind"], SCALE_GUIDE)
 
-    def test_count_per_chord_and_landing(self):
+    def test_count_per_riff_and_landing(self):
         tl = am_f_c_g()
         tl.apply_song_scale(song_scale_options(9, "minor")[1])
-        for lo, hi in ((3, 3), (2, 4)):
-            result = generate.bake_progression(tl, None, 0, 8, "third", count=(lo, hi))
-            for seg in tl.segments:
-                notes = [n for n in result["notes"] if seg.start_sec <= n["start_sec"] < seg.end_sec]
-                self.assertTrue(lo <= len(notes) <= hi, (seg.chord.name, len(notes)))
-                if seg.start_sec > 0:
-                    self.assertEqual(notes[0]["midi"] % 12, generate._landing_pc(seg, "third"))
+        # 1마디 코드 2개 = 진입음 간격 4박 → 4박 공백 금지 때문에 최소 4음(3음은 보정으로 늘어남)
+        for lo, hi in ((4, 4), (4, 6)):
+            for variant in range(5):
+                result = generate.bake_progression(tl, None, 0, 4, "third", variant, count=(lo, hi))
+                self.assertTrue(lo <= len(result["notes"]) <= hi, len(result["notes"]))
+                entry = next(n for n in result["notes"] if n["start_sec"] == 2)
+                self.assertEqual(entry["midi"] % 12, generate._landing_pc(tl.segments[1], "third"))
+
+    def test_riff_rules(self):
+        tl = am_f_c_g()
+        tl.apply_song_scale(song_scale_options(9, "minor")[1])
+        for goal, count in ((None, None), ("third", (3, 3)), ("chord_tone", (4, 8))):
+            for variant in range(10):
+                notes = generate.bake_progression(tl, None, 0, 4, goal, variant, count=count)["notes"]
+                moved = generate.transpose_riff(tl, notes, 0, 4, goal)
+                for ns in (notes, moved):
+                    beats = [tl.beat_at(n["start_sec"]) - tl.beat_at(ns[0]["start_sec"]) for n in ns]
+                    midis = [n["midi"] for n in ns]
+                    self.assertTrue(all(b * 2 == int(b * 2) for b in beats), beats)        # 8분 격자
+                    self.assertTrue(all(y - x < 4 for x, y in zip(beats, beats[1:] + [8])), beats)
+                    off = [b % 1 != 0 for b in beats]
+                    self.assertFalse(any(p and q for p, q in zip(off, off[1:])), beats)      # 엇박 연속
+                    self.assertTrue(all(abs(y - x) < 12 for x, y in zip(midis, midis[1:])), midis)
+                    if ns is notes:   # 도수 이동 후 같은 음 3연속은 미보장(README Todo)
+                        self.assertFalse(any(a == b == c for a, b, c in zip(midis, midis[1:], midis[2:])),
+                                         midis)
 
     def test_free_goal_stays_in_scale(self):
         tl = am_f_c_g()
