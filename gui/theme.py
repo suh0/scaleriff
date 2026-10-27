@@ -28,6 +28,7 @@ BADGE_CHORD      = "#22c55e"   # 코드톤 배지 배경 — 초록
 BADGE_ROOT       = "#3b82f6"   # 근음(1도) 배지 배경 — 파랑(코드톤 중 근음 구분)
 BADGE_SCALE      = "#4a4a4a"   # 스케일음 배지 배경 — 짙은 회색
 BADGE_OUT        = "#ef4444"   # 스케일 밖 배지 배경 — 빨강
+DETOUR           = "#fdba74"   # 키 밖 코드(연주화면 코드 글자·박자선) — 옅은 주황
 BADGE_TEXT       = "#ffffff"   # 모든 배지 텍스트 (코드톤·밖)
 BADGE_SCALE_TEXT = "#e0e0e0"   # 스케일음 배지 텍스트
 

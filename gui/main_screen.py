@@ -2,15 +2,15 @@
 
 타임라인을 재생하며 위젯을 갱신만 한다(§4: 재분석 없음).
 레이아웃: 원근 무대(건반+노드 레인) 위에 왼쪽 벽(곡 정보·뒤로) · 상단 가운데(현재/다음 코드)
-        · 오른쪽 벽(재생·리프모드·루프·입력·소리) · 숨김 재생바(스페이스로 표시)
+        · 오른쪽 벽(재생·리프모드·입력·소리) · 숨김 재생바(스페이스로 표시)
 """
 from __future__ import annotations
 
 import bisect
 
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QPushButton, QFrame,
-    QComboBox, QDialog, QFormLayout, QSlider, QCheckBox, QScrollArea, QMessageBox,
+    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QPushButton,
+    QComboBox, QDialog, QFormLayout, QSlider, QCheckBox, QMessageBox,
     QGraphicsOpacityEffect
 )
 from PyQt6.QtCore import pyqtSignal, Qt, QPoint, QRect, QTimer
@@ -24,7 +24,7 @@ from ml.model import load_model
 from ml.generate import _landing_pc
 
 from gui import theme as T
-from gui.anim import fade_in, reduced_motion, set_reduced_motion
+from gui.anim import reduced_motion, set_reduced_motion
 from gui.widgets.elided_label import ElidedLabel
 from gui.widgets.piano import MIDI_HIGH, MIDI_LOW, PianoWidget
 from gui.widgets.scrub_bar import ScrubBar
@@ -68,7 +68,6 @@ class MainScreen(QWidget):
         self._audio_volume = .8
         self._midi_ports = []
         self._midi_name = ""
-        self._last_tick = 0.0
         self._seeking = False
         self._monitor_seg = None          # 모니터박스에 표시 중인 현재 구간
         self._monitor_prev = ""          # push 동안 밀려나는 이전 코드명
@@ -115,7 +114,7 @@ class MainScreen(QWidget):
         self.chord_hdr = ChordHeader()
         root.addWidget(self.chord_hdr, 0, 0, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter)
 
-        # ── 오른쪽 벽: [←][⚙] + 리프모드·루프 ──
+        # ── 오른쪽 벽: [←][⚙] + 리프모드 ──
         right = self.right_wall = QWidget()
         rv = QVBoxLayout(right)
         rv.setContentsMargins(0, 24, T.PAD_H + 8, 0)
@@ -138,15 +137,10 @@ class MainScreen(QWidget):
         rv.addSpacing(6)
         self.riff_btn = QPushButton("리프모드")
         self.riff_btn.clicked.connect(self._toggle_riff_mode)
-        # 루프 버튼 — 사이드바 토글(생성한 루프 리스트, 루프별 ON/OFF)
-        self.loop_btn = QPushButton("루프")
-        self.loop_btn.setCheckable(True)
-        self.loop_btn.clicked.connect(self._toggle_loop_panel)
-        for b in (self.riff_btn, self.loop_btn):
-            b.setFixedSize(116, 36)
-            b.setStyleSheet(T.qss_ghost_btn())
-            b.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-            rv.addWidget(b, 0, Qt.AlignmentFlag.AlignRight)
+        self.riff_btn.setFixedSize(116, 36)
+        self.riff_btn.setStyleSheet(T.qss_ghost_btn())
+        self.riff_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        rv.addWidget(self.riff_btn, 0, Qt.AlignmentFlag.AlignRight)
         root.addWidget(right, 0, 0, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignRight)
 
         # ── 가운데 재생 아이콘: 멈춤일 때만 반투명하게 ──
@@ -191,51 +185,9 @@ class MainScreen(QWidget):
         QShortcut(QKeySequence(Qt.Key.Key_Space), self, self._on_space,
                   context=Qt.ShortcutContext.WidgetWithChildrenShortcut)
 
-        # ── 루프 사이드바 (오버레이) — 생성한 루프 리스트 + 루프별 ON/OFF ──
-        self.loop_panel = QFrame(self.content)
-        self.loop_panel.hide()
-        self.loop_panel.setStyleSheet(
-            f"QFrame{{background:{T.BG_SURFACE};border:1px solid {T.BORDER_DEFAULT};"
-            "border-radius:12px;}")
-        pv = QVBoxLayout(self.loop_panel)
-        pv.setContentsMargins(16, 14, 16, 14)
-        pv.setSpacing(6)
-        panel_title = QLabel("루프")
-        panel_title.setStyleSheet(
-            f"color:{T.TEXT_PRIMARY};font-size:14px;font-weight:700;border:none;")
-        pv.addWidget(panel_title)
-        self.loop_rows = QVBoxLayout()
-        self.loop_rows.setSpacing(4)
-        self.loop_rows.setAlignment(Qt.AlignmentFlag.AlignTop)
-        loop_host = QWidget()
-        loop_host.setObjectName("loopList")
-        loop_host.setStyleSheet(f"QWidget#loopList{{background:{T.BG_SURFACE};}}")
-        loop_host.setLayout(self.loop_rows)
-        self.loop_scroll = QScrollArea()
-        self.loop_scroll.setWidgetResizable(True)
-        self.loop_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.loop_scroll.setWidget(loop_host)
-        pv.addWidget(self.loop_scroll, 1)
-
     def showEvent(self, e):
         super().showEvent(e)
         # 연주 가이드와 건반은 즉시 표시한다.
-
-    # ── 루프 사이드바(§6): 루프별 ON/OFF ─────────────────────────
-    def _toggle_loop_panel(self):
-        if self.loop_btn.isChecked():
-            self._build_loop_rows()
-            self._place_loop_panel()
-            self.loop_panel.show()
-            self.loop_panel.raise_()
-            fade_in(self.loop_panel)
-        else:
-            self.loop_panel.hide()
-
-    def _place_loop_panel(self):
-        w = 310      # 오른쪽 벽 버튼들 왼쪽에 띄운다
-        self.loop_panel.setGeometry(self.content.width() - w - 116 - T.PAD_H - 24, 84,
-                                    w, min(380, self.content.height() - 130))
 
     # ── HUD ─────────────────────────────────────────────────────
     @staticmethod
@@ -273,8 +225,6 @@ class MainScreen(QWidget):
 
     def resizeEvent(self, e):
         super().resizeEvent(e)
-        if self.loop_panel.isVisible():
-            self._place_loop_panel()
         if self.guide is not None:
             self.guide.relayout()
 
@@ -315,7 +265,7 @@ class MainScreen(QWidget):
              "처음엔 숫자 있는 건반 위주로 치고, <b>근음에서 시작하거나 끝내</b> 보세요.", keys),
             ("재생과 도구",
              "가운데 ▶ 또는 <b>스페이스</b>로 재생·정지해요.<br>"
-             "오른쪽 위 — 리프모드: 따라 칠 예시 리프 · 루프: 반복 구간 · 톱니 버튼: MIDI 입력과 소리",
+             "오른쪽 위 — 리프모드: 따라 칠 예시 리프 · 톱니 버튼: MIDI 입력과 소리",
              lambda: at(self.right_wall)() + at(self.play_btn)()),
         ]
         self.guide = PlayGuide(self, steps)
@@ -325,73 +275,6 @@ class MainScreen(QWidget):
         self.guide = None
         self._seek_to(self.tl.count_in_start())                  # 지금의 연주화면 첫 상태로
         self.guideFinished.emit()
-
-    def _build_loop_rows(self):
-        while self.loop_rows.count():
-            it = self.loop_rows.takeAt(0)
-            if it.widget():
-                it.widget().deleteLater()
-        loops = getattr(self.tl, "loops", []) if self.tl else []
-        if not loops:
-            lbl = QLabel("코드 편집에서 여러 마디를 드래그해\n반복할 구간을 만들어보세요.")
-            lbl.setStyleSheet(f"color:{T.TEXT_MUTED};font-size:12px;border:none;")
-            self.loop_rows.addWidget(lbl)
-            return
-        for lp in loops:
-            row = QWidget()
-            row.setStyleSheet("border:none;")
-            h = QHBoxLayout(row)
-            h.setContentsMargins(0, 0, 0, 0)
-            h.setSpacing(8)
-            name = ElidedLabel(f"{lp['name']}  {lp['start_bar'] + 1}–{lp['end_bar'] + 1}마디")
-            name.setStyleSheet(f"color:{T.TEXT_BODY};font-size:12px;border:none;")
-            h.addWidget(name, 1)
-            btn = QPushButton("● ON" if lp.get("on") else "○ OFF")
-            btn.setCheckable(True)
-            btn.setChecked(bool(lp.get("on")))
-            btn.setFixedWidth(66)
-            btn.setStyleSheet(T.qss_ghost_btn())
-            btn.toggled.connect(lambda on, l=lp, b=btn: self._toggle_loop(l, b, on))
-            h.addWidget(btn)
-            self.loop_rows.addWidget(row)
-
-    @staticmethod
-    def _toggle_loop(lp: dict, btn: QPushButton, on: bool):
-        lp["on"] = on
-        btn.setText("● ON" if on else "○ OFF")
-
-    def _loop_spans(self) -> list[tuple[float, float]]:
-        """켜진 사용자 루프의 (start_sec, end_sec) — 타임라인 마디 격자 기준."""
-        loops = getattr(self.tl, "loops", []) if self.tl else []
-        if not loops:
-            return []
-        bars = self.tl.bar_times
-        if len(bars) < 2:
-            # 구 캐시는 BPM으로 마디 격자를 복원한다.
-            bar_len = self.tl.beat_sec() * self.tl.time_sig_beats()
-            start, end = self.tl.content_span
-            if end <= start:
-                start, end = 0.0, self.tl.total_sec()
-            if bar_len <= 0 or end <= start:
-                return []
-            bars = []
-            t = start
-            while t < end - 1e-6:
-                bars.append(t)
-                t += bar_len
-            bars.append(end)
-        n = len(bars) - 1
-        out = []
-        for lp in loops:
-            if not lp.get("on"):
-                continue
-            if "start_sec" in lp and "end_sec" in lp:
-                out.append((lp["start_sec"], lp["end_sec"]))
-                continue
-            s, e = lp["start_bar"], lp["end_bar"] + 1
-            if 0 <= s < e <= n:
-                out.append((bars[s], bars[e]))
-        return out
 
     # ── 리프를 재생에 함께 굽기(재생 헤드 동기) ──────────────────
     def _build_riff_events(self):
@@ -423,7 +306,8 @@ class MainScreen(QWidget):
         self._riff_durations = [durations.get(item, .25) for item in ev]
         self.riff.set_events(falling, self.tl.beat_sec() if self.tl else 0.5,
                              self.tl.beat_grid() if self.tl else [],
-                             [s.start_sec for s in self.tl.segments[1:]] if self.tl else [])
+                             [s.start_sec for s in self.tl.segments[1:]] if self.tl else [],
+                             [(s.start_sec, s.end_sec) for s in self.tl.segments if s.is_detour] if self.tl else [])
 
     def _seek_riff_idx(self, sec: float):
         """리프 재생 커서를 sec 위치로 이동(시킹/모드 진입 시 과거 음 몰아 재생 방지)."""
@@ -438,7 +322,7 @@ class MainScreen(QWidget):
         self.tl = tl
         self._last_idx = -1
         self._monitor_seg = None
-        self._build_loop_rows()            # 사용자 루프 리스트(사이드바) 갱신
+        self.chord_hdr.set_detour({s.chord.name for s in tl.segments if s.is_detour})
         self._build_riff_events()          # 리프를 곡에 함께 구움(§2)
         self._riff_idx = 0
         self.playhead = Playhead(tl.content_end(), tl.audio_ref, self)
@@ -447,7 +331,6 @@ class MainScreen(QWidget):
         self.playhead.errorOccurred.connect(lambda msg: QMessageBox.warning(self, "재생 오류", msg))
         self.playhead.set_volume(self._audio_volume)
         self._held_keys.clear()
-        self._last_tick = 0.0
 
         self.song_lbl.setText(tl.title or tl.audio_ref or "내 곡")
         self.key_lbl.setText(tl.key)
@@ -472,13 +355,11 @@ class MainScreen(QWidget):
         practice = (self._mode == "practice")
         self.riff_btn.setText("리프모드 해제" if practice else "리프모드")
         self.riff.show_notes = practice
-        self.loop_panel.raise_()
         if practice:
             # 현재 위치부터 리프 재생(과거 음은 건너뜀)
             self._build_riff_events()
             self._seek_riff_idx(self.playhead.position_sec() if self.playhead else 0.0)
-        self.riff.set_position(self.playhead.position_sec() if self.playhead else 0.0,
-                               self._loop_spans())
+        self.riff.set_position(self.playhead.position_sec() if self.playhead else 0.0)
         self._render_at(self.playhead.position_sec() if self.playhead else 0.0)
         self._on_state(self.playhead.is_playing() if self.playhead else False)
 
@@ -527,7 +408,6 @@ class MainScreen(QWidget):
                 self.playhead.seek(sec)
             finally:
                 self._seeking = False
-            self._last_tick = sec
             self._render_at(sec)
             self._seek_riff_idx(sec)        # 리프 커서도 함께 점프
 
@@ -538,13 +418,6 @@ class MainScreen(QWidget):
         if self._seeking:
             self._render_at(sec)
             return
-        # 사용자 루프(§6): 켜진 루프 끝에 닿으면 시작으로
-        if self.playhead and self.playhead.is_playing():
-            for s0, e0 in self._loop_spans():
-                if self._last_tick < e0 <= sec:
-                    self._seek_to(s0)
-                    return
-        self._last_tick = sec
         self._render_at(sec + SYNC_LOOKAHEAD_SEC)   # 구간 변경 시 무거운 갱신
         # 리프를 재생 헤드에 맞춰 트리거(재생 중일 때만 → 일시정지 시 함께 멈춤, §2)
         if self._mode == "practice" and self.playhead and self.playhead.is_playing():
@@ -562,6 +435,8 @@ class MainScreen(QWidget):
         idx = self.tl.segment_index_at(sec)
         self._update_scale_preview(sec, idx)
         tonic, song_notes = self._song_scale()
+        if idx >= 0 and self.tl.practice.get("skip_detour") and self.tl.segments[idx].is_detour:
+            idx = -1                     # 제외한 키 밖 코드 = 예비박처럼 곡 스케일만(코드·근음 강조 없음)
         if idx < 0:
             # 코드 없는 구간(예비박 등)도 곡 스케일과 번호는 그대로 보여준다.
             self._last_idx = -1
@@ -592,8 +467,7 @@ class MainScreen(QWidget):
     def _update_scale_preview(self, sec: float, idx: int):
         """재생 위치 반영: 낙하 노드 위치 + 상단 코드(현재/다음). 다음 스케일 건반 예고는 없음."""
         self.stage.update()
-        spans = self._loop_spans()
-        self.riff.set_position(sec, spans)
+        self.riff.set_position(sec)
         seg = self.tl.segments[idx] if idx >= 0 else None
         if seg is None:      # 예비박: 첫 코드를 다음 코드로 예고
             first = self.tl.segments[0]
@@ -603,13 +477,6 @@ class MainScreen(QWidget):
             upcoming = self.tl.next_segment(seg)
             boundary = upcoming.start_sec if upcoming else seg.end_sec
         change = seg.start_sec if seg else sec
-        for start, end in spans:
-            if start <= sec < end:
-                change = max(change, start)
-                if end <= boundary:
-                    boundary = end
-                    upcoming = self.tl.segment_at(start)
-                break
         if upcoming is not None and boundary > self.tl.content_end():
             upcoming = None
         lead = min(4 * self.tl.beat_sec(), boundary - (seg.start_sec if seg else sec - 4 * self.tl.beat_sec()))

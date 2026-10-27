@@ -151,9 +151,6 @@ class Timeline:
     # ── 마디 격자·보정(§3.5) ────────────────────────────────────
     bar_times: list[float] = field(default_factory=list)  # 마디 시작 시각(+끝)
     loop_phase: int = 0        # 감지 루프 시작 마디 오프셋
-    # 사용자 정의 루프 — 코드배열표에서 마디 2개 선택으로 생성(§6).
-    # [{"name": str, "start_bar": int, "end_bar": int(포함), "on": bool}, …]
-    loops: list = field(default_factory=list)
     # ── MIR 원자료(마디선 보정 §3.5 2차 — 재격자화 재료, MIR 재실행 없음) ──
     beat_times: list[float] = field(default_factory=list)   # 비트 시각
     chord_spans: list = field(default_factory=list)         # [[start,end,name], …]
@@ -317,7 +314,6 @@ class Timeline:
             "scale_riffs": self.scale_riffs,
             "bar_times": list(self.bar_times),
             "loop_phase": self.loop_phase,
-            "loops": [dict(l) for l in self.loops],
             "beat_times": list(self.beat_times),
             "chord_spans": [list(c) for c in self.chord_spans],
             "wave_peaks": self.wave_peaks,
@@ -360,7 +356,6 @@ class Timeline:
             scale_riffs=d.get("scale_riffs", {}),
             bar_times=list(d.get("bar_times", [])),
             loop_phase=d.get("loop_phase", 0),
-            loops=[dict(l) for l in d.get("loops", [])],
             beat_times=list(d.get("beat_times", [])),
             chord_spans=[list(c) for c in d.get("chord_spans", [])],
             wave_peaks=d.get("wave_peaks", []),

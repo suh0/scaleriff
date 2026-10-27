@@ -373,12 +373,14 @@ class Stage(QWidget):
         glows = {m: self._pressed_color(m) for m in piano._pressed if MIDI_LOW <= m <= MIDI_HIGH}
 
         p.setClipRect(lane)
-        p.setPen(_hair(QColor(255, 255, 255, 22)))
-        for y in self.riff._beat_lines():
-            p.drawLine(QPointF(0, y), QPointF(lane.width(), y))
-        p.setPen(_hair(CHORD_LINE, 1.5))
-        for y in self.riff._chord_lines():
-            p.drawLine(QPointF(0, y), QPointF(lane.width(), y))
+        chord_lines = self.riff._lines(self.riff._chord_grid) if self.riff._chord_grid else []
+        for lines, white, width in ((self.riff._lines(), QColor(255, 255, 255, 22), 1.0),
+                                    (chord_lines, CHORD_LINE, 1.5)):
+            orange = QColor(T.DETOUR)                   # 키 밖 코드 구간 = 같은 밝기의 옅은 주황
+            orange.setAlpha(white.alpha())
+            for y, when in lines:
+                p.setPen(_hair(orange if self.riff.in_detour(when) else white, width))
+                p.drawLine(QPointF(0, y), QPointF(lane.width(), y))
         sparkle = []                                    # (화면 다각형, 시드) — 근음 반짝이 자리
         for x, y, size, length, color in self.riff._nodes():
             c = self._node_color(color)

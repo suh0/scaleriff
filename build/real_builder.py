@@ -122,10 +122,6 @@ def regrid_timeline(tl: Timeline, anchor_sec: float | None = None,
     a = tl.bar_times[0] if anchor_sec is None else anchor_sec
     if bar_len <= 0 or a >= duration - 1e-3:
         return False
-    for lp in tl.loops:
-        if "start_sec" not in lp and 0 <= lp["start_bar"] < lp["end_bar"] + 1 < len(tl.bar_times):
-            lp["start_sec"] = tl.bar_times[lp["start_bar"]]
-            lp["end_sec"] = tl.bar_times[lp["end_bar"] + 1]
     if bars is not None:
         bars = [b for b in bars if b < duration - 1e-3]
         if not bars:
@@ -151,11 +147,6 @@ def regrid_timeline(tl: Timeline, anchor_sec: float | None = None,
     tl.bar_times = st.bar_times
     tl.loop_len = st.loop_len
     tl.loop_phase = st.loop_phase
-    for lp in tl.loops:
-        if "start_sec" in lp:
-            lp["start_bar"] = max(0, bisect.bisect_right(bars, lp["start_sec"]) - 1)
-            lp["end_bar"] = min(len(bars) - 2, max(lp["start_bar"],
-                                                  bisect.bisect_left(bars, lp["end_sec"]) - 1))
     return True
 
 

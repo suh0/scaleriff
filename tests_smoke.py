@@ -159,7 +159,7 @@ def main():
     assert [l.text() for l in su.rec_lbls] == ["", "추천", ""]
     assert "%" not in su.scale_btns[1].text()
     assert "펜타토닉" in su.scale_btns[0].text() and su.scale_btns[0].isEnabled() and su._scale == 1
-    assert su.title.text() == "학습내용 선택" and su.key_lbl.text().startswith("곡의 키: ")
+    assert su.title.text() == "학습내용 선택" and su.key_lbl.text().startswith("추정 키: ")
     assert not su.landing_box.isHidden() and not su.landing_box.isEnabled()
     su._pick_method("landing")
     assert su.landing_box.isEnabled()
@@ -196,7 +196,8 @@ def main():
     su._pick_scale(0)
     su.go_btn.click()
     pent = su._options[0]
-    assert tl.practice == {"scale": pent, "method": "landing", "goal": "chord_tone", "count": [3, 4]}
+    assert tl.practice == {"scale": pent, "method": "landing", "goal": "chord_tone", "count": [3, 4],
+                           "skip_detour": False}
     assert all(s.note_set == pent["note_set"] for s in tl.segments if not s.is_detour)
     assert not any(s.example for s in tl.segments), "스케일 변경 후 이전 리프가 남음"
     assert win.stack.currentWidget() is win.main_screen
@@ -242,21 +243,7 @@ def main():
     ms = win.main_screen
     app.processEvents()
     assert ms.scrub_row.isHidden(), "재생바는 기본 숨김(스페이스로 표시)"
-    for ww, wh in ((1040, 740), (1600, 1000)):
-        win.resize(ww, wh)
-        app.processEvents()
-        ms.loop_btn.setChecked(True)
-        ms._toggle_loop_panel()
-        for overlay in (ms.loop_panel,):
-            pos = overlay.mapTo(ms.content, QPoint(0, 0))
-            assert pos.x() >= 0 and pos.y() >= 0, \
-                f"{type(overlay).__name__} 콘텐츠 밖 시작: {pos.x()}, {pos.y()}"
-            assert pos.x() + overlay.width() <= ms.content.width(), \
-                f"{type(overlay).__name__} 콘텐츠 오른쪽 이탈"
-            assert pos.y() + overlay.height() <= ms.content.height(), \
-                f"{type(overlay).__name__} 콘텐츠 아래 이탈"
-        ms.loop_btn.setChecked(False)
-        ms._toggle_loop_panel()
+    assert not hasattr(ms, "loop_btn"), "루프 기능 삭제됨"
     win.resize(1040, 740)
     app.processEvents()
     ms._render_at(0.3)
@@ -357,10 +344,11 @@ def main():
     old = tl.to_dict()
     old["loop_override"] = 4  # 이전 채점 설정이 있어도 세션 로드 가능
     old["split_point"] = 60   # 구 세션의 왼손 경계 키는 무시
-    for key in ("bar_times", "loop_phase", "loops"):
+    old["loops"] = [{"name": "인트로", "start_bar": 0, "end_bar": 2, "on": True}]   # 삭제된 루프 기능의 구 세션 키도 무시
+    for key in ("bar_times", "loop_phase"):
         old.pop(key, None)
     d2 = _TL2.from_dict(old)
-    assert d2.bar_times == [] and d2.loops == []
+    assert d2.bar_times == [] and "loops" not in d2.to_dict()
 
     # 연습 화면은 예비박(코드 없음)부터 시작
     assert ms.playhead.position_sec() == tl.count_in_start() < tl.bar_times[0]
@@ -421,41 +409,9 @@ def main():
     bs.bpm_edit.setText("120")
     bs.confirm_btn.click()
 
-    # §6 사용자 루프: 코드표 칸 드래그 → 이름 입력 → 목록 관리 (클릭=코드 수정)
-    import gui.beat_screen as _bsm
-    _qid = _bsm.QInputDialog
-    _bsm.QInputDialog = type("_FakeQID", (), {
-        "getText": staticmethod(lambda *a, **k: ("인트로", True))})
-    bs._loop_press(2)                         # 3마디에서 누름
-    assert not bs._drag_loop                  # 아직 클릭(코드 수정) 후보
-    bs._loop_drag_to(1)                       # 옆 칸으로 드래그 → 루프 모드
-    assert bs._drag_loop and bs._highlight_bars() == {1, 2}
-    assert bs._cells[1].styleSheet() == bs._cells[1]._hl_qss
-    bs._loop_drag_to(0)                       # 역방향 확장(정렬)
-    assert bs._highlight_bars() == {0, 1, 2}
-    bs._loop_release()
-    assert bs._drag_start is None              # release 즉시 상태 초기화
-    app.processEvents()                        # 이름 입력은 mouse 이벤트 후(지연 모달)
-    assert tl3.loops == [{"name": "인트로", "start_bar": 0, "end_bar": 2, "on": True,
-                         "start_sec": .5, "end_sec": 6.5}]
-    assert bs.loops_row.count() == 1
-    bs._loop_press(1)                         # 1마디 루프: 나갔다 복귀
-    bs._loop_drag_to(0)
-    bs._loop_drag_to(1)
-    assert bs._drag_loop and bs._highlight_bars() == {1}
-    bs._loop_release()
+    # 코드표 칸 클릭 = 코드 수정 메뉴(드래그 루프 지정은 삭제됨)
+    bs._cell_clicked(2, tl3.segment_for_bar(2))
     app.processEvents()
-    assert tl3.loops[1] == {"name": "인트로", "start_bar": 1, "end_bar": 1, "on": True,
-                           "start_sec": 2.5, "end_sec": 4.5}
-    bs._del_loop(1)
-    bs._loop_press(2)                         # 드래그 없이 release → 루프 미생성
-    bs._loop_release()                        # (seg=None — 코드 메뉴 생략)
-    app.processEvents()
-    _bsm.QInputDialog = _qid
-    assert len(tl3.loops) == 1
-    bs._del_loop(0)
-    assert tl3.loops == [] and bs.loops_row.count() == 0
-    tl3.loops.append({"name": "인트로", "start_bar": 0, "end_bar": 2, "on": True})
 
     # 코드 선택 리스트의 다이아토닉 강조 판정(C장조)
     assert bs._is_diatonic_name("Dm7") and bs._is_diatonic_name("G7")
@@ -468,35 +424,8 @@ def main():
     assert win.stack.currentWidget() is win.setup
     assert tl3.segments[0].chord.name == "Am", "확인이 코드 수정을 덮어씀"
 
-    # 메인 화면 루프 사이드바(§6): 루프 리스트 + 루프별 ON/OFF + 재생 루프백
     win.setup.practiceRequested.emit()
     assert win.stack.currentWidget() is win.main_screen and ms.tl is tl3
-    ms.loop_btn.setChecked(True)
-    ms._toggle_loop_panel()
-    assert not ms.loop_panel.isHidden() and ms.loop_rows.count() == 1
-    assert ms._loop_spans() == [(0.5, 6.5)], ms._loop_spans()
-    tl3.loops[0]["on"] = False                # 꺼진 루프는 반복 안 함
-    assert ms._loop_spans() == []
-    tl3.loops[0]["on"] = True
-    ms.playhead.play()
-    ms._on_tick(6.6)                          # 루프 끝 도달 → 시작으로 루프백
-    assert abs(ms.playhead.position_sec() - 0.5) < 0.05, ms.playhead.position_sec()
-    ms.pause()
-    ms.loop_btn.setChecked(False)
-    ms._toggle_loop_panel()
-    assert ms.loop_panel.isHidden()
-    # 루프는 세션 JSON에 영속
-    assert _TL.from_dict(tl3.to_dict()).loops == tl3.loops
-
-    # 마디 격자가 없는 구 세션도 BPM 기반 루프 재생을 유지한다.
-    saved_bars = tl3.bar_times
-    tl3.bar_times = []
-    assert ms._loop_spans() == [(0.0, 6.0)]
-    ms.playhead.play()
-    ms._on_tick(6.1)
-    assert abs(ms.playhead.position_sec() - 0.0) < 0.05
-    ms.pause()
-    tl3.bar_times = saved_bars
 
     # 건반 = 오른손 C4~B5, 흰 건반이 간격 없이 이어진다.
     pw = ms.piano
@@ -584,7 +513,7 @@ def main():
     from gui.anim import stagger as _stagger
     _stagger([ms.play_btn, ms.riff])
 
-    print("\nSMOKE OK — 스케일/악보+수동수정/리프동기재생/리프불변식(1마디·스케일안·밀도·해결·음역)/보정/난이도/마디선+확정잠금/루프정의·사이드바/건반간격/파형·세션/애니메이션 정상")
+    print("\nSMOKE OK — 스케일/악보+수동수정/리프동기재생/리프불변식(1마디·스케일안·밀도·해결·음역)/보정/난이도/마디선+확정잠금/건반간격/파형·세션/애니메이션 정상")
     win.close()
     test_settings_dir.cleanup()
 

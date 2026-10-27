@@ -2,7 +2,6 @@
 
 - 곡 전체 가로 타임라인
 - 현재 재생 헤드
-- 루프 경계 표시
 - 드래그 = 즉시 seek (스크럽 = 인덱스 점프, ML 재실행 없음 §4)
 """
 from __future__ import annotations

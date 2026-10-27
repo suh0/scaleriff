@@ -107,27 +107,6 @@ class UIUXTest(unittest.TestCase):
         screen._pick_method("landing")
         self.assertTrue(screen.landing_box.isEnabled())
 
-    def test_long_loop_lists_stay_within_window(self):
-        tl = build_dummy_timeline()
-        tl.loops = [{"name": "긴 루프 이름" * 12, "start_bar": 0, "end_bar": 0, "on": False}
-                    for _ in range(20)]
-        screen = MainScreen()
-        screen.set_timeline(tl)
-        screen.resize(1040, 740)
-        screen.show()
-        screen.loop_btn.click()
-        self.app.processEvents()
-        self.assertGreater(screen.loop_scroll.verticalScrollBar().maximum(), 0)
-        self.assertTrue(screen.content.rect().contains(screen.play_btn.geometry()))
-        beat = BeatScreen()
-        beat.set_timeline(tl)
-        beat._build_loops()
-        beat.resize(1040, 740)
-        beat.chord_dialog.show()
-        self.app.processEvents()
-        self.assertGreater(beat.loops_scroll.horizontalScrollBar().maximum(), 0)
-        self.assertLessEqual(beat.width(), 1040)
-
     def test_keyboard_scrub_clamps_at_track_ends(self):
         scrub = ScrubBar()
         scrub.set_timeline(build_dummy_timeline())
@@ -166,11 +145,6 @@ class UIUXTest(unittest.TestCase):
         screen.riff.set_position(.25)
         expected = [80 * (1 - (t - .25) / screen.riff._lead) for t in tl.beat_grid() if .25 <= t <= .25 + screen.riff._lead]
         self.assertEqual(screen.riff._beat_lines(), expected)
-        screen.riff.set_position(2.2, [(1.4, 2.6)])
-        # 다음 반복의 루프 안 첫 실제 박은 루프 길이 1.2초 뒤에 예고된다.
-        first = min(t for t in tl.beat_grid() if t >= 1.4)
-        y = 80 * (1 - (first + 1.2 - 2.2) / screen.riff._lead)
-        self.assertTrue(any(abs(v - y) < 1e-6 for v in screen.riff._beat_lines()))
 
 
 if __name__ == "__main__":

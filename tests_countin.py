@@ -36,10 +36,6 @@ class CountInTest(unittest.TestCase):
         self.assertEqual(tl.bar_times[0], -0.7)
         self.assertNotIn(-1, screen._cells)          # 예비박은 코드표에 없음
         self.assertAlmostEqual(tl.count_in_start(), -2.7)
-        screen._loop_press(0)
-        screen._loop_drag_to(-1)
-        self.assertFalse(screen._drag_loop)
-        screen._reset_drag()
         self.assertIsNone(tl.segment_at(-0.1))
         self.assertEqual(tl.segment_index_at(-0.1), -1)
         with tempfile.TemporaryDirectory() as folder:

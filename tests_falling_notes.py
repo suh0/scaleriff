@@ -1,4 +1,4 @@
-"""리프 음표의 낙하·건반 정렬·구간 이동·루프 예고 검사."""
+"""리프 음표의 낙하·건반 정렬·구간 이동 검사."""
 import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -87,13 +87,9 @@ def main():
     screen.stage.render(_QImage(screen.stage.size(), _QImage.Format.Format_ARGB32_Premultiplied))
     assert not screen.stage._splashes, "수명 지나면 정리"
     screen._on_seek(2.41)
-    tl.loops = [{"name": "loop", "start_bar": 0, "end_bar": 0, "on": True}]
-    screen._render_at(2.3)
-    assert len(screen.riff._nodes()) == 3, "지속 중인 음과 루프 다음 회차 리프 예고"
     screen._select_practice("riff")
     screen._render_at(1.0)
     assert screen.riff.show_notes
-    tl.loops = []
     screen._select_practice("free")
     screen._render_at(1.0)
     assert screen.stage.isVisible() and not screen.riff.show_notes

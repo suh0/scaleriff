@@ -25,7 +25,8 @@ class RiffDialog(QDialog):
         self.setStyleSheet(f"QDialog{{background:{T.BG_BASE};}}")
         self.setMinimumWidth(640)
         self.tl, self.model = tl, model
-        self.patterns = chord_patterns(tl)
+        self.skip = bool(tl.practice.get("skip_detour"))   # 키 밖 코드 제외 → 디투어 리프 없음
+        self.patterns = [pt for pt in chord_patterns(tl) if not (self.skip and pt["overlay"])]
         self.riffs: list[dict] = []   # {pattern, variant, notes, landings(절대초, 패턴 첫 등장 기준)}
         self._play_id = 0
         self.note_player = shared_player()
@@ -180,6 +181,9 @@ class RiffDialog(QDialog):
                 r = mine[k % len(mine)]
                 write_examples(self.tl, a, b, transpose_riff(self.tl, r["notes"], src, a,
                                                              self._goal(), r["landings"]))
+        for seg in self.tl.segments:
+            if self.skip and seg.is_detour:
+                seg.example = []
 
     def done(self, result):
         self.stop_listen()

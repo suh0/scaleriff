@@ -10,7 +10,7 @@ from types import SimpleNamespace
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QPushButton, QComboBox, QSpinBox,
-    QFrame, QGraphicsOpacityEffect,
+    QFrame, QGraphicsOpacityEffect, QCheckBox,
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 
@@ -35,9 +35,11 @@ SCALE_GUIDE = {
 }
 
 
-def landing_blocker(tl, option: dict, goal: str) -> str | None:
-    """option 스케일로 goal 착지가 불가능한 첫 코드의 이유, 모두 가능하면 None."""
+def landing_blocker(tl, option: dict, goal: str, skip_detour=False) -> str | None:
+    """option 스케일로 goal 착지가 불가능한 첫 코드의 이유, 모두 가능하면 None. 제외한 키 밖 코드는 안 본다."""
     for seg in tl.segments:
+        if skip_detour and seg.is_detour:
+            continue
         note_set = seg.note_set if seg.is_detour else option["note_set"]
         if _landing_pc(SimpleNamespace(chord=seg.chord, note_set=note_set), goal) is None:
             return f"{seg.chord.name} 코드의 {dict(GOALS)[goal]} 음이 스케일에 없어요"
@@ -59,9 +61,9 @@ def scale_fit(tl, option: dict) -> float:
 PENTA_MARGIN = 0.05   # 펜타토닉이 최고 적합도와 이만큼 이내면 쉬운 펜타를 추천
 
 
-def recommend(tl, options: list[dict]) -> int | None:
+def recommend(tl, options: list[dict], skip_detour=False) -> int | None:
     """사용 가능(모든 코드에 스케일 안 코드톤 1개 이상)한 후보 중 코드톤 포함률 최고. 펜타 근접 시 펜타."""
-    usable = [i for i, o in enumerate(options) if landing_blocker(tl, o, "chord_tone") is None]
+    usable = [i for i, o in enumerate(options) if landing_blocker(tl, o, "chord_tone", skip_detour) is None]
     if not usable:
         return None
     fits = {i: scale_fit(tl, options[i]) for i in usable}
@@ -119,28 +121,51 @@ class SetupScreen(QWidget):
         self._scale = 0
         self._method = "free"
         self._goal = "third"
+        self._skip = False                 # 키 밖 코드 제외(건반 강조·리프 없음)
         content = T.compact_content(self)
         col = T.centered_column(content, 760)
         root = QVBoxLayout(col)
         root.setContentsMargins(T.PAD_H, T.PAD_V, T.PAD_H, T.PAD_V)
         root.setSpacing(16)
 
-        # ── 머리줄: ← · 제목/곡의 키 · 코드 수정 ──────────────────
+        # ── 머리줄: ← · 제목 ──────────────────────────────────────
         self.back_btn = QPushButton("←")
         self.back_btn.setToolTip("박자 조정으로")
         self.back_btn.setFixedSize(48, 48)
         self.back_btn.setStyleSheet(T.qss_icon_btn())
         self.back_btn.clicked.connect(self.backToBeatRequested.emit)
-        self.key_lbl = QLabel("")
-        head = T.title_block("학습내용 선택", self.key_lbl)
+        head = T.title_block("학습내용 선택", "")
         self.title = head.title
+        root.addLayout(T.header_row(self.back_btn, head))
+        root.addSpacing(4)
+
+        # ── 곡 정보 카드: 곡 이름·추정 키·코드 수정 / 키 밖 코드 개수·제외 ──
+        card, lay = self._card("곡 정보")
+        info_row = QHBoxLayout()
+        info_row.setSpacing(12)
+        self.song_lbl = QLabel("")
+        self.song_lbl.setStyleSheet(f"color:{T.TEXT_PRIMARY};font-size:15px;font-weight:700;")
+        self.key_lbl = QLabel("")
+        self.key_lbl.setStyleSheet(f"color:{T.TEXT_MUTED};font-size:13px;")
         self.chord_btn = QPushButton("코드 수정")
         self.chord_btn.setStyleSheet(T.qss_ghost_btn() + "QPushButton{border-radius:19px;padding:0 16px;"
                                      "min-height:38px;font-size:13px;}")
-        self.chord_btn.setToolTip("코드·키·루프를 수정합니다. 확인하면 이 화면에 반영돼요.")
+        self.chord_btn.setToolTip("코드·키를 수정합니다. 확인하면 이 화면에 반영돼요.")
         self.chord_btn.clicked.connect(self.chordEditRequested.emit)
-        root.addLayout(T.header_row(self.back_btn, head, self.chord_btn))
-        root.addSpacing(4)
+        info_row.addWidget(self.song_lbl)
+        info_row.addWidget(self.key_lbl)
+        info_row.addStretch(1)
+        info_row.addWidget(self.chord_btn)
+        lay.addLayout(info_row)
+        self.detour_lbl = QLabel("")
+        self.detour_lbl.setWordWrap(True)
+        self.detour_lbl.setStyleSheet(f"color:{T.TEXT_BODY};font-size:13px;")
+        lay.addWidget(self.detour_lbl)
+        self.skip_chk = QCheckBox("키 밖 코드 제외 — 그 코드에선 건반 강조와 리프를 끕니다")
+        self.skip_chk.setStyleSheet(f"color:{T.TEXT_BODY};font-size:13px;")
+        self.skip_chk.clicked.connect(self._pick_skip)   # 사용자 클릭만(set_timeline의 setChecked는 무시)
+        lay.addWidget(self.skip_chk)
+        root.addWidget(card)
 
         # ── 곡 스케일 카드 ────────────────────────────────────────
         card, lay = self._card("곡 스케일")
@@ -307,15 +332,16 @@ class SetupScreen(QWidget):
         self.tl = tl
         mode = "minor" if "minor" in (tl.key or "").lower() else "major"
         self._options = song_scale_options(tl.key_root, mode)
-        self.key_lbl.setText(f"곡의 키: {tl.key}")
-        best = recommend(tl, self._options)
-        for i, (btn, opt) in enumerate(zip(self.scale_btns, self._options)):
-            reason = landing_blocker(tl, opt, "chord_tone")
-            btn.setText(opt["name"])
-            self.rec_lbls[i].setText("추천" if i == best else "")
-            self.rec_lbls[i].setVisible(i == best)
-            btn.setEnabled(reason is None)
-            btn.setToolTip(reason.replace("코드톤 음이", "코드톤이 하나도") if reason else "")
+        self.song_lbl.setText(tl.title or tl.audio_ref or "내 곡")
+        self.key_lbl.setText(f"추정 키: {tl.key}")
+        detours = [s.chord.name for s in tl.segments if s.is_detour]
+        kinds = list(dict.fromkeys(detours))
+        self.detour_lbl.setText(f"키 밖 코드 {len(kinds)}종 · {len(detours)}번 나와요 ({', '.join(kinds)})"
+                                if detours else "키 밖 코드가 없어요")
+        self._skip = bool(detours and tl.practice.get("skip_detour"))
+        self.skip_chk.setChecked(self._skip)
+        self.skip_chk.setEnabled(bool(detours))
+        best = self._sync_scales()
         saved = tl.practice
         names = [o["name"] for o in self._options]
         name = saved.get("scale", {}).get("name")
@@ -331,7 +357,26 @@ class SetupScreen(QWidget):
         self._pick_scale(self._scale)
         self._pick_method(self._method)
 
+    def _sync_scales(self):
+        """스케일 칩 사용 가능·추천 표시 → 추천 번호. 키 밖 코드 제외 여부에 따라 달라진다."""
+        best = recommend(self.tl, self._options, self._skip)
+        for i, (btn, opt) in enumerate(zip(self.scale_btns, self._options)):
+            reason = landing_blocker(self.tl, opt, "chord_tone", self._skip)
+            btn.setText(opt["name"])
+            self.rec_lbls[i].setText("추천" if i == best else "")
+            self.rec_lbls[i].setVisible(i == best)
+            btn.setEnabled(reason is None)
+            btn.setToolTip(reason.replace("코드톤 음이", "코드톤이 하나도") if reason else "")
+        return best
+
     # ── 선택 ─────────────────────────────────────────────────────
+    def _pick_skip(self, on: bool):
+        self._skip = on
+        best = self._sync_scales()
+        if not self.scale_btns[self._scale].isEnabled():
+            self._scale = best if best is not None else 1
+        self._pick_scale(self._scale)
+
     def _pick_scale(self, i: int):
         self._scale = i
         for k, btn in enumerate(self.scale_btns):
@@ -341,7 +386,7 @@ class SetupScreen(QWidget):
         self.feel_lbl.setText(feel)
         self.use_lbl.setText(use)
         for key, btn in self.goal_btns.items():
-            reason = landing_blocker(self.tl, opt, key)
+            reason = landing_blocker(self.tl, opt, key, self._skip)
             btn.setEnabled(reason is None)
             btn.setToolTip(reason or "")
         if not self.goal_btns[self._goal].isEnabled():
@@ -392,7 +437,7 @@ class SetupScreen(QWidget):
         landing = self._method == "landing"
         self.tl.practice.update(scale=dict(self._options[self._scale]), method=self._method,
                                 goal=self._goal if landing else None,
-                                count=self.count() if landing else None)
+                                count=self.count() if landing else None, skip_detour=self._skip)
 
     def _start(self):
         self.remember()

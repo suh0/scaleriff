@@ -12,6 +12,11 @@ class ChordHeader(QWidget):
         self.setFixedSize(360, 150)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self._chords = ("", "", "", "", 0.0, 1.0)
+        self._detour: set[str] = set()   # 키 밖 코드 이름 — 옅은 주황으로
+
+    def set_detour(self, names):
+        self._detour = set(names)
+        self.update()
 
     def set_chords(self, cur, kind, nxt, prev, grow, push):
         """cur/kind=현재 코드·스케일, nxt=다음 코드, prev=방금 밀려나는 코드.
@@ -37,7 +42,7 @@ class ChordHeader(QWidget):
             if spacing:
                 f.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, spacing)
             p.setFont(f)
-            c = QColor(T.TEXT_PRIMARY)
+            c = QColor(T.DETOUR if name in self._detour else T.TEXT_PRIMARY)
             c.setAlphaF(alpha)
             p.setPen(c)
             p.drawText(QRectF(0, y - size, w, size * 2), Qt.AlignmentFlag.AlignCenter, name)

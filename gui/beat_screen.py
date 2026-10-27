@@ -8,7 +8,7 @@
 - 3단계: 예비박 마디 수(코드표 제외, 연습 화면 재생 시작점). 확정 시에만 재격자화.
 - 클릭·드래그한 마디선은 검출 비트 근처(SNAP_PX)에서 그 비트로 붙는다.
 - 재생은 스페이스바만: 1마디부터 재생/정지(마우스로는 재생 안 함), 재생 중 메트로놈.
-- 코드표 직접 조작: 칸 클릭 = 코드 수정, 칸 드래그 = 루프 지정(놓으면 이름 입력).
+- 코드표 직접 조작: 칸 클릭 = 코드 수정.
 """
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ import bisect
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QPushButton,
-    QComboBox, QLineEdit, QScrollArea, QInputDialog, QFrame,
+    QComboBox, QLineEdit, QScrollArea, QFrame,
     QGraphicsOpacityEffect, QLayout, QMenu, QStackedWidget, QDialog
 )
 from PyQt6.QtGui import QPainter, QColor, QPen, QFont, QCursor, QShortcut, QKeySequence
@@ -275,10 +275,7 @@ class BeatScreen(QWidget):
         self._bpm_text = ""      # BPM 칸에 마지막으로 표시한 값
         self._end_bar: int | None = None   # 코드 인식 끝 마디선(1마디부터 마디 수), None = 곡 끝
         self._dur = ZOOM_SEC
-        self._cells: dict[int, QFrame] = {} # bar → 칸(하이라이트용)
-        self._drag_start: int | None = None # 칸 드래그 시작 마디
-        self._drag_cur: int | None = None   # 드래그 현재 마디
-        self._drag_loop = False             # 시작 칸을 벗어나면 루프 모드
+        self._cells: dict[int, QFrame] = {} # bar → 칸
         self._step = 1           # 박자 단계: 1 시작점 · 2 끝부분 박자 · 3 예비박
         self.count_in = 1        # 예비박 마디 수
         self._l_shift = 0.0      # 예비박이 넘쳐 처음 창을 왼쪽으로 민 양(줄이면 되돌림)
@@ -506,35 +503,17 @@ class BeatScreen(QWidget):
         self.key_box.currentIndexChanged.connect(self._on_key_changed)
         chord_top.addWidget(self.key_box)
         root.addLayout(chord_top)
-        chord_hint = QLabel("분석된 코드를 확인하세요. 칸을 클릭하면 수정, 여러 칸을 드래그하면 루프를 만듭니다. 자동 인식은 장·단 3화음 추정입니다.")
+        chord_hint = QLabel("분석된 코드를 확인하세요. 칸을 클릭하면 수정합니다. 자동 인식은 장·단 3화음 추정입니다.")
         chord_hint.setStyleSheet(f"color:{T.TEXT_MUTED};font-size:12px;")
         chord_hint.setWordWrap(True)
         root.addWidget(chord_hint)
 
-        # ── 아래: 루프 리스트 + 마디별 코드표(세로 스크롤) ───────
+        # ── 아래: 마디별 코드표(세로 스크롤) ───────
         right = QVBoxLayout()
         right.setSpacing(10)
-        loop_row = QHBoxLayout()
-        grid_lbl = QLabel("마디별 코드 (클릭=코드 수정 · 드래그=루프 지정)")
+        grid_lbl = QLabel("마디별 코드 (클릭=코드 수정)")
         grid_lbl.setStyleSheet(f"color:{T.TEXT_MUTED};font-size:12px;")
-        loop_row.addWidget(grid_lbl)
-        self.loops_row = QHBoxLayout()
-        self.loops_row.setSpacing(6)
-        self.loops_row.setContentsMargins(0, 0, 0, 0)
-        loops_host = QWidget()
-        loops_host.setObjectName("loopChips")
-        loops_host.setStyleSheet(f"QWidget#loopChips{{background:{T.BG_BASE};}}")
-        loops_host.setLayout(self.loops_row)
-        self.loops_scroll = QScrollArea()
-        self.loops_scroll.setWidgetResizable(True)
-        self.loops_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.loops_scroll.setFixedHeight(54)
-        self.loops_scroll.setWidget(loops_host)
-        loop_row.addSpacing(12)
-        loop_row.addWidget(self.loops_scroll, 1)
-        self._loop_wrap = QWidget()
-        self._loop_wrap.setLayout(loop_row)
-        right.addWidget(self._loop_wrap)
+        right.addWidget(grid_lbl)
 
         self.grid_scroll = QScrollArea()
         self.grid_scroll.setWidgetResizable(True)
@@ -785,7 +764,6 @@ class BeatScreen(QWidget):
         self._show_bpm()
         self.playhead = Playhead(self._dur, tl.audio_ref, self)
         self.playhead.positionChanged.connect(self._on_tick)
-        self._reset_drag()
         self._show_step(1)
 
     def pause(self):
@@ -987,13 +965,11 @@ class BeatScreen(QWidget):
         self.key_box.blockSignals(False)
 
     def edit_chords(self) -> bool:
-        """코드 편집 창 — 칸 클릭=코드 수정, 드래그=루프, 키 변경. 확인=반영, 취소=되돌림."""
+        """코드 편집 창 — 칸 클릭=코드 수정, 키 변경. 확인=반영, 취소=되돌림."""
         self.pause()
         before = copy.deepcopy(self.tl.__dict__)
         self._sync_key_box()
-        self._reset_drag()
         self._build_grid()
-        self._build_loops()
         if self.chord_dialog.exec() == QDialog.DialogCode.Accepted:
             if not self.tl.key_override:
                 self._reestimate_key()
@@ -1033,13 +1009,9 @@ class BeatScreen(QWidget):
             border, bg = T.BADGE_OUT, T.BG_SURFACE
         else:
             border, bg = T.BORDER_DEFAULT, T.BG_INSET
-        cell._base_qss = (
+        cell.setStyleSheet(
             f"QFrame#barCell{{background:{bg};border:1px solid {border};border-radius:8px;}}"
             f"QFrame#barCell:hover{{background:{T.BG_SURFACE_ALT};border-color:{T.TEXT_MUTED};}}")
-        cell._hl_qss = (                        # 루프 지정 선택/범위 하이라이트
-            f"QFrame#barCell{{background:{T.BG_SURFACE_ALT};"
-            f"border:2px solid {T.BORDER_ACTIVE};border-radius:8px;}}")
-        cell.setStyleSheet(cell._base_qss)
         cell.setFixedSize(CELL_W, 60)
         v = QVBoxLayout(cell); v.setContentsMargins(4, 5, 4, 5); v.setSpacing(1)
         center = Qt.AlignmentFlag.AlignHCenter
@@ -1062,12 +1034,9 @@ class BeatScreen(QWidget):
             f"font-family:'{T.FONT_MONO}';font-size:10px;border:none;")
         v.addWidget(s)
 
-        if seg is not None:        # 클릭=코드 수정 / 드래그=루프 지정
+        if seg is not None:        # 클릭=코드 수정
             cell.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-            cell.mousePressEvent = lambda e, b=bar: self._loop_press(b)
-            cell.mouseMoveEvent = lambda e: self._loop_drag_to(
-                self._bar_at_global(e.globalPosition().toPoint()))
-            cell.mouseReleaseEvent = lambda e, sg=seg: self._loop_release(sg)
+            cell.mouseReleaseEvent = lambda e, b=bar, sg=seg: self._cell_clicked(b, sg)
         self._cells[bar] = cell
         return cell
 
@@ -1171,99 +1140,15 @@ class BeatScreen(QWidget):
         run_busy(self.chord_page, lambda: apply_chord_edit(self.tl, start, end, name),
                  lambda _: self._build_grid())
 
-    # ── 사용자 루프(§6): 칸 클릭=코드 수정 · 칸 드래그=루프 지정 ──
-    def _bar_at_global(self, gp) -> int | None:
-        """글로벌 좌표 아래의 마디 칸 — 드래그가 어느 칸 위인지 판정."""
-        for b, c in self._cells.items():
-            try:
-                if c.rect().contains(c.mapFromGlobal(gp)):
-                    return b
-            except RuntimeError:      # 재격자화로 이미 삭제된 칸
-                pass
-        return None
-
-    def _loop_press(self, bar: int):
-        self._drag_start = bar
-        self._drag_cur = bar
-        self._drag_loop = False
-
-    def _loop_drag_to(self, bar: int | None):
-        if self._drag_start is None or bar is None or bar < 0:
-            return
-        if bar != self._drag_start or self._drag_loop:
-            self._drag_loop = True    # 시작 칸을 벗어나면 루프 모드(복귀=1마디)
-            self._drag_cur = bar
-            self._update_loop_highlight()
-
-    def _loop_release(self, seg=None):
-        start, cur, was_loop = self._drag_start, self._drag_cur, self._drag_loop
-        self._reset_drag()
-        if start is None:
-            return
-        if was_loop:                                # 드래그 → 루프 이름 입력
-            s, e = sorted((start, cur))
-            # 모달을 mouse 이벤트 안에서 바로 열면 재진입 크래시 —
-            # 이벤트가 끝난 뒤에 연다.
-            QTimer.singleShot(0, lambda: self._ask_loop_name(s, e))
-        elif seg is not None:                       # 제자리 클릭 → 코드 수정
-            parts = [s for s in self.tl.segments if s.start_bar <= start < s.end_bar]
-            if len(parts) > 1:
-                menu = QMenu(self)
-                for part in parts:
-                    action = menu.addAction(f"{part.chord.name} · {part.start_sec:.2f}–{part.end_sec:.2f}초")
-                    action.triggered.connect(lambda _, p=part, b=start: self._edit_chord(p, b))
-                menu.aboutToHide.connect(menu.deleteLater)
-                menu.popup(QCursor.pos())
-            else:
-                self._edit_chord(seg, start)
-
-    def _highlight_bars(self) -> set[int]:
-        if not self._drag_loop or self._drag_start is None:
-            return set()
-        a, b = sorted((self._drag_start, self._drag_cur))
-        return set(range(a, b + 1))                 # 드래그 범위 미리보기
-
-    def _update_loop_highlight(self):
-        hl = self._highlight_bars()
-        for bar, cell in self._cells.items():
-            try:
-                cell.setStyleSheet(cell._hl_qss if bar in hl else cell._base_qss)
-            except RuntimeError:      # 재격자화로 이미 삭제된 칸
-                pass
-
-    def _reset_drag(self):
-        self._drag_start = None
-        self._drag_cur = None
-        self._drag_loop = False
-        self._update_loop_highlight()
-
-    def _ask_loop_name(self, s: int, e: int):
-        name, ok = QInputDialog.getText(
-            self.chord_page, "루프 정의", f"루프정의: {s + 1}–{e + 1}마디 이름:",
-            text=f"루프 {len(self.tl.loops) + 1}")
-        if ok and name.strip():
-            self.tl.loops.append({"name": name.strip(), "start_bar": s,
-                                  "end_bar": e, "on": True})
-            if len(self.tl.bar_times) > e + 1:
-                self.tl.loops[-1].update(start_sec=self.tl.bar_times[s], end_sec=self.tl.bar_times[e + 1])
-            self._build_loops()
-
-    def _build_loops(self):
-        while self.loops_row.count():
-            it = self.loops_row.takeAt(0)
-            if it.widget():
-                it.widget().deleteLater()
-        for i, lp in enumerate(self.tl.loops if self.tl else []):
-            chip = QPushButton(
-                f"{lp['name']}  {lp['start_bar'] + 1}–{lp['end_bar'] + 1}마디  ✕")
-            chip.setToolTip(f"{lp['name']} · 클릭하면 삭제")
-            chip.setMaximumWidth(240)
-            chip.setText(chip.fontMetrics().elidedText(chip.text(), Qt.TextElideMode.ElideRight, 210))
-            chip.setStyleSheet(T.qss_ghost_btn())
-            chip.clicked.connect(lambda _, k=i: self._del_loop(k))
-            self.loops_row.addWidget(chip)
-
-    def _del_loop(self, i: int):
-        if self.tl and 0 <= i < len(self.tl.loops):
-            del self.tl.loops[i]
-            self._build_loops()
+    def _cell_clicked(self, bar: int, seg):
+        """칸 클릭 → 코드 수정. 마디 안에 코드가 여럿이면 고를 코드부터."""
+        parts = [s for s in self.tl.segments if s.start_bar <= bar < s.end_bar]
+        if len(parts) > 1:
+            menu = QMenu(self)
+            for part in parts:
+                action = menu.addAction(f"{part.chord.name} · {part.start_sec:.2f}–{part.end_sec:.2f}초")
+                action.triggered.connect(lambda _, p=part, b=bar: self._edit_chord(p, b))
+            menu.aboutToHide.connect(menu.deleteLater)
+            menu.popup(QCursor.pos())
+        else:
+            self._edit_chord(seg, bar)

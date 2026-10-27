@@ -83,15 +83,6 @@ class MusicIntegrityTest(unittest.TestCase):
         for sec in (-1, 0, .7, 2.6, 4.8, 6):
             self.assertAlmostEqual(tl.time_at_beat(tl.beat_at(sec)), sec)
 
-    def test_regrid_preserves_loop_audio_interval(self):
-        tl = build_dummy_timeline()
-        tl.bpm = 120
-        tl.bar_times = [0, 2, 4, 6, 8]
-        tl.chord_spans = [[0, 8, "C"]]
-        tl.loops = [{"name": "연습", "start_bar": 1, "end_bar": 2, "on": True}]
-        regrid_timeline(tl, anchor_sec=.5)
-        self.assertEqual((tl.loops[0].get("start_sec"), tl.loops[0].get("end_sec")), (2, 6))
-
     def test_three_quarter_riff_stays_in_segment(self):
         from ml.generate import bake_examples
         tl = build_dummy_timeline()

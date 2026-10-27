@@ -49,8 +49,6 @@ class EndToEndTest(unittest.TestCase):
                     self.assertIs(window.stack.currentWidget(), window.beat)
                     apply_chord_edit(timeline, 0, 2.4, "Dm7")
                     apply_chord_edit(timeline, 2.4, 4.8, "G7")
-                    timeline.loops = [{"name": "통합 검사", "start_bar": 0, "end_bar": 1,
-                                       "start_sec": 0, "end_sec": 4.8, "on": True}]
                     timeline.bpm = 100
                     self.assertTrue(regrid_timeline(timeline, anchor_sec=0))
                     self.assertEqual(timeline.segment_at(.5).chord.name, "Dm7")
@@ -63,7 +61,6 @@ class EndToEndTest(unittest.TestCase):
                     window._save_session(timeline)
                     saved = Timeline.load_json(window._session_path(timeline))
                     self.assertEqual(saved.chord_overrides, timeline.chord_overrides)
-                    self.assertEqual(saved.loops[0]["end_sec"], 4.8)
                     self.assertEqual(saved.model_info["sha256"], screen._ml_model.identity()["sha256"])
                     screen.set_timeline(saved)
                     self.assertTrue(screen._riff_events)

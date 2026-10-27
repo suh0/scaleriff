@@ -63,7 +63,6 @@ def main():
             capture("analysis_error", win.analyzing)
             capture("beat", win.beat)
             win.beat._build_grid()
-            win.beat._build_loops()
             win.beat.chord_dialog.show()
             app.processEvents()
             QTest.qWait(650)
@@ -78,11 +77,6 @@ def main():
             win.main_screen._select_practice("riff")
             win.main_screen._render_at(1)
             capture("copy", win.main_screen)
-            win.main_screen.loop_btn.setChecked(True)
-            win.main_screen._toggle_loop_panel()
-            capture("loops", win.main_screen)
-            win.main_screen.loop_btn.setChecked(False)
-            win.main_screen._toggle_loop_panel()
 
             def capture_dialog(dialog):
                 dialog.show()
