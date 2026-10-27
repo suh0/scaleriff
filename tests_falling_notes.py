@@ -117,6 +117,8 @@ def main():
     screen._render_at(seg1.start_sec)
     assert any(abs(y - lane_h) < 1e-6 for y in screen.riff._chord_lines()), "경계 시각에 레인 끝"
     assert screen.riff._beat_lines(), "자유모드에도 박자선"
+    screen._render_at(tl.segments[0].start_sec - beat)        # 예비박 → 1마디 첫 박도 강조선
+    assert any(abs(y - lane_h * 0.75) < 1 for y in screen.riff._chord_lines())
     # 원근 클릭: 각 건반 윗면(화면 좌표) 클릭 → 그 음
     for midi in range(60, 84):
         r = stage._key_rect(midi)

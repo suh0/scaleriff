@@ -306,7 +306,7 @@ class MainScreen(QWidget):
         self._riff_durations = [durations.get(item, .25) for item in ev]
         self.riff.set_events(falling, self.tl.beat_sec() if self.tl else 0.5,
                              self.tl.beat_grid() if self.tl else [],
-                             [s.start_sec for s in self.tl.segments[1:]] if self.tl else [],
+                             [s.start_sec for s in self.tl.segments] if self.tl else [],
                              [(s.start_sec, s.end_sec) for s in self.tl.segments if s.is_detour] if self.tl else [])
 
     def _seek_riff_idx(self, sec: float):
