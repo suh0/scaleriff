@@ -130,7 +130,6 @@ def main():
     screen._select_practice("free")
     colors = {stage._state_color(m).name() for m in range(60, 84) if stage._state_color(m)}
     assert colors == {TONE_ROOT, TONE_CHORD, TONE_SCALE}, colors
-    assert [stage._node_color(c).name() for c in (T.BADGE_ROOT, T.BADGE_CHORD, T.BADGE_SCALE)] ==         [TONE_ROOT, TONE_CHORD, TONE_SCALE], "노드도 같은 파란 계열 진하기"
     screen._select_practice("riff")
     assert all(stage._state_color(m) is None for m in range(60, 84)), "리프모드는 스케일 표시 없음"
     screen._select_practice("free")

@@ -160,6 +160,16 @@ def main():
     assert "%" not in su.scale_btns[1].text()
     assert "펜타토닉" in su.scale_btns[0].text() and su.scale_btns[0].isEnabled() and su._scale == 1
     assert su.title.text() == "학습내용 선택" and su.key_lbl.text().startswith("추정 키: ")
+    from PyQt6.QtWidgets import QScrollArea   # 낮은 창: 잘리지 않고 스크롤로 연습 시작 버튼까지 닿음
+    size = win.size()
+    win.resize(win.minimumSize())
+    app.processEvents()
+    su_scroll = su.findChild(QScrollArea)
+    assert su_scroll.verticalScrollBar().maximum() > 0, "학습 설정이 낮은 창에서 스크롤되지 않음"
+    su_scroll.ensureWidgetVisible(su.go_btn)
+    app.processEvents()
+    assert not su.go_btn.visibleRegion().isEmpty(), "스크롤해도 연습 시작 버튼이 안 보임"
+    win.resize(size)
     assert not su.landing_box.isHidden() and not su.landing_box.isEnabled()
     su._pick_method("landing")
     assert su.landing_box.isEnabled()
@@ -307,11 +317,7 @@ def main():
     assert all(n["beat_pos"] < tl2.time_sig_beats() for n in _rv._notes), "가이드에 2마디째 음"
     # §2 리프가 곡에 함께 구워짐(재생 헤드 동기) — 일시정지/시킹과 함께 동작
     ms._select_practice("riff")     # 리프연습 → 이벤트 생성
-    assert ms._riff_events and ms._riff_times == sorted(ms._riff_times), "리프 이벤트 정렬"
-    mid = tl.segments[1].start_sec
-    ms._seek_riff_idx(mid)
-    assert all(t < mid for t in ms._riff_times[:ms._riff_idx]), "시킹 커서 오류(앞)"
-    assert all(t >= mid for t in ms._riff_times[ms._riff_idx:]), "시킹 커서 오류(뒤)"
+    assert ms._riff_events and ms._riff_events == sorted(ms._riff_events), "리프 이벤트 정렬"
     ms._select_practice("free")     # 자유연습
 
     # §1 수동 코드 수정: 박자 조정 화면 코드 목록에서 바꾸면 스케일·리프 재계산

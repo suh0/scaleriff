@@ -10,7 +10,7 @@ from types import SimpleNamespace
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QPushButton, QComboBox, QSpinBox,
-    QFrame, QGraphicsOpacityEffect, QCheckBox,
+    QFrame, QGraphicsOpacityEffect, QCheckBox, QScrollArea, QScroller,
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 
@@ -123,7 +123,19 @@ class SetupScreen(QWidget):
         self._goal = "third"
         self._skip = False                 # 키 밖 코드 제외(건반 강조·리프 없음)
         content = T.compact_content(self)
-        col = T.centered_column(content, 760)
+        # 창이 낮아도 잘리지 않게 스크롤 — 휠·스크롤바 외에 빈 곳을 끌어서도 움직인다
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.viewport().setAutoFillBackground(False)   # 창 공통 Backdrop이 비치게
+        QScroller.grabGesture(scroll.viewport(), QScroller.ScrollerGestureType.LeftMouseButtonGesture)
+        page = QWidget()
+        scroll.setWidget(page)
+        page.setAutoFillBackground(False)               # setWidget이 켜는 채움을 끔
+        wrap = QVBoxLayout(content)
+        wrap.setContentsMargins(0, 0, 0, 0)
+        wrap.addWidget(scroll)
+        col = T.centered_column(page, 760)
         root = QVBoxLayout(col)
         root.setContentsMargins(T.PAD_H, T.PAD_V, T.PAD_H, T.PAD_V)
         root.setSpacing(16)

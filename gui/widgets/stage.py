@@ -13,8 +13,8 @@ import random
 import time
 
 from PyQt6.QtCore import Qt, QPointF, QRectF, QTimer
-from PyQt6.QtGui import (QColor, QFont, QLinearGradient, QPainter, QPen, QPixmap,
-                         QPolygonF, QTransform)
+from PyQt6.QtGui import (QColor, QFont, QImage, QLinearGradient, QPainter, QPen, QPixmap,
+                         QPolygonF, QRadialGradient, QTransform)
 from PyQt6.QtWidgets import QWidget
 
 from gui import theme as T
@@ -34,14 +34,17 @@ BEAM = 0.45        # 빛기둥 길이(레인 길이 비율)
 CHORD_LINE = QColor(255, 255, 255, 90)   # 코드 전환선(박자선보다 밝게)
 SPLASH_LIFE = 0.45                       # 타격 스플래시·판정 문구 수명(초)
 
-# 근음·코드톤·스케일음 = 같은 파란 계열, 진하기로 구분(앞면·노드·눌림 공통)
-TONE_ROOT = "#1f4bff"    # 진함 + 형광(채도·밝기 높임)
-TONE_CHORD = "#3b82f6"   # 중간
-TONE_SCALE = "#93c5fd"   # 연함
+# 근음 파랑·코드톤 초록·스케일음 회색(앞면·노드·눌림 공통, 리프 노드 배지 색과 같음)
+TONE_ROOT = T.BADGE_ROOT
+TONE_CHORD = T.BADGE_CHORD
+TONE_SCALE = T.BADGE_SCALE
 ROOT_GLOW = 0.8         # 근음 발광(글로우) 세기 0~1
 SPARKLE_COUNT = 4       # 근음 건반·노드마다 반짝이 개수
 SPARKLE_SPEED = 1.6     # 반짝이 깜빡임 속도(Hz)
-WALL_TONES = ("#161d28", "#1c2532", "#121822")
+WALL_TONE = "#1c2532"
+WALL_X = 0.12       # 벽이 도로 바깥으로 떨어진 거리(평면 폭 비율)
+WALL_H = 0.24       # 벽 높이(평면 폭 비율)
+FADE = 0.55         # 레일·벽이 먼 끝에서 투명 → 불투명해지는 구간(레인 길이 비율)
 
 
 def _quad(rect, corners):
@@ -180,11 +183,6 @@ class Stage(QWidget):
             return QColor(TONE_CHORD)
         return QColor(TONE_SCALE) if state == "SCALE" else None
 
-    @staticmethod
-    def _node_color(color):
-        """리프 노드 색(BADGE_* 역할 표시) → 같은 파란 계열 진하기."""
-        return QColor({T.BADGE_ROOT: TONE_ROOT, T.BADGE_CHORD: TONE_CHORD,
-                       T.BADGE_SCALE: TONE_SCALE}.get(color, color))
 
     # ── 그리기 부품 ──────────────────────────────────────────────
     @staticmethod
@@ -292,29 +290,42 @@ class Stage(QWidget):
         return None if self.riff.show_notes else self._tone(midi)
 
     def _draw_walls(self, p):
-        """도로 양옆에 서 있는 벽 — 평면 바닥선 위로 세운 패널을 원근으로."""
+        """도로 양옆 벽 — 한 장의 원근 평면 + 높이 가이드선·세로 리브. 먼 끝으로 갈수록 투명해져 소실."""
         w, lane = self.width(), self._lane_h
-        steps = [0, .12, .3, .5, .72, 1.0]
-        heights = [1.9, 1.3, 2.4, 1.6, 2.1]
-        for side, x in ((-1, -0.12 * w), (1, 1.12 * w)):
-            for i in range(len(steps) - 1):
-                y0, y1 = steps[i] * lane, steps[i + 1] * lane
-                f0, f1 = self._xf.map(QPointF(x, y0)), self._xf.map(QPointF(x, y1))
-                s0 = self._xf.map(QPointF(x + side, y0)).x() - f0.x()
-                s1 = self._xf.map(QPointF(x + side, y1)).x() - f1.x()
-                hh = heights[i] * w * 0.25
-                t0, t1 = f0 - QPointF(0, abs(s0) * hh), f1 - QPointF(0, abs(s1) * hh)
-                p.setPen(QPen(QColor(T.BORDER_SUBTLE), 1))
-                p.setBrush(QColor(WALL_TONES[i % len(WALL_TONES)]))
-                p.drawPolygon(QPolygonF([f0, f1, t1, t0]))
-                if i in (1, 3):    # 세로 네온 스트립 — 벽 아래쪽만(위쪽은 HUD 글자·버튼 자리)
-                    mid0, mid1 = (f0 + f1) / 2, (t0 + t1) / 2
-                    neon = QColor(TONE_SCALE if (i == 1) == (side < 0) else TONE_CHORD)
-                    p.save()
-                    p.setClipRect(QRectF(0, self.height() * 0.36, w, self.height()))   # HUD 아래만
-                    p.setPen(QPen(neon, max(2.0, abs(s1) * w * 0.006)))
-                    p.drawLine(mid0 - (mid0 - mid1) * .08, mid0 - (mid0 - mid1) * .3)
-                    p.restore()
+
+        def fading(a, b, alpha, far=0.0):
+            """먼 쪽 a(투명) → 가까운 쪽 b(alpha) 그라데이션. far: a가 이미 FADE 구간 안쪽인 비율."""
+            g = QLinearGradient(a, b)
+            for t, c in ((0, QColor(255, 255, 255, int(alpha * far))), (1, QColor(255, 255, 255, alpha))):
+                g.setColorAt(t, c)
+            return g
+
+        for side, x in ((-1, -WALL_X * w), (1, (1 + WALL_X) * w)):
+            def at(y, k=1.0):
+                """깊이 y의 벽 바닥점과 높이 k 지점."""
+                f = self._xf.map(QPointF(x, y))
+                s = abs(self._xf.map(QPointF(x + side, y)).x() - f.x())
+                return f, f - QPointF(0, s * WALL_H * w * k)
+
+            (f0, t0), (f1, t1) = at(0), at(lane)
+            fill = QLinearGradient((f0 + t0) / 2, (f1 + t1) / 2)   # 먼 끝 투명 → 앞쪽 남흑
+            tone = QColor(WALL_TONE)
+            for t, a in ((0, 0), (FADE, 150), (1, 230)):
+                tone.setAlpha(a)
+                fill.setColorAt(t, tone)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(fill)
+            p.drawPolygon(QPolygonF([f0, f1, t1, t0]))
+            for y in (lane * i / 8 for i in range(1, 8)):          # 세로 리브: 멀수록 촘촘·옅게
+                f, t = at(y)
+                p.setPen(QPen(QColor(255, 255, 255, int(55 * (y / lane) ** 2)), 1.0))
+                p.drawLine(f, t)
+            for k, alpha in ((0.0, 60), (0.5, 30), (1.0, 220)):   # 바닥·가이드·윗변(메탈 하이라이트)
+                a, b = at(0, k)[1], at(lane, k)[1]
+                p.setPen(QPen(fading(a, b, alpha), 1.2 if k == 1.0 else 1.0))
+                p.drawLine(a, b)
+            p.setPen(QPen(fading(f1, t1, 170, far=0.06), 1.0))   # 앞 모서리: 위가 밝은 반사광
+            p.drawLine(t1, f1)
 
     def _build_cache(self):
         dpr = self.devicePixelRatioF()
@@ -323,10 +334,12 @@ class Stage(QWidget):
         p = QPainter(pix)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         w, h = self.width(), self.height()
-        bg = QLinearGradient(0, 0, 0, h)
-        bg.setColorAt(0, QColor("#0a101c"))
-        bg.setColorAt(1, QColor(T.BG_BASE))
-        p.fillRect(QRectF(0, 0, w, h), bg)
+        T.paint_backdrop(p, w, h)
+        vanish = self._xf.map(QPointF(w / 2, 0))       # 레인 먼 끝의 옅은 파란 빛 = 깊이감
+        glow = QRadialGradient(vanish, w * 0.38)
+        glow.setColorAt(0, QColor(91, 132, 255, 34))
+        glow.setColorAt(1, QColor(91, 132, 255, 0))
+        p.fillRect(QRectF(0, 0, w, h), glow)
         self._draw_walls(p)
         p.setTransform(self._xf)
         road = QLinearGradient(0, 0, 0, self._lane_h)
@@ -338,16 +351,35 @@ class Stage(QWidget):
         for i in range(1, len(whites)):
             x = x0 + i * kw
             p.drawLine(QPointF(x, 0), QPointF(x, self._lane_h))
-        # 도로 양옆 레일(이미지의 밝은 테두리 띠): 바깥쪽에 폭 RAIL의 경사면
+        # 도로 양옆 레일(이미지의 밝은 테두리 띠): 바깥쪽에 폭 RAIL의 경사면.
+        # 따로 그린 층에 먼 끝 투명 마스크를 씌워 레일이 끊기지 않고 소실되게 한다.
         rail = w * RAIL
-        p.setPen(Qt.PenStyle.NoPen)
-        for outer, inner in ((-rail, 0), (w + rail, w)):    # 도로 쪽이 밝게
+        layer = QImage(pix.size(), QImage.Format.Format_ARGB32_Premultiplied)
+        layer.setDevicePixelRatio(dpr)
+        layer.fill(Qt.GlobalColor.transparent)
+        lp = QPainter(layer)
+        lp.setRenderHint(QPainter.RenderHint.Antialiasing)
+        lp.setTransform(self._xf)
+        for outer, inner in ((-rail, 0), (w + rail, w)):    # 크롬: 어둠 → 흰 스펙큘러 띠 → 도로 쪽 회청
             g = QLinearGradient(outer, 0, inner, 0)
-            g.setColorAt(0, QColor("#2c3542"))
-            g.setColorAt(1, QColor("#4b5667"))
-            p.setBrush(g)
-            x0r = min(outer, inner)
-            p.drawRect(QRectF(x0r, 0, rail, self._lane_h))
+            for t, c in ((0, "#121822"), (0.45, "#4b5667"), (0.7, "#f4f7ff"), (0.82, "#a3b2c8"), (1, "#2c3542")):
+                g.setColorAt(t, QColor(c))
+            lp.setPen(Qt.PenStyle.NoPen)
+            lp.setBrush(g)
+            lp.drawRect(QRectF(min(outer, inner), 0, rail, self._lane_h))
+            lp.setPen(_hair(QColor(255, 255, 255, 150)))        # 도로 경계 헤어라인
+            lp.drawLine(QPointF(inner, 0), QPointF(inner, self._lane_h))
+        mask = QLinearGradient(0, 0, 0, self._lane_h * FADE)
+        mask.setColorAt(0, QColor(0, 0, 0, 0))
+        mask.setColorAt(0.5, QColor(0, 0, 0, 90))
+        mask.setColorAt(1, QColor(0, 0, 0, 255))
+        lp.setCompositionMode(QPainter.CompositionMode.CompositionMode_DestinationIn)
+        lp.fillRect(QRectF(-2 * rail, 0, w + 4 * rail, self._lane_h), mask)
+        lp.end()
+        p.save()
+        p.resetTransform()
+        p.drawImage(0, 0, layer)
+        p.restore()
         whites, blacks = self._keys()
         for midi in whites:
             self._draw_white(p, midi)
@@ -383,7 +415,7 @@ class Stage(QWidget):
                 p.drawLine(QPointF(0, y), QPointF(lane.width(), y))
         sparkle = []                                    # (화면 다각형, 시드) — 근음 반짝이 자리
         for x, y, size, length, color in self.riff._nodes():
-            c = self._node_color(color)
+            c = QColor(color)                           # 리프 노드 = 근음 파랑·코드톤 초록·스케일음 회색
             if y + length >= self._lane_h - 1:          # 판정선 도착 = 그 건반 발광
                 midi = piano._midi_at(x, 1)
                 if midi is not None:
@@ -401,7 +433,7 @@ class Stage(QWidget):
             p.setBrush(c.lighter(115))
             p.drawRoundedRect(cap, 4, 4)
             a, b = self._xf.map(cap.bottomLeft()), self._xf.map(cap.bottomRight())
-            if c.name() == TONE_ROOT:                  # 근음 노드 발광
+            if color == T.BADGE_ROOT:                  # 근음 노드 발광
                 self._halo(p, self._xf.map(QPolygonF(cap)), c)
                 sparkle.append((self._xf.map(QPolygonF(cap)), round(x)))
             self._front(p, self._xf, cap, (b.x() - a.x()) * 0.12, c.darker(150))

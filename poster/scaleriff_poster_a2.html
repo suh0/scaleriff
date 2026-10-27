@@ -1,0 +1,285 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ScaleRiff 전시 포스터</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
+<style>
+/* 앱 gui/theme.py 토큰 + README 건반 색 규칙(근음 진한 파랑·코드톤 파랑·스케일 연한 파랑) */
+:root {
+  --bg: #0d1421;
+  --surface: #151e2e;
+  --surface-alt: #1e283a;
+  --line: #2e3c55;
+  --text: #f1f5f9;
+  --body: #d6dfe8;
+  --muted: #8e9bad;
+  --accent: #5b84ff;
+  --root: #1d4ed8;
+  --chord: #4f8cff;
+  --scale: #c4d6ff;
+  --out: #ef4444;
+  --detour: #fdba74;
+}
+@page { size: 420mm 594mm; margin: 0; }
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { background: #05080e; }
+body {
+  font-family: "Pretendard Variable", Pretendard, "Malgun Gothic", sans-serif;
+  color: var(--body);
+  -webkit-print-color-adjust: exact; print-color-adjust: exact;
+  word-break: keep-all;
+}
+.poster {
+  width: 420mm; height: 594mm; margin: 0 auto;
+  background: var(--bg);
+  padding: 18mm 20mm 14mm;
+  display: flex; flex-direction: column; gap: 8mm;
+  overflow: hidden;
+}
+@media print { html, body { background: var(--bg); } .poster { zoom: 1 !important; } }
+
+h2 { font-size: 36pt; font-weight: 800; color: var(--text); letter-spacing: -0.02em; line-height: 1.1; }
+.lead { font-size: 18pt; color: var(--muted); margin-top: 3mm; }
+p, li { font-size: 19pt; line-height: 1.45; }
+
+/* 자리표시: 스크린샷이 들어갈 곳 */
+.shot {
+  border: 0.8mm dashed var(--line); border-radius: 4mm;
+  background: var(--surface);
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  color: var(--muted); text-align: center; gap: 2mm;
+}
+.shot b { font-size: 20pt; color: var(--body); font-weight: 600; }
+.shot span { font-size: 14pt; }
+
+/* ① 헤더 */
+.head { display: grid; grid-template-columns: 1fr auto; align-items: end; gap: 10mm; }
+.wordmark { font-size: 130pt; font-weight: 900; letter-spacing: -0.045em; line-height: 0.82; color: var(--text); }
+.wordmark i { font-style: normal; color: var(--accent); }
+.top { flex: 1; min-height: 0; display: grid; grid-template-columns: 112mm 1fr; gap: 10mm; }
+.tagline { font-size: 38pt; font-weight: 800; color: var(--text); letter-spacing: -0.02em; line-height: 1.25; }
+.sub { font-size: 19pt; color: var(--muted); margin-top: 5mm; }
+.credit { text-align: right; font-size: 17pt; line-height: 1.6; color: var(--muted); }
+.credit strong { color: var(--body); font-weight: 600; display: block; font-size: 19pt; }
+
+
+/* 건반 띠: 앱이 보여주는 색·번호 규칙 */
+.keys { display: grid; grid-template-columns: 1fr 112mm; gap: 10mm; align-items: center; }
+.keys svg { width: 100%; height: auto; display: block; }
+.legend { display: grid; gap: 3.5mm; font-size: 17pt; }
+.legend div { display: flex; align-items: center; gap: 4mm; }
+.legend em { flex: none; width: 9mm; height: 9mm; border-radius: 1.5mm; }
+.legend small { display: block; font-size: 13pt; color: var(--muted); }
+
+/* ②③ Before / After */
+.ba { display: grid; grid-template-columns: 1fr 1fr; border-top: 0.6mm solid var(--line); }
+.ba > div { padding-top: 6mm; }
+.ba .after { border-left: 0.6mm solid var(--line); padding-left: 10mm; }
+.ba .before { padding-right: 10mm; }
+.ba h2 { display: flex; align-items: center; gap: 4mm; }
+.ba h2::before { content: ""; width: 7mm; height: 7mm; border-radius: 50%; background: var(--out); }
+.ba .after h2::before { background: var(--chord); }
+.ba ol { list-style: none; display: grid; gap: 4mm; margin-top: 5mm; }
+.ba .before li { color: var(--muted); }
+.ba li strong { color: var(--text); font-weight: 700; }
+
+/* ④ 프로세스: 마디 세 개 */
+.flow-head { display: flex; align-items: baseline; justify-content: space-between; }
+.bars { display: grid; grid-template-columns: repeat(3, 1fr); margin-top: 6mm; border-left: 0.8mm solid var(--body); }
+.bar { border-right: 0.8mm solid var(--body); padding: 0 6mm; position: relative; }
+.bar:last-child { border-right: 2.4mm double var(--body); }
+.bar .no { font-size: 15pt; color: var(--muted); font-style: italic; }
+.bar h3 { font-size: 24pt; font-weight: 800; color: var(--text); margin: 1mm 0 4mm; }
+.bar .shot { aspect-ratio: 16 / 9; }
+.bar ul { list-style: none; margin-top: 4mm; display: grid; gap: 1.5mm; }
+.bar li { font-size: 15pt; }
+.bar li::before { content: "♩ "; color: var(--accent); }
+.bar.edit h3 { color: var(--detour); }
+
+/* ⑤⑥ 기술 */
+.tech { display: grid; grid-template-columns: 1fr 108mm; gap: 12mm; }
+.pipe { display: grid; grid-template-columns: repeat(5, 1fr); gap: 3mm; margin-top: 6mm; }
+.node { background: var(--surface); border: 0.5mm solid var(--line); border-radius: 3mm; padding: 4mm; position: relative; }
+.node:not(:last-child)::after {
+  content: ""; position: absolute; right: -3mm; top: 50%; width: 3mm; height: 0.6mm; background: var(--accent);
+}
+.node b { display: block; font-size: 17pt; color: var(--text); font-weight: 700; }
+.node span { display: block; font-size: 13pt; color: var(--muted); line-height: 1.4; margin-top: 1.5mm; }
+.node.ml { border-color: var(--accent); }
+.markov { margin-top: 6mm; }
+.markov p { font-size: 15pt; color: var(--muted); }
+.markov .row { display: flex; align-items: center; gap: 3mm; font-size: 15pt; margin-top: 2mm; }
+.markov .row i { height: 4mm; background: var(--chord); border-radius: 1mm; }
+.stack { display: flex; flex-wrap: wrap; gap: 2.5mm; margin-top: 6mm; }
+.stack span { font-size: 14pt; border: 0.5mm solid var(--line); border-radius: 10mm; padding: 1.5mm 4.5mm; color: var(--body); }
+
+/* ⑦ 하단 */
+.foot { display: grid; grid-template-columns: 34mm 1fr; gap: 8mm; align-items: center; border-top: 0.6mm solid var(--line); padding-top: 6mm; }
+.foot .shot { width: 34mm; height: 34mm; }
+.foot .shot span { font-size: 11pt; }
+.foot h3 { font-size: 17pt; color: var(--text); font-weight: 700; }
+.foot ul { list-style: none; display: flex; flex-wrap: wrap; gap: 1mm 8mm; margin-top: 2mm; }
+.foot li { font-size: 14pt; color: var(--muted); }
+</style>
+</head>
+<body>
+<main class="poster">
+
+  <header class="head">
+    <h1 class="wordmark">Scale<i>Riff</i></h1>
+    <div class="credit">
+      <strong>OO대학교 OO학과</strong>
+      2026 졸업작품전<br>
+      홍길동 · 지도교수 OOO
+    </div>
+  </header>
+
+  <div class="top">
+    <div>
+      <p class="tagline">좋아하는 곡 위에서, 처음 해보는 즉흥연주</p>
+      <p class="sub">곡은 치지만 즉흥은 낯선 중급자를 위한 피아노 연습 앱</p>
+    </div>
+    <div class="shot hero">
+      <b>대표 이미지: 연주화면<br>(원근 하이웨이·3D 건반·낙하 노드)</b>
+      <span id="hero-size"></span>
+      <span>Windows 배율 200%로 캡처 후 크롭</span>
+    </div>
+  </div>
+
+  <section class="keys" aria-label="건반 색 규칙">
+    <svg id="kbd" viewBox="0 0 141 27" role="img" aria-label="Am 코드에서 A 마이너 펜타토닉 건반 표시 예시"></svg>
+    <div class="legend">
+      <div><em style="background:var(--root)"></em><span>지금 코드의 근음<small>번호는 곡 스케일 주음 = 1 기준</small></span></div>
+      <div><em style="background:var(--chord)"></em><span>코드톤</span></div>
+      <div><em style="background:var(--scale)"></em><span>스케일 음 — 쳐도 어울리는 음</span></div>
+    </div>
+  </section>
+
+  <section class="ba">
+    <div class="before">
+      <h2>이전엔</h2>
+      <ol>
+        <li>스케일 이론은 알아도, <strong>지금 이 코드에서 어떤 음을 쳐야 할지</strong> 모릅니다.</li>
+        <li>좋아하는 곡으로 연습하려면 <strong>코드·키·박자를 귀로 직접 따야</strong> 합니다.</li>
+        <li>교본 예제는 내 취향과 멀고, <strong>무엇부터 연습할지</strong> 막막합니다.</li>
+      </ol>
+    </div>
+    <div class="after">
+      <h2>ScaleRiff와 함께</h2>
+      <ol>
+        <li>건반 위에 <strong>칠 수 있는 음이 색과 번호로</strong> 표시됩니다. 코드가 바뀌면 함께 바뀝니다.</li>
+        <li><strong>YouTube 링크나 음원 파일 하나</strong>로 코드·키·박자를 자동 분석하고, 틀린 곳만 고칩니다.</li>
+        <li><strong>자유연습 → 착지음 → 리프 따라치기</strong> 순서로, 내가 고른 곡에서 단계를 밟습니다.</li>
+      </ol>
+    </div>
+  </section>
+
+  <section>
+    <div class="flow-head">
+      <h2>이렇게 동작합니다</h2>
+      <p class="lead">자동 분석은 추정입니다 — 사용자가 고친 값이 언제나 우선합니다</p>
+    </div>
+    <div class="bars">
+      <div class="bar">
+        <span class="no">1</span>
+        <h3>준비</h3>
+        <div class="shot"><b>곡 입력 · 분석 화면</b><span>16 : 9</span></div>
+        <ul>
+          <li>YouTube 링크 / 로컬 오디오 입력</li>
+          <li>비트·다운비트·키·코드 자동 추정</li>
+        </ul>
+      </div>
+      <div class="bar edit">
+        <span class="no">2</span>
+        <h3>다듬기</h3>
+        <div class="shot"><b>박자 조정 화면</b><span>16 : 9</span></div>
+        <ul>
+          <li>코드 시작·끝·예비박을 마디선에 맞춤</li>
+          <li>마디 안 코드·키를 직접 수정</li>
+        </ul>
+      </div>
+      <div class="bar">
+        <span class="no">3</span>
+        <h3>연습</h3>
+        <div class="shot"><b>학습 설정 · 리프 화면</b><span>16 : 9</span></div>
+        <ul>
+          <li>추천 스케일·착지음·음 개수 설정</li>
+          <li>자유연습 / 리프연습, 세션 저장</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section class="tech">
+    <div>
+      <h2>사용 기술</h2>
+      <div class="pipe">
+        <div class="node"><b>입력</b><span>yt-dlp<br>imageio-ffmpeg</span></div>
+        <div class="node"><b>음악 분석</b><span>librosa<br>(madmom 선택)</span></div>
+        <div class="node"><b>Timeline</b><span>단일 상태<br>세션 JSON</span></div>
+        <div class="node ml"><b>리프 생성</b><span>2차 Markov<br>재즈 솔로 학습</span></div>
+        <div class="node"><b>연주</b><span>PyQt6 무대<br>MIDI · 내장 신스</span></div>
+      </div>
+      <div class="stack">
+        <span>Python 3.12</span><span>PyQt6</span><span>librosa</span><span>NumPy · SciPy</span>
+        <span>scikit-learn</span><span>yt-dlp</span><span>mido · python-rtmidi</span>
+      </div>
+    </div>
+    <div class="markov">
+      <h3 style="font-size:24pt;color:var(--text);font-weight:800">리프는 어떻게 만들까</h3>
+      <p style="margin-top:2mm">직전 두 음을 보고 다음 음을 확률로 고릅니다. 학습 데이터(WJazzD)에 없는 문맥은 부트스트랩 → 규칙 순으로 물러섭니다.</p>
+      <div class="row">E · G →&nbsp;<b style="color:var(--text)">A</b><i style="width:38mm"></i></div>
+      <div class="row">E · G →&nbsp;<b style="color:var(--text)">C</b><i style="width:24mm"></i></div>
+      <div class="row">E · G →&nbsp;<b style="color:var(--text)">D</b><i style="width:13mm"></i></div>
+      <p style="font-size:12pt;margin-top:2mm">막대 길이는 설명용 예시</p>
+    </div>
+  </section>
+
+  <footer class="foot">
+    <div class="shot"><b style="font-size:13pt">QR</b><span>시연 영상</span></div>
+    <div>
+      <h3>한계와 다음 단계</h3>
+      <ul>
+        <li>코드 인식은 장·단 3화음까지 (7th 확장 예정)</li>
+        <li>실시간 채점 개발 중</li>
+        <li>실제 MIDI 기기 지연·청감 검증 예정</li>
+        <li>스윙·3/4·복합박자 미지원</li>
+      </ul>
+    </div>
+  </footer>
+
+</main>
+<script>
+// 두 옥타브(C4~B5) 건반. 예시: 곡 키 A 마이너 펜타토닉, 지금 코드 Am
+(() => {
+  const svg = document.getElementById('kbd'), NS = 'http://www.w3.org/2000/svg';
+  const W = 10, H = 26, BW = 6, BH = 16;
+  const mark = { 0: ['chord', '♭3'], 2: ['scale', '4'], 4: ['chord', '5'], 7: ['scale', '♭7'], 9: ['root', '1'] };
+  const color = { root: 'var(--root)', chord: 'var(--chord)', scale: 'var(--scale)' };
+  const el = (tag, a) => { const e = document.createElementNS(NS, tag); for (const k in a) e.setAttribute(k, a[k]); svg.appendChild(e); return e; };
+  const whites = [0, 2, 4, 5, 7, 9, 11];
+  for (let o = 0; o < 2; o++) whites.forEach((pc, i) => {
+    const x = 0.5 + (o * 7 + i) * W, m = mark[pc];
+    el('rect', { x, y: 0.5, width: W, height: H - 1, rx: 1, fill: m ? color[m[0]] : '#f2f2f2', stroke: '#0d1421', 'stroke-width': 0.6 });
+    if (!m) return;
+    const cx = x + W / 2, cy = H - 4.5, ink = m[0] === 'scale' ? '#0d1421' : '#fff';
+    if (m[0] === 'root') el('circle', { cx, cy: cy - 1.3, r: 3.3, fill: 'none', stroke: '#fff', 'stroke-width': 0.6 });
+    el('text', { x: cx, y: cy, 'text-anchor': 'middle', 'font-size': 4, 'font-weight': 700, fill: ink }).textContent = m[1];
+  });
+  for (let o = 0; o < 2; o++) [0, 1, 3, 4, 5].forEach(i =>
+    el('rect', { x: 0.5 + (o * 7 + i + 1) * W - BW / 2, y: 0.5, width: BW, height: BH, rx: 0.8, fill: '#1c1c1c' }));
+})();
+// 화면 미리보기: 창 너비에 맞춰 축소(인쇄 시 실제 크기)
+const fit = () => { document.querySelector('.poster').style.zoom = Math.min(1, document.documentElement.clientWidth / (420 * 96 / 25.4)); };
+addEventListener('resize', fit); fit();
+// 대표 이미지 자리 실제 크기(mm)·150dpi 픽셀을 자리 안에 표시
+(() => {
+  const h = document.querySelector('.hero'), z = parseFloat(document.querySelector('.poster').style.zoom) || 1;
+  const r = h.getBoundingClientRect(), mm = v => Math.round(v / z * 25.4 / 96), px = v => Math.round(v / 25.4 * 150);
+  document.getElementById('hero-size').textContent = `자리 ${mm(r.width)} × ${mm(r.height)} mm · 150dpi 기준 ${px(mm(r.width))} × ${px(mm(r.height))} px 이상`;
+})();
+</script>
+</body>
+</html>

@@ -115,25 +115,29 @@ def compact_content(parent: QWidget, max_width: int | None = None) -> QWidget:
     return content
 
 
+def paint_backdrop(p: QPainter, w: float, h: float):
+    """공통 배경: 남색 대각 그라데이션 + 좌상·우하 모서리의 큰 원(연주 무대도 같이 씀)."""
+    g = QLinearGradient(0, 0, w * 0.3, h)
+    g.setColorAt(0, QColor("#121b2c"))
+    g.setColorAt(1, QColor(BG_BASE))
+    p.fillRect(0, 0, int(w) + 1, int(h) + 1, g)
+    r = max(w, h) * 0.32
+    for c in (QPointF(-r * 0.35, -r * 0.45), QPointF(w + r * 0.3, h + r * 0.25)):
+        rg = QRadialGradient(c, r)
+        rg.setColorAt(0.0, QColor(120, 150, 230, 4))
+        rg.setColorAt(1.0, QColor(120, 150, 230, 15))
+        p.setBrush(rg)
+        p.setPen(QPen(QColor(140, 165, 255, 20), 1.2))
+        p.drawEllipse(c, r, r)
+
+
 class Backdrop(QWidget):
-    """전 화면 공통 배경: 남색 세로 그라데이션 + 좌상·우하 모서리의 큰 원."""
+    """전 화면 공통 배경."""
 
     def paintEvent(self, event):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        w, h = self.width(), self.height()
-        g = QLinearGradient(0, 0, w * 0.3, h)
-        g.setColorAt(0, QColor("#121b2c"))
-        g.setColorAt(1, QColor(BG_BASE))
-        p.fillRect(self.rect(), g)
-        r = max(w, h) * 0.32
-        for c in (QPointF(-r * 0.35, -r * 0.45), QPointF(w + r * 0.3, h + r * 0.25)):
-            rg = QRadialGradient(c, r)
-            rg.setColorAt(0.0, QColor(120, 150, 230, 4))
-            rg.setColorAt(1.0, QColor(120, 150, 230, 15))
-            p.setBrush(rg)
-            p.setPen(QPen(QColor(140, 165, 255, 20), 1.2))
-            p.drawEllipse(c, r, r)
+        paint_backdrop(p, self.width(), self.height())
 
 
 def centered_column(parent: QWidget, max_width: int) -> QWidget:

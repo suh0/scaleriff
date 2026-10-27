@@ -6,7 +6,6 @@
 """
 from __future__ import annotations
 
-import bisect
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QPushButton,
@@ -59,11 +58,7 @@ class MainScreen(QWidget):
         self._ml_model = load_model()      # 부트스트랩/학습 모델(없으면 규칙 폴백)
         # 재생 헤드에 동기화된 리프 이벤트(절대초, midi) — 일시정지/시킹과 함께 동작(§2)
         self._riff_events: list[tuple[float, int]] = []
-        self._riff_times: list[float] = []
-        self._riff_idx = 0
-        self._riff_durations = []
         self._held_keys = set()
-        self._riff_volume = .8
         self._input_volume = .8
         self._audio_volume = .8
         self._midi_ports = []
@@ -280,10 +275,9 @@ class MainScreen(QWidget):
     def _build_riff_events(self):
         """모든 구간의 리프 음을 (절대초, midi)로 펼쳐 정렬. 곡 타임라인에 '구워' 둔다.
 
-        재생 헤드 위치에 맞춰 트리거하므로 일시정지·시킹 시 함께 멈추고 따라간다(§2).
+        낙하 노드 표시용 — 리프 음 자체는 재생하지 않는다.
         """
         ev: list[tuple[float, int]] = []
-        durations = {}
         falling = []
         if self.tl:
             beat = self.tl.beat_sec()
@@ -292,7 +286,6 @@ class MainScreen(QWidget):
                     onset = self.tl.beat_at(seg.start_sec) + n["beat_pos"]
                     when = self.tl.time_at_beat(onset)
                     ev.append((when, n["midi"]))
-                    durations[(when, n["midi"])] = self.tl.time_at_beat(onset + n.get("dur_beats", .5)) - when
                     pc = n["midi"] % 12
                     if pc in seg.chord_tones():
                         color = T.BADGE_ROOT if pc == seg.chord.root % 12 else T.BADGE_CHORD
@@ -302,16 +295,10 @@ class MainScreen(QWidget):
                                     self.tl.time_at_beat(onset + n.get("dur_beats", .5)) - when))
             ev.sort(key=lambda e: e[0])
         self._riff_events = ev
-        self._riff_times = [t for t, _ in ev]
-        self._riff_durations = [durations.get(item, .25) for item in ev]
         self.riff.set_events(falling, self.tl.beat_sec() if self.tl else 0.5,
                              self.tl.beat_grid() if self.tl else [],
                              [s.start_sec for s in self.tl.segments] if self.tl else [],
                              [(s.start_sec, s.end_sec) for s in self.tl.segments if s.is_detour] if self.tl else [])
-
-    def _seek_riff_idx(self, sec: float):
-        """리프 재생 커서를 sec 위치로 이동(시킹/모드 진입 시 과거 음 몰아 재생 방지)."""
-        self._riff_idx = bisect.bisect_left(self._riff_times, sec)
 
     # ── 타임라인 로드 ────────────────────────────────────────────
     def set_timeline(self, tl: Timeline):
@@ -324,7 +311,6 @@ class MainScreen(QWidget):
         self._monitor_seg = None
         self.chord_hdr.set_detour({s.chord.name for s in tl.segments if s.is_detour})
         self._build_riff_events()          # 리프를 곡에 함께 구움(§2)
-        self._riff_idx = 0
         self.playhead = Playhead(tl.content_end(), tl.audio_ref, self)
         self.playhead.positionChanged.connect(self._on_tick)
         self.playhead.stateChanged.connect(self._on_state)
@@ -356,9 +342,7 @@ class MainScreen(QWidget):
         self.riff_btn.setText("리프모드 해제" if practice else "리프모드")
         self.riff.show_notes = practice
         if practice:
-            # 현재 위치부터 리프 재생(과거 음은 건너뜀)
             self._build_riff_events()
-            self._seek_riff_idx(self.playhead.position_sec() if self.playhead else 0.0)
         self.riff.set_position(self.playhead.position_sec() if self.playhead else 0.0)
         self._render_at(self.playhead.position_sec() if self.playhead else 0.0)
         self._on_state(self.playhead.is_playing() if self.playhead else False)
@@ -402,14 +386,12 @@ class MainScreen(QWidget):
         if self.playhead:
             self.note_player.stop_all()
             self._held_keys.clear()
-            self._seek_riff_idx(sec)
             self._seeking = True
             try:
                 self.playhead.seek(sec)
             finally:
                 self._seeking = False
             self._render_at(sec)
-            self._seek_riff_idx(sec)        # 리프 커서도 함께 점프
 
     def _on_tick(self, sec: float):
         self.scrub.set_position(sec)
@@ -419,14 +401,6 @@ class MainScreen(QWidget):
             self._render_at(sec)
             return
         self._render_at(sec + SYNC_LOOKAHEAD_SEC)   # 구간 변경 시 무거운 갱신
-        # 리프를 재생 헤드에 맞춰 트리거(재생 중일 때만 → 일시정지 시 함께 멈춤, §2)
-        if self._mode == "practice" and self.playhead and self.playhead.is_playing():
-            ev = self._riff_events
-            while self._riff_idx < len(ev) and ev[self._riff_idx][0] <= sec:
-                duration = self._riff_durations[self._riff_idx] if self._riff_idx < len(self._riff_durations) else .25
-                self.note_player.play_note(ev[self._riff_idx][1], duration,
-                                           round(100 * self._riff_volume))
-                self._riff_idx += 1
 
     # ── 상태 → UI 렌더 (구간 변경 시) ────────────────────────────
     def _render_at(self, sec: float):
@@ -562,8 +536,7 @@ class MainScreen(QWidget):
             ports.setCurrentIndex(max(0, ports.findData(self._midi_name)))
         reconnect.clicked.connect(reconnect_ports)
         form.addRow(reconnect)
-        for text, key in (("원곡 음량", "_audio_volume"), ("리프 음량", "_riff_volume"),
-                          ("내 연주 모니터", "_input_volume")):
+        for text, key in (("원곡 음량", "_audio_volume"), ("내 연주 모니터", "_input_volume")):
             slider = QSlider(Qt.Orientation.Horizontal)
             slider.setRange(0, 100)
             slider.setValue(round(getattr(self, key) * 100))
