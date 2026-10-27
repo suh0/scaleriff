@@ -3,7 +3,7 @@ import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtCore import QPointF
-from PyQt6.QtGui import QRegion
+from PyQt6.QtGui import QImage as _QImage, QRegion
 from PyQt6.QtWidgets import QApplication
 from gui.main_screen import MainScreen
 from player.dummy_timeline import build_dummy_timeline
@@ -66,6 +66,27 @@ def main():
     assert len(screen.riff._nodes()) == 1, "긴 음표는 종료까지 유지"
     screen._on_seek(2.41)
     assert not screen.riff._nodes()
+    # 타격 판정: ±60ms PERFECT, ±180ms EARLY/LATE, 밖·다른 음은 판정 없음, 맞힌 노드는 사라짐
+    riff = screen.riff
+    t62 = next(w for w, m, _, _ in riff._events if m == 62)
+    screen._on_seek(t62 - 0.5)
+    assert riff.judge(62, t62 - 0.3) is None and riff.judge(60, t62) is None
+    assert riff.judge(62, t62 - 0.1)[0] == "EARLY"
+    assert riff.judge(62, t62) is None, "같은 노드 두 번 판정 안 함"
+    assert all(abs(x - riff._x(62)) > 1 for x, *_ in riff._nodes()), "맞힌 노드 사라짐"
+    screen._on_seek(t62 - 1.0)                       # 되감기 → 다시 나타남
+    assert any(abs(x - riff._x(62)) < 1 for x, *_ in riff._nodes())
+    assert riff.judge(62, t62 + 0.03)[0] == "PERFECT"
+    screen._on_seek(t62 - 1.5)
+    label, x = riff.judge(62, t62 + 0.1)
+    assert label == "LATE" and abs(x - riff._x(62)) < 1e-6
+    screen.stage.splash(label, x)
+    screen.stage.render(_QImage(screen.stage.size(), _QImage.Format.Format_ARGB32_Premultiplied))
+    assert screen.stage._splash_areas and screen.stage._sparkle_timer.isActive(), "스플래시 동작"
+    screen.stage._splashes = [(c, r, t - 1.0, l) for c, r, t, l in screen.stage._splashes]
+    screen.stage.render(_QImage(screen.stage.size(), _QImage.Format.Format_ARGB32_Premultiplied))
+    assert not screen.stage._splashes, "수명 지나면 정리"
+    screen._on_seek(2.41)
     tl.loops = [{"name": "loop", "start_bar": 0, "end_bar": 0, "on": True}]
     screen._render_at(2.3)
     assert len(screen.riff._nodes()) == 3, "지속 중인 음과 루프 다음 회차 리프 예고"

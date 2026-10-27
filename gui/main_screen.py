@@ -652,6 +652,10 @@ class MainScreen(QWidget):
         if event.get("is_on", False):
             if shown:
                 self._held_keys.add((channel, midi))
+                if self._mode == "practice" and self.playhead.is_playing():   # 리프 타격 판정
+                    hit = self.riff.judge(midi, self.playhead.position_sec())
+                    if hit:
+                        self.stage.splash(*hit)
             self.note_player.note_on(midi, round(event.get("velocity", 100) * self._input_volume), channel)
         else:
             self._held_keys.discard((channel, midi))

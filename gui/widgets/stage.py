@@ -32,6 +32,7 @@ DIP = 0.42         # 눌림 깊이(흰 건반 앞면 두께 대비, 실측 10mm)
 RAIL = 0.022       # 도로 양옆 레일 폭(평면 폭 비율)
 BEAM = 0.45        # 빛기둥 길이(레인 길이 비율)
 CHORD_LINE = QColor(255, 255, 255, 90)   # 코드 전환선(박자선보다 밝게)
+SPLASH_LIFE = 0.45                       # 타격 스플래시·판정 문구 수명(초)
 
 # 근음·코드톤·스케일음 = 같은 파란 계열, 진하기로 구분(앞면·노드·눌림 공통)
 TONE_ROOT = "#1f4bff"    # 진함 + 형광(채도·밝기 높임)
@@ -78,10 +79,12 @@ class Stage(QWidget):
         self._mouse_midi = None
         # 근음 "샤랄라" 반짝이: 근음이 보일 때만 ~30fps로 그 영역만 다시 그림
         self._sparkle_areas = []
+        self._splashes = []                # 리프 타격 (화면 점, 반지름, 시작 시각, 판정 문구)
+        self._splash_areas = []
         self._sparkle_timer = QTimer(self)
         self._sparkle_timer.setInterval(33)
         self._sparkle_timer.timeout.connect(
-            lambda: [self.update(r) for r in self._sparkle_areas])
+            lambda: [self.update(r) for r in self._sparkle_areas + self._splash_areas])
 
     # ── 기하 ─────────────────────────────────────────────────────
     def resizeEvent(self, e):
@@ -431,7 +434,52 @@ class Stage(QWidget):
                 sparkle.append((self._faces(midi, midi in pressed)[1], midi))
         if not self.riff.show_notes:
             self._draw_numbers(p)
+        self._draw_splashes(p)
         self._draw_sparkles(p, sparkle)
+
+    def splash(self, label, x):
+        """리프 노드를 맞힌 자리(판정선)에 스플래시 + 판정 문구."""
+        kw = self.piano._geometry()[3]
+        a, b = self._xf.map(QPointF(x - kw / 2, self._lane_h)), self._xf.map(QPointF(x + kw / 2, self._lane_h))
+        radius = max(14.0, (b.x() - a.x()) * 0.6)
+        self._splashes.append(((a + b) / 2, radius, time.monotonic(), label))
+        self._splash_areas.append(self._splash_rect((a + b) / 2, radius))
+        self.update(self._splash_areas[-1])
+        if not self._sparkle_timer.isActive():
+            self._sparkle_timer.start()
+
+    @staticmethod
+    def _splash_rect(c, radius):
+        r = int(max(radius * 1.7, 44))
+        return QRectF(c.x() - r, c.y() - r, 2 * r, 2 * r).toAlignedRect()
+
+    def _draw_splashes(self, p):
+        """커지며 옅어지는 링 + 튀는 점 6개 + 가운데 작은 판정 문구."""
+        p.resetTransform()
+        now = time.monotonic()
+        self._splashes = [s for s in self._splashes if now - s[2] < SPLASH_LIFE]
+        self._splash_areas = [self._splash_rect(c, r) for c, r, _, _ in self._splashes]
+        font = QFont(T.FONT_SANS_EN)
+        font.setPixelSize(12)
+        font.setBold(True)
+        p.setFont(font)
+        for c, radius, start, label in self._splashes:
+            u = (now - start) / SPLASH_LIFE
+            color = QColor(TONE_ROOT).lighter(170) if label == "PERFECT" else QColor(255, 255, 255)
+            color.setAlphaF(1 - u)
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.setPen(QPen(color, 3 * (1 - u) + 0.5))
+            p.drawEllipse(c, radius * (0.4 + 0.8 * u), radius * (0.4 + 0.8 * u) * 0.45)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(color)
+            for k in range(6):
+                angle = math.pi * (k / 3 + 1 / 6)
+                d = radius * (0.3 + 1.1 * u)
+                p.drawEllipse(c + QPointF(math.cos(angle) * d, math.sin(angle) * d * 0.45 - 6 * u), 2.5 * (1 - u), 2.5 * (1 - u))
+            text = QColor(color)
+            text.setAlphaF(min(1.0, 2.5 * (1 - u)))
+            p.setPen(text)
+            p.drawText(QRectF(c.x() - 40, c.y() - radius * 0.7 - 10 - 8 * u, 80, 20), Qt.AlignmentFlag.AlignCenter, label)
 
     def _draw_numbers(self, p):
         """건반 윗면 앞쪽에 곡 스케일 번호. 지금 코드 근음은 진한 파란 원 안에 흰 숫자."""
@@ -487,9 +535,9 @@ class Stage(QWidget):
                     p.setPen(QPen(color, width, cap=Qt.PenCapStyle.RoundCap))
                     p.drawLine(c - QPointF(arm, 0), c + QPointF(arm, 0))
                     p.drawLine(c - QPointF(0, arm), c + QPointF(0, arm))
-        if self._sparkle_areas and not self._sparkle_timer.isActive():
+        if (self._sparkle_areas or self._splash_areas) and not self._sparkle_timer.isActive():
             self._sparkle_timer.start()
-        elif not self._sparkle_areas:
+        elif not (self._sparkle_areas or self._splash_areas):
             self._sparkle_timer.stop()
 
     # ── 마우스: 역변환 → 평평한 건반 좌표 ─────────────────────────

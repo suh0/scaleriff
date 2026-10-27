@@ -5,6 +5,9 @@ from PyQt6.QtWidgets import QWidget
 
 from gui.widgets.piano import MIDI_LOW, MIDI_HIGH, _is_white
 
+PERFECT_SEC = 0.06   # 이 안이면 PERFECT
+HIT_SEC = 0.18       # 이 안이면 EARLY/LATE, 밖이면 판정 안 함
+
 
 class FallingNotes(QWidget):
     def __init__(self, piano, parent=None):
@@ -17,6 +20,7 @@ class FallingNotes(QWidget):
         self._beat_grid = []
         self._chord_grid = []
         self._loops = []
+        self._hit = set()                  # 맞힌 노드 회차 (시각, 음)
         self.show_notes = False            # 리프모드에서만 노드 낙하
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self.hide()                        # 화면엔 Stage가 그림
@@ -27,9 +31,12 @@ class FallingNotes(QWidget):
         self._beat = beat_sec
         self._beat_grid = list(beat_grid)
         self._chord_grid = list(chord_grid)
+        self._hit = set()
         self.update()
 
     def set_position(self, sec, loops=()):
+        if sec < self._sec - 0.05:         # 시킹·루프 되감기 → 다시 올 노드의 판정 기록 지움
+            self._hit = {h for h in self._hit if h[0] < sec}
         self._sec = sec
         self._loops = loops
         self.update()
@@ -62,37 +69,68 @@ class FallingNotes(QWidget):
         return [self.height() * (1 - (when - self._sec) / self._lead)
                 for when in sorted(times) if self._sec <= when <= self._sec + self._lead]
 
+    def _occurrences(self, when, duration, since):
+        """음 하나의 회차 시각들(since 이후 끝나는 것) — 루프 중이면 루프 안 음만 반복 회차로 펼친다."""
+        loop = next(((start, end) for start, end in self._loops
+                     if start <= self._sec < end), None)
+        if not loop:
+            return [when], duration
+        start, end = loop
+        if not start <= when < end:
+            return [], duration
+        duration = min(duration, end - when)
+        length = end - start
+        when += max(0, int((since - when) // length)) * length
+        times = []
+        while when <= self._sec + self._lead:
+            if when + duration > since:
+                times.append(when)
+            when += length
+        return times, duration
+
+    def _x(self, midi):
+        whites, x0, _, kw, _ = self.piano._geometry()
+        white = midi if _is_white(midi) else midi - 1
+        x = self.piano._wx(whites.index(white), whites, x0, kw)
+        return x + (kw / 2 if _is_white(midi) else kw)
+
+    def judge(self, midi, sec):
+        """누른 음을 가장 가까운 같은 음 노드와 맞춰 판정 → (문구, 평면 x) 또는 None. 맞힌 노드는 사라진다."""
+        if not self.show_notes or not MIDI_LOW <= midi <= MIDI_HIGH:
+            return None
+        best = None
+        for when, m, _, _ in self._events:
+            if m != midi:
+                continue
+            for t in self._occurrences(when, 0.0, sec - HIT_SEC)[0]:
+                key = (round(t, 3), midi)
+                if abs(t - sec) <= HIT_SEC and key not in self._hit and (
+                        best is None or abs(t - sec) < abs(best[0] - sec)):
+                    best = (t, key)
+        if best is None:
+            return None
+        self._hit.add(best[1])
+        dt = sec - best[0]
+        label = "PERFECT" if abs(dt) <= PERFECT_SEC else ("EARLY" if dt < 0 else "LATE")
+        return label, self._x(midi)
+
     def _nodes(self):
         geo = self.piano._geometry()
         if not self.show_notes or not geo or self._lead <= 0:
             return []
-        whites, x0, _, kw, _ = geo
-        loop = next(((start, end) for start, end in self._loops
-                     if start <= self._sec < end), None)
+        kw = geo[3]
         nodes = []
         for when, midi, color, duration in self._events:
             if not MIDI_LOW <= midi <= MIDI_HIGH:
                 continue
-            times = [when]
-            if loop:
-                start, end = loop
-                if not start <= when < end:
-                    continue
-                duration = min(duration, end - when)
-                length = end - start
-                when += max(0, int((self._sec - when) // length)) * length
-                times = []
-                while when <= self._sec + self._lead:
-                    if when + duration > self._sec:
-                        times.append(when)
-                    when += length
-            white = midi if _is_white(midi) else midi - 1
-            x = self.piano._wx(whites.index(white), whites, x0, kw)
-            x += kw / 2 if _is_white(midi) else kw
+            times, duration = self._occurrences(when, duration, self._sec)
+            if not times:
+                continue
+            x = self._x(midi)
             size = kw * (0.8 if _is_white(midi) else 0.5)
             for when in times:
                 remaining = when - self._sec
-                if when + duration > self._sec and remaining <= self._lead:
+                if when + duration > self._sec and remaining <= self._lead                         and (round(when, 3), midi) not in self._hit:
                     speed = self.height() / self._lead
                     length = duration * speed
                     bottom = self.height() - remaining * speed
