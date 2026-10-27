@@ -28,7 +28,7 @@ except Exception:
 
 _ASSETS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets")
 _LOGO = os.path.join(_ASSETS, "scaleriff_logo.svg")
-_FORMATS = "YouTube 링크 · MP3, WAV, M4A, FLAC, OGG · 저장된 세션 JSON"
+_FORMATS = "YouTube 링크 · MP3, WAV, M4A, FLAC, OGG · JSON"
 
 ONBOARD_CARDS = [
     ("좋아하는 곡에서 시작하세요", "링크나 오디오 파일을 넣으면 코드·키·박자를 분석해요.\n분석이 끝나면 박자와 코드를 직접 확인할 수 있어요."),
@@ -192,7 +192,8 @@ class LinkScreen(QWidget):
         row.setSpacing(10)
         row.addWidget(_icon_label("music.svg", 20))
         self.url_edit = QLineEdit()
-        self.url_edit.setPlaceholderText("곡 링크 또는 오디오·세션 파일 경로")
+        self.url_edit.setPlaceholderText(_FORMATS)
+        self.url_edit.setToolTip(_FORMATS)   # 좁은 창에서 안내문구가 잘려도 전체 확인
         self.url_edit.setAccessibleName("곡 링크 또는 파일 경로")
         self.url_edit.setStyleSheet(
             f"QLineEdit{{background:transparent;border:none;color:{T.TEXT_PRIMARY};"
@@ -228,7 +229,7 @@ class LinkScreen(QWidget):
         self.save_label.setTextFormat(Qt.TextFormat.PlainText)
         self.save_label.setStyleSheet(f"color:{T.TEXT_MUTED};font-size:13px;padding-left:4px;")
         lay.addWidget(self.save_label)
-        self.input_hint = QLabel(_FORMATS)   # 빈 입력 시 안내로 바뀜
+        self.input_hint = QLabel()   # 빈 입력 안내용(평소엔 비움 — 형식은 입력창 안내문구)
         self.input_hint.setWordWrap(True)
         self.input_hint.setStyleSheet(f"color:{T.TEXT_MUTED};font-size:13px;padding-left:4px;")
         lay.addWidget(self.input_hint)

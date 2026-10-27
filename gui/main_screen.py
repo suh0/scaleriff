@@ -156,10 +156,10 @@ class MainScreen(QWidget):
         self.play_btn.setAccessibleName("재생")
         self.play_btn.setToolTip("재생 (스페이스)")
         self.play_btn.setStyleSheet(
-            "QPushButton{background:rgba(255,255,255,0.10);color:rgba(255,255,255,0.55);"
-            "border:2px solid rgba(255,255,255,0.35);border-radius:56px;font-size:44px;padding:0 0 0 8px;"
+            "QPushButton{background:transparent;color:rgba(255,255,255,0.55);"
+            "border:none;font-size:44px;padding:0 0 0 8px;"
             "min-width:108px;max-width:108px;min-height:108px;max-height:108px;}"
-            "QPushButton:hover{background:rgba(255,255,255,0.18);color:rgba(255,255,255,0.8);}")
+            "QPushButton:hover{background:transparent;color:rgba(255,255,255,0.8);}")
         self.play_btn.clicked.connect(self._toggle_play)
         root.addWidget(self.play_btn, 0, 0, Qt.AlignmentFlag.AlignCenter)
 
