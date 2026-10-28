@@ -467,6 +467,12 @@ def _onsets_ok(beats, end) -> bool:
             and not any(_off(a) and _off(b) for a, b in zip(beats, beats[1:])))
 
 
+def _step(a, b, note_set) -> bool:
+    """스케일 한 칸 이동 — 1~3반음이고 사이에 그 스케일 음이 없음(펜타토닉 단3도 포함)."""
+    lo, hi = sorted((a, b))
+    return 0 < hi - lo <= 3 and not any(x % 12 in note_set for x in range(lo + 1, hi))
+
+
 def _fill_onsets(beats, end) -> list:
     """규칙 위반 보정 — 4박 공백 가운데·엇박 연속 사이에 정박 추가(정박은 두 규칙을 깨지 않음)."""
     beats = sorted(beats)
@@ -495,7 +501,10 @@ def bake_progression(timeline, model, start_sec, end_sec, goal="third", variant=
     count=(lo, hi): the whole selection (= one riff) gets lo..hi notes (chord entries included,
     so never fewer than the chord count) instead of density.
     Riff rules: 8th-note grid, gaps < 4 beats, no two offbeats in a row, adjacent leaps < 12
-    semitones, no pitch three times in a row. If 20 draws miss the onset rules, downbeats are
+    semitones, no pitch three times in a row; then (soft, skipped when nothing fits) non-chord
+    tones entered and left by step, a leap of a 4th or more followed by a step back, a
+    single highest note, no repeated pitch, and no target pitch class right before a landing.
+    Chord tones are weighted up (downbeat x4, offbeat x1.8). If 20 draws miss the onset rules, downbeats are
     added (the count may then exceed hi).
     Call during preparation or an explicit user action, never from a playback tick.
     """
@@ -556,6 +565,7 @@ def bake_progression(timeline, model, start_sec, end_sec, goal="third", variant=
         onsets = [t for t in onsets if any(a <= t < b for _, a, b in parts)]
     shape = rng.choice(("arch", "asc", "desc", "wave"))
     prev_midi, prev2, prev_tokens, previous_end = 71, None, [BOS, BOS], b0
+    prev_nct, peak = False, None
     forced = [_landing_pc(next(p for p in parts if p[1] <= t < p[2])[0], goal)
               if goal in ("third", "seventh", "root") and (
                   k == len(onsets) - 1 or (t in mandatory and t > start_sec)) else None
@@ -571,13 +581,22 @@ def bake_progression(timeline, model, start_sec, end_sec, goal="third", variant=
         if landing_kind:
             pool = (chord_pool or pool) if goal == "chord_tone" or target is None else [
                 m for m in pool if m % 12 == target]
-        if i:   # 인접 도약 1옥타브 미만, 같은 음 3연속 금지(못 지키면 3연속부터 푼다)
-            # 뒤따르는 착지음(목표 고정)과 합쳐 3연속이 되는 음도 미리 피한다
+        if i:   # 우선순위 규칙 — pool을 비우지 않을 때만 적용(못 지키면 그 규칙만 건너뜀)
             f1, f2 = forced[i + 1], forced[i + 2]
-            near = [m for m in pool if abs(m - prev_midi) < 12]
-            pool = [m for m in near if not m == prev_midi == prev2
-                    and not (m % 12 == f1 and (m == prev_midi or f1 == f2))] or near or pool
-        gap =max(0, int(round((beat - previous_end) * 4)))
+            cts, ns = seg.chord_tones(), seg.note_set
+            leap = prev_midi - prev2 if prev2 is not None and abs(prev_midi - prev2) >= 5 else 0
+            for keep in (
+                lambda m: abs(m - prev_midi) < 12,                          # 인접 도약 1옥타브 미만
+                lambda m: not m == prev_midi == prev2 and m % 12 != f1,     # 같은 음 3연속, 착지 직전엔 목표음 피함
+                lambda m: _step(prev_midi, m, ns) or (                      # 비화성음은 순차 진입·해결
+                    not prev_nct and m % 12 in cts),
+                lambda m: not leap or (_step(prev_midi, m, ns)              # 4도 이상 도약 뒤 반대 순차
+                                       and (m - prev_midi) * leap < 0),
+                lambda m: m != peak,                                        # 최고음은 한 번만
+                lambda m: m != prev_midi,                                   # 같은 음 반복 금지
+            ):
+                pool = [m for m in pool if keep(m)] or pool
+        gap = max(0, int(round((beat - previous_end) * 4)))
         prev_tokens.extend([REST] * min(2, gap))
         prior = {}
         if trained:
@@ -593,8 +612,8 @@ def bake_progression(timeline, model, start_sec, end_sec, goal="third", variant=
             weight /= 1 + abs(midi - contour) * .15
             if midi == prev_midi:
                 weight *= .2
-            if abs(beat - round(beat)) < 1e-7 and midi % 12 in seg.chord_tones():
-                weight *= 2.5
+            if midi % 12 in seg.chord_tones():                         # 코드톤 선호(정박 > 엇박)
+                weight *= 4 if abs(beat - round(beat)) < 1e-7 else 1.8
             weights.append(weight)
         midi = rng.choices(pool, weights=weights)[0]
         next_sec = onsets[i + 1] if i + 1 < len(onsets) else end_sec
@@ -608,6 +627,8 @@ def bake_progression(timeline, model, start_sec, end_sec, goal="third", variant=
                                        "kind": landing_kind, "target_pc": target,
                                        "supported": target is not None, "actual_pc": midi % 12})
         prev2, prev_midi = prev_midi, midi
+        prev_nct = midi % 12 not in seg.chord_tones()
+        peak = midi if peak is None else max(peak, midi)
         prev_tokens.append(onset_token((midi - seg.chord.root) % 12))
         prev_tokens.extend([HOLD] * min(2, max(0, int(timeline.beats_between(sec, note_end) * 4) - 1)))
         previous_end = timeline.beat_at(note_end)

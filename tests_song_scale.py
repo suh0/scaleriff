@@ -78,8 +78,25 @@ class SongScaleTest(unittest.TestCase):
         tl.apply_song_scale(song_scale_options(9, "minor")[1])
         for goal, count in ((None, None), ("third", (3, 3)), ("chord_tone", (4, 8))):
             for variant in range(10):
-                notes = generate.bake_progression(tl, None, 0, 4, goal, variant, count=count)["notes"]
+                result = generate.bake_progression(tl, None, 0, 4, goal, variant, count=count)
+                notes = result["notes"]
                 moved = generate.transpose_riff(tl, notes, 0, 4, goal)
+                # 이론 규칙(착지음은 목표 고정이라 제외): 비화성음 순차·도약 후 반대 순차·정점 반복 금지
+                land = {x["at_sec"] for x in result["landings"]}
+                m = [n["midi"] for n in notes]
+                for i in range(1, len(m)):
+                    if notes[i]["start_sec"] in land:
+                        continue
+                    seg, prev = tl.segment_at(notes[i]["start_sec"]), tl.segment_at(notes[i - 1]["start_sec"])
+                    step = generate._step(m[i - 1], m[i], seg.note_set)
+                    if m[i] % 12 not in seg.chord_tones() or m[i - 1] % 12 not in prev.chord_tones():
+                        self.assertTrue(step, (goal, variant, m))
+                    if i >= 2 and abs(m[i - 1] - m[i - 2]) >= 5:
+                        self.assertTrue(step and (m[i] - m[i - 1]) * (m[i - 1] - m[i - 2]) < 0, (goal, variant, m))
+                    self.assertNotEqual(m[i], max(m[:i]), (goal, variant, m))
+                    self.assertNotEqual(m[i], m[i - 1], (goal, variant, m))           # 같은 음 반복 금지
+                    if i + 1 < len(m) and notes[i + 1]["start_sec"] in land:          # 착지 직전 ≠ 목표음
+                        self.assertNotEqual(m[i] % 12, m[i + 1] % 12, (goal, variant, m))
                 for ns in (notes, moved):
                     beats = [tl.beat_at(n["start_sec"]) - tl.beat_at(ns[0]["start_sec"]) for n in ns]
                     midis = [n["midi"] for n in ns]

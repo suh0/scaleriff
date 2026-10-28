@@ -267,8 +267,10 @@ def main():
     # 리프연습 / 자유연습 → 리프 뷰 표시 연동
     ms._select_practice("riff")
     assert ms._mode == "practice" and ms.riff.show_notes and not ms.stage.isHidden()
+    assert not ms.riff_listen.isHidden() and not ms.riff_listen.isChecked(), "리프모드에 리프듣기(기본 꺼짐)"
     ms._select_practice("free")
     assert ms._mode == "guide" and not ms.riff.show_notes and not ms.stage.isHidden()
+    assert ms.riff_listen.isHidden(), "리프모드 밖에선 리프듣기 숨김"
 
     # ML 리프: 스케일 '종류당 1개' (코드 등장마다가 아님, §8) — 코드별 모드 타임라인 기준
     from ml.generate import bake_examples as _bake_ml
@@ -318,6 +320,22 @@ def main():
     # §2 리프가 곡에 함께 구워짐(재생 헤드 동기) — 일시정지/시킹과 함께 동작
     ms._select_practice("riff")     # 리프연습 → 이벤트 생성
     assert ms._riff_events and ms._riff_events == sorted(ms._riff_events), "리프 이벤트 정렬"
+    # 리프듣기: 시킹 후 커서는 그 위치부터, 켜져 있을 때만 재생 헤드에 맞춰 소리
+    mid, end = tl.segments[1].start_sec, ms._riff_times[-1]
+    ms._seek_to(mid)
+    assert all(t < mid for t in ms._riff_times[:ms._riff_idx]), "리프 커서 시킹(앞)"
+    assert all(t >= mid for t in ms._riff_times[ms._riff_idx:]), "리프 커서 시킹(뒤)"
+    played = []
+    ms.note_player.play_note = lambda midi, *a: played.append(midi)
+    ms.playhead.is_playing = lambda: True
+    ms._on_tick(end)
+    assert not played, "리프듣기 꺼짐인데 리프 소리"
+    ms._seek_to(mid)
+    ms.riff_listen.setChecked(True)
+    ms._on_tick(end)
+    assert played == [m for t, m in ms._riff_events if mid <= t <= end], "리프듣기 음 누락"
+    del ms.note_player.play_note, ms.playhead.is_playing
+    ms.riff_listen.setChecked(False)
     ms._select_practice("free")     # 자유연습
 
     # §1 수동 코드 수정: 박자 조정 화면 코드 목록에서 바꾸면 스케일·리프 재계산

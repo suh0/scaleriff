@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import bisect
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QPushButton,
@@ -58,6 +59,9 @@ class MainScreen(QWidget):
         self._ml_model = load_model()      # 부트스트랩/학습 모델(없으면 규칙 폴백)
         # 재생 헤드에 동기화된 리프 이벤트(절대초, midi) — 일시정지/시킹과 함께 동작(§2)
         self._riff_events: list[tuple[float, int]] = []
+        self._riff_times: list[float] = []
+        self._riff_durations: list[float] = []
+        self._riff_idx = 0                 # 리프듣기 재생 커서
         self._held_keys = set()
         self._input_volume = .8
         self._audio_volume = .8
@@ -136,6 +140,11 @@ class MainScreen(QWidget):
         self.riff_btn.setStyleSheet(T.qss_ghost_btn())
         self.riff_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         rv.addWidget(self.riff_btn, 0, Qt.AlignmentFlag.AlignRight)
+        self.riff_listen = QCheckBox("리프듣기")    # 리프모드 중에만 보임 — 낙하 리프 음도 소리로
+        self.riff_listen.setStyleSheet(f"QCheckBox{{color:{T.TEXT_BODY};font-size:13px;}}")
+        self.riff_listen.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.riff_listen.hide()
+        rv.addWidget(self.riff_listen, 0, Qt.AlignmentFlag.AlignRight)
         root.addWidget(right, 0, 0, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignRight)
 
         # ── 가운데 재생 아이콘: 멈춤일 때만 반투명하게 ──
@@ -275,9 +284,10 @@ class MainScreen(QWidget):
     def _build_riff_events(self):
         """모든 구간의 리프 음을 (절대초, midi)로 펼쳐 정렬. 곡 타임라인에 '구워' 둔다.
 
-        낙하 노드 표시용 — 리프 음 자체는 재생하지 않는다.
+        낙하 노드 표시용. 리프듣기를 켜면 재생 헤드에 맞춰 리프 음도 소리 낸다.
         """
         ev: list[tuple[float, int]] = []
+        durations = {}
         falling = []
         if self.tl:
             beat = self.tl.beat_sec()
@@ -286,6 +296,7 @@ class MainScreen(QWidget):
                     onset = self.tl.beat_at(seg.start_sec) + n["beat_pos"]
                     when = self.tl.time_at_beat(onset)
                     ev.append((when, n["midi"]))
+                    durations[ev[-1]] = self.tl.time_at_beat(onset + n.get("dur_beats", .5)) - when
                     pc = n["midi"] % 12
                     if pc in seg.chord_tones():
                         color = T.BADGE_ROOT if pc == seg.chord.root % 12 else T.BADGE_CHORD
@@ -295,6 +306,9 @@ class MainScreen(QWidget):
                                     self.tl.time_at_beat(onset + n.get("dur_beats", .5)) - when))
             ev.sort(key=lambda e: e[0])
         self._riff_events = ev
+        self._riff_times = [t for t, _ in ev]
+        self._riff_durations = [durations[e] for e in ev]
+        self._riff_idx = bisect.bisect_left(self._riff_times, self.playhead.position_sec() if self.playhead else 0.0)
         self.riff.set_events(falling, self.tl.beat_sec() if self.tl else 0.5,
                              self.tl.beat_grid() if self.tl else [],
                              [s.start_sec for s in self.tl.segments] if self.tl else [],
@@ -340,6 +354,7 @@ class MainScreen(QWidget):
         self._mode = "practice" if mode == "riff" else "guide"
         practice = (self._mode == "practice")
         self.riff_btn.setText("리프모드 해제" if practice else "리프모드")
+        self.riff_listen.setVisible(practice)
         self.riff.show_notes = practice
         if practice:
             self._build_riff_events()
@@ -392,6 +407,7 @@ class MainScreen(QWidget):
             finally:
                 self._seeking = False
             self._render_at(sec)
+            self._riff_idx = bisect.bisect_left(self._riff_times, sec)   # 과거 음 몰아 재생 방지
 
     def _on_tick(self, sec: float):
         self.scrub.set_position(sec)
@@ -401,6 +417,14 @@ class MainScreen(QWidget):
             self._render_at(sec)
             return
         self._render_at(sec + SYNC_LOOKAHEAD_SEC)   # 구간 변경 시 무거운 갱신
+        # 리프 커서는 항상 따라가고, 리프듣기가 켜져 있을 때만 소리 낸다(도중에 켜도 몰아 재생 없음)
+        listen = (self._mode == "practice" and self.riff_listen.isChecked()
+                  and self.playhead is not None and self.playhead.is_playing())
+        while self._riff_idx < len(self._riff_times) and self._riff_times[self._riff_idx] <= sec:
+            if listen:
+                self.note_player.play_note(self._riff_events[self._riff_idx][1],
+                                           self._riff_durations[self._riff_idx], 80)
+            self._riff_idx += 1
 
     # ── 상태 → UI 렌더 (구간 변경 시) ────────────────────────────
     def _render_at(self, sec: float):

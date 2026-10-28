@@ -58,3 +58,8 @@ Thumbs.db
 .pytest_cache/
 .coverage
 htmlcov/
+
+# ── 포스터 중간 캡처 (capture_*.py로 재생성) ──────────────────
+poster/shot_*.png
+poster/crop_*.png
+poster/hero_full.png

@@ -13,14 +13,17 @@ librosa>=0.10
 soundfile>=0.12
 audioread>=3.0
 
-# (선택·현재 환경 미검증) madmom — 학습 모델 기반 코드 인식 + 비트·다운비트 트래킹.
-#   설치되면 get_backend()가 자동으로 MadmomBackend 사용. 정확도는 별도 평가 필요.
+# (선택) madmom — 학습 모델 기반 코드 인식 + 비트·다운비트 트래킹.
+#   설치되면 get_backend()가 자동으로 madmom 사용(분석이 librosa보다 수 배 느림).
 #   미설치 시 librosa 크로마 백엔드로 폴백(코드 변경 불필요).
 #   madmom 0.16.1은 옛 numpy/Python API를 써서 셰임(ingest/_madmom_compat.py)으로 보정.
-#   과거 Windows 설치 메모(Python 3.11, numpy 2.0; 현재 Python 3.12 검증 대상 아님):
-#     1) "Microsoft C++ Build Tools"(MSVC) 설치
-#     2) pip install "setuptools<81" wheel Cython   # pkg_resources 제공 + 빌드 도구
-#     3) MSVC 환경에서:  set DISTUTILS_USE_SDK=1 && pip install madmom --no-build-isolation
+#   Windows 설치(Python 3.12, numpy 2.0 확인 — PyPI 휠 없음, 소스 빌드):
+#     1) "Microsoft C++ Build Tools"(MSVC) 설치 → vcvars64.bat 실행한 셸에서
+#     2) set DISTUTILS_USE_SDK=1 && set MSSdk=1
+#     3) pip install "setuptools<81" wheel Cython   # pkg_resources 제공 + 빌드 도구
+#     4) pip install madmom==0.16.1 --no-build-isolation   (uv 환경: uv pip install --python .venv\Scripts\python.exe ...)
+#     5) madmom/features/downbeats.py의 np.argmax(np.asarray(results)[:, 1])
+#        → int(np.argmax([r[1] for r in results]))  (numpy 2.0 불균일 배열 거부, 재설치마다)
 #   setuptools<81 핀 필수(81+는 pkg_resources 제거 → madmom import 실패).
 # madmom==0.16.1
 setuptools<81
