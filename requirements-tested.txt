@@ -1,10 +1,11 @@
-# Windows / Python 3.12 verified versions. Use as pip constraints, not an install target.
+# Windows / Python 3.12 verified versions (uv pip freeze of .venv incl. madmom build tools). Use as constraints: setup.bat
 audioread==3.1.0
 brotli==1.2.0
 certifi==2026.7.22
 cffi==2.1.1
 charset-normalizer==3.5.2
 cloudpickle==3.1.2
+cython==3.3.0
 decorator==5.3.1
 idna==3.20
 imageio-ffmpeg==0.6.0
@@ -12,6 +13,7 @@ joblib==1.6.0
 lazy-loader==0.6
 librosa==0.11.0
 llvmlite==0.50.0
+madmom==0.16.1
 mido==1.3.3
 msgpack==1.2.3
 mutagen==1.48.1
@@ -23,9 +25,9 @@ platformdirs==4.12.3
 pooch==1.9.0
 pycparser==3.0
 pycryptodomex==3.24.0
-PyQt6==6.11.0
-PyQt6-Qt6==6.11.2
-PyQt6_sip==13.13.0
+pyqt6==6.11.0
+pyqt6-qt6==6.11.2
+pyqt6-sip==13.13.0
 python-rtmidi==1.5.8
 requests==2.34.2
 scikit-learn==1.9.1
@@ -34,8 +36,9 @@ setuptools==80.10.2
 soundfile==0.14.0
 soxr==1.1.0
 threadpoolctl==3.7.0
-typing_extensions==4.16.0
+typing-extensions==4.16.0
 urllib3==2.8.0
 websockets==17.2
+wheel==0.48.0
 yt-dlp==2026.8.19
 yt-dlp-ejs==0.8.0

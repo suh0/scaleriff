@@ -10,20 +10,24 @@
 ## 실행
 
 ```powershell
-py -3.12 -m venv .venv
-& ./.venv/Scripts/python.exe -m pip install -r requirements.txt -c requirements-tested.txt
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"   # uv 처음 한 번(Python 3.12도 uv가 받음)
+./setup.bat                                   # .venv + 의존성(requirements-tested.txt 고정), 다시 실행해도 됨
 & ./.venv/Scripts/python.exe main.py
 ```
 
+- madmom(학습 모델 비트·코드 인식, librosa보다 정확하지만 분석이 수 배 느림): Visual Studio Build Tools의 C++ 빌드 도구가 있으면 `setup.bat`이 빌드·패치, 없으면 librosa로 동작. 건너뛰기: `set SCALERIFF_NO_MADMOM=1`.
+- YouTube 링크 입력은 Deno 필요(`winget install DenoLand.Deno`), 로컬 음원은 불필요.
+- 리프 모델 `models/markov.json`은 저장소에 포함 — [Weimar Jazz Database](https://jazzomat.hfm-weimar.de)(Jazzomat Research Project, HfM Weimar)에서 만든 통계표로, 원본과 같은 [ODbL 1.0](https://opendatacommons.org/licenses/odbl/1-0/)을 따른다. 재학습은 `ml/train/`.
+
 검사: `$env:PYTHONUTF8='1'; $env:QT_QPA_PLATFORM='offscreen'; & ./.venv/Scripts/python.exe tools/run_checks.py` (`--network`: YouTube 포함)
-평가: `python -m ml.evaluate`, `python tools/evaluate_music.py` → 보고서는 `cache/`에 생성.
+평가: `& ./.venv/Scripts/python.exe -m ml.evaluate`, `& ./.venv/Scripts/python.exe tools/evaluate_music.py`(librosa 고정) → 보고서는 `cache/`에 생성.
 
 ## 사용 흐름과 기술
 
 | 단계 | 기능 | 기술 · 모듈 |
 |---|---|---|
 | 1. 곡 입력 | YouTube 링크 / 로컬 오디오 / 세션 JSON, 최근 저장경로, 세션 캐시 재사용 | yt-dlp(+Deno), imageio-ffmpeg · `ingest/audio_source`, `gui/link_screen` |
-| 2. 분석 | 비트·다운비트·키·코드(장/단 3화음) 추정, 별도 프로세스·취소 | librosa(madmom 선택) · `ingest/mir_extract`, `analyze/*`, `gui/analysis_job` |
+| 2. 분석 | 비트·다운비트·키·코드(장/단 3화음) 추정, 별도 프로세스·취소 | madmom(설치 시) → librosa 폴백 · `ingest/mir_extract`, `analyze/*`, `gui/analysis_job` |
 | 3. 박자 조정 | 한 화면 세로 3단계(코드시작 → 코드종료(끝 핸들, 마디선 스냅, 이후는 재생만·파형 흐리게) → 예비박 1~N마디), 다음 단계는 흐리게·비활성, Enter 다음·Backspace 이전·이전 단계 조작 시 아랫단계 재비활성. 상단 박자·BPM·자동추정값 초기화(BPM Enter 시 커서 해제). 초기 격자 = 보정 비트(±8박 국소 회귀, 점선과 동일), BPM 지정 시 균등 격자, 비트 자석 스냅, 1단계 마디선 드래그 = 음원을 끌기(선은 제자리, 창 밖까지), 끝 핸들은 놓으면 창이 끝선 기준으로 이동, 격자는 음원 앞뒤 5초 이내, 파형은 곡별 크기 정규화(상위 0.5% 진폭), 재생은 스페이스(1마디부터)·드래그 후 놓을 때(끄는 동안 정지), 재격자화 | QSoundEffect · `build/real_builder`, `gui/beat_screen` |
 | 4. 코드 편집 | 학습 설정의 '코드 수정' 창: 마디 내 다중 코드, 시간 기반 수정, 키 변경 — 확인=반영 후 키 재추정(직접 고른 키 제외, 나란한조는 으뜸화음 길이로)·학습 설정 새로고침, 취소=되돌림 | `Timeline.chord_overrides` · `gui/beat_screen` |
 | 5. 학습 설정 | 곡 전체 스케일 1개(펜타토닉·키 7음·블루스, 추천 = 코드톤 포함률 최고·펜타는 5%p 이내면 우선, 코드톤이 하나도 안 걸리는 코드가 있으면 비활성, 키 밖 코드는 로컬 스케일), 자유연습/착지음(1·3·7도·코드톤 중 곡 전체에서 가능한 것만), 코드당 음 개수(사용안함·고정·범위) | `Timeline.apply_song_scale`·`practice` · `gui/setup_screen` |

@@ -41,6 +41,7 @@ def main():
             audio.append(synth_chord(chord_midis[name], BAR))
     y = np.concatenate(audio)
     path = os.path.join(os.path.dirname(__file__), "cache", "synth_test.wav")
+    os.makedirs(os.path.dirname(path), exist_ok=True)   # 새 클론엔 cache/ 없음
     sf.write(path, y, SR)
     print(f"synth: {len(prog)*2} bars, {len(y)/SR:.1f}s -> {path}")
 

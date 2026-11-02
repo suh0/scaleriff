@@ -10,10 +10,10 @@ import 시점에 깨진다. 여기서 그 별칭만 복원한다(앱의 numpy 2.
 pkg_resources(madmom __init__이 사용)는 setuptools<81에서 제공되므로 별도 처리
 불필요(requirements.txt에 핀 고정). 설치/빌드 실패 시 HAS_MADMOM=False로 폴백.
 
-추가 소스 패치(madmom 재설치 시 재적용 필요):
-  venv/.../madmom/features/downbeats.py 의 DBNDownBeatTrackingProcessor.process —
+추가 소스 패치(setup.bat이 설치 때마다 적용):
+  .venv/.../madmom/features/downbeats.py 의 DBNDownBeatTrackingProcessor.process —
   `best = np.argmax(np.asarray(results)[:, 1])` 는 numpy 2.0에서 불균일 배열로
-  실패하므로 `best = int(np.argmax([r[1] for r in results]))` 로 교체했다.
+  실패하므로 `best = int(np.argmax([r[1] for r in results]))` 로 교체한다.
 """
 from __future__ import annotations
 

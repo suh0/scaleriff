@@ -1,32 +1,18 @@
-# 즉흥연주 트레이너 — Windows / Python 3.12 런타임 의존성
-# 검증 버전 제약: requirements-tested.txt. Markov 학습/평가도 같은 의존성 사용.
+# 즉흥연주 트레이너 — Windows / Python 3.12 런타임 의존성(코드가 직접 import하는 것만)
+# 설치는 setup.bat. 검증 버전 제약: requirements-tested.txt. Markov 학습/평가도 같은 의존성 사용.
 
 # GUI
 PyQt6>=6.6
 
-# 수치/신호처리
+# 수치 — madmom이 numpy 2.0 헤더로 빌드되므로 2.1 미만
 numpy>=1.24,<2.1
-scipy>=1.10
 
-# MIR (코드/키/BPM) — librosa 백엔드
+# MIR (코드/키/BPM) — librosa 백엔드(scipy·audioread 등은 librosa가 설치)
 librosa>=0.10
 soundfile>=0.12
-audioread>=3.0
 
-# (선택) madmom — 학습 모델 기반 코드 인식 + 비트·다운비트 트래킹.
-#   설치되면 get_backend()가 자동으로 madmom 사용(분석이 librosa보다 수 배 느림).
-#   미설치 시 librosa 크로마 백엔드로 폴백(코드 변경 불필요).
-#   madmom 0.16.1은 옛 numpy/Python API를 써서 셰임(ingest/_madmom_compat.py)으로 보정.
-#   Windows 설치(Python 3.12, numpy 2.0 확인 — PyPI 휠 없음, 소스 빌드):
-#     1) "Microsoft C++ Build Tools"(MSVC) 설치 → vcvars64.bat 실행한 셸에서
-#     2) set DISTUTILS_USE_SDK=1 && set MSSdk=1
-#     3) pip install "setuptools<81" wheel Cython   # pkg_resources 제공 + 빌드 도구
-#     4) pip install madmom==0.16.1 --no-build-isolation   (uv 환경: uv pip install --python .venv\Scripts\python.exe ...)
-#     5) madmom/features/downbeats.py의 np.argmax(np.asarray(results)[:, 1])
-#        → int(np.argmax([r[1] for r in results]))  (numpy 2.0 불균일 배열 거부, 재설치마다)
-#   setuptools<81 핀 필수(81+는 pkg_resources 제거 → madmom import 실패).
-# madmom==0.16.1
-setuptools<81
+# (선택) madmom 0.16.1 — 학습 모델 기반 코드·비트·다운비트. PyPI 휠이 없어 setup.bat이
+#   MSVC Build Tools가 있을 때만 소스 빌드 + numpy 2.0 패치까지 처리한다. 없으면 librosa 폴백.
 
 # 인제스션 (링크 → 오디오)
 yt-dlp[default]>=2026.8.19
