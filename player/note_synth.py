@@ -1,4 +1,4 @@
-"""사용자 연주음 신디 — 친 음(MIDI/마우스)을 피아노 음색으로 즉시 소리낸다.
+"""사용자 연주음 신디 — 친 음(MIDI/마우스)을 피아노 샘플(Salamander Grand Piano)로 즉시 소리낸다.
 
 저지연 재생을 위해 음마다 16-bit PCM WAV을 미리/지연 렌더링해 캐시하고,
 음/채널별 QSoundEffect로 재생하며 note-off와 페달로 음길이를 제어한다.
@@ -73,11 +73,21 @@ def render_click_wav(freq: float) -> str:
     return path
 
 
+_SAMPLES = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        "assets", "piano")   # tools/build_piano_samples.py 산출(21~108)
+
+
 def _render_note_wav(midi: int) -> str:
-    path = os.path.join(_CACHE, f"piano_v2_{midi}.wav")
+    """음별 WAV 캐시 — 피아노 샘플(FLAC)을 풀고, 88건반 밖 음만 합성한다."""
+    sample = os.path.join(_SAMPLES, f"{midi}.flac")
+    path = os.path.join(_CACHE, f"piano_v3_{midi}.wav")
     if os.path.exists(path):
         return path
     import soundfile as sf
+    if os.path.exists(sample):
+        y, sr = sf.read(sample, dtype="int16")
+        sf.write(path, y, sr, subtype="PCM_16")
+        return path
     y = _note_wave(_midi_to_freq(midi), NOTE_DUR, "piano")
     mx = float(np.max(np.abs(y))) or 1.0
     pcm = (y / mx * 0.75 * 32767).astype(np.int16)   # QSoundEffect는 PCM 선호

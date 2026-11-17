@@ -11,11 +11,11 @@ numpy>=1.24,<2.1
 librosa>=0.10
 soundfile>=0.12
 
-# (선택) madmom 0.16.1 — 학습 모델 기반 코드·비트·다운비트. PyPI 휠이 없어 setup.bat이
-#   MSVC Build Tools가 있을 때만 소스 빌드 + numpy 2.0 패치까지 처리한다. 없으면 librosa 폴백.
+# madmom 0.16.1 — 학습 모델 기반 코드·비트·다운비트. PyPI 휠이 없어 setup.bat이 동봉 휠
+#   (wheels/, numpy 2.0 패치 포함)로 설치한다. 휠이 없으면 MSVC 소스 빌드, 그것도 없으면 librosa 폴백.
 
-# 인제스션 (링크 → 오디오)
-yt-dlp[default]>=2026.8.19
+# 인제스션 (링크 → 오디오) — deno: YouTube 추출용 JS 런타임(.venv/Scripts/deno.exe, yt-dlp가 자동 탐지)
+yt-dlp[default,deno]>=2026.8.19
 # ffmpeg 바이너리 동봉 (시스템 ffmpeg 불필요) — yt-dlp 추출 + 압축오디오 디코딩
 imageio-ffmpeg>=0.4
 

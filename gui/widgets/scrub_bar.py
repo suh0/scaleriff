@@ -108,7 +108,7 @@ class ScrubBar(QWidget):
             p.drawRoundedRect(QRectF(1, track_y - 5, w - 2, track_h + 10), 7, 7)
         if self._hover_x is not None:
             seconds = int(self._x_to_sec(self._hover_x))
-            p.setFont(QFont(T.FONT_MONO, 9))
+            p.setFont(QFont(T.FONTS, 9))
             p.setPen(QColor(T.TEXT_PRIMARY))
             x = max(0, min(w - 60, self._hover_x - 30))
             p.drawText(QRectF(x, 0, 60, 22), Qt.AlignmentFlag.AlignCenter,

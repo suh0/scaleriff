@@ -78,8 +78,9 @@ class KeyEditTest(unittest.TestCase):
                         win.beat.key_box.setCurrentIndex(win.beat.key_box.findData(key))
                     win.beat.done_btn.click()
                 QTimer.singleShot(0, run)
-                win.setup.chord_btn.click()
+                win.main_screen.chordEditRequested.emit()   # 메인 설정의 '코드 수정'
             edit(["E", "A", "B7", "E", "A", "B7"])
+            self.assertIs(win.stack.currentWidget(), win.setup)   # 확인 → 학습 설정으로
             self.assertEqual(tl.key, "E major")
             self.assertIn("E 메이저", win.setup.scale_btns[0].text())
             self.assertTrue(all(not s.is_detour for s in tl.segments))

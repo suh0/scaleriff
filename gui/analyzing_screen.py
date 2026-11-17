@@ -146,7 +146,7 @@ class AnalyzingScreen(QWidget):
 
         self.title = QLabel("분석 중…")
         self.title.setStyleSheet(
-            f"color:{T.TEXT_PRIMARY};font-family:'{T.FONT_SANS}';"
+            f"color:{T.TEXT_PRIMARY};font-family:{T.FONT_CSS};"
             "font-size:24px;font-weight:700;")
         self.title.setAlignment(Qt.AlignmentFlag.AlignLeft)
         lay.addWidget(self.title)
@@ -170,7 +170,7 @@ class AnalyzingScreen(QWidget):
         for name, _ in _STEPS:
             sl = QLabel(f"대기   {name}")
             sl.setStyleSheet(
-                f"color:{T.TEXT_DIM};font-family:'{T.FONT_MONO}';font-size:12px;")
+                f"color:{T.TEXT_DIM};font-family:{T.FONT_CSS};font-size:12px;")
             steps_row.addWidget(sl)
             sl.setMinimumHeight(24)
             self._step_lbls.append(sl)
@@ -191,7 +191,7 @@ class AnalyzingScreen(QWidget):
         self.percent_label.setAlignment(Qt.AlignmentFlag.AlignRight |
                                         Qt.AlignmentFlag.AlignVCenter)
         self.percent_label.setStyleSheet(
-            f"color:{T.TEXT_PRIMARY};font-family:'{T.FONT_MONO}';font-size:20px;")
+            f"color:{T.TEXT_PRIMARY};font-family:{T.FONT_CSS};font-size:20px;")
         self.percent_label.setToolTip("예상 진행률 — 실제 분석 완료 시 100%")
         self._progress_wrap = QWidget()
         progress_row = QHBoxLayout(self._progress_wrap)
@@ -230,8 +230,8 @@ class AnalyzingScreen(QWidget):
 
     def showEvent(self, e):
         super().showEvent(e)
-        stagger([self.title, self.msg, self._steps_wrap, self._progress_wrap,
-                 self.bg_btn, self.cancel_btn])
+        stagger([(self.title, self.msg), self._steps_wrap, self._progress_wrap,
+                 (self.bg_btn, self.cancel_btn)])
 
     def start(self, build_fn, source):
         if self._worker is not None:
@@ -302,16 +302,16 @@ class AnalyzingScreen(QWidget):
             if pct >= end:          # 완료
                 sl.setText(f"완료   {name}")
                 sl.setStyleSheet(
-                    f"color:{T.TEXT_MUTED};font-family:'{T.FONT_MONO}';font-size:12px;")
+                    f"color:{T.TEXT_MUTED};font-family:{T.FONT_CSS};font-size:12px;")
             elif pct >= prev_end:   # 진행 중
                 sl.setText(f"진행   {name}")
                 sl.setStyleSheet(
-                    f"color:{T.BORDER_ACTIVE};font-family:'{T.FONT_MONO}';"
+                    f"color:{T.BORDER_ACTIVE};font-family:{T.FONT_CSS};"
                     "font-size:12px;font-weight:700;")
             else:                   # 대기
                 sl.setText(f"대기   {name}")
                 sl.setStyleSheet(
-                    f"color:{T.TEXT_DIM};font-family:'{T.FONT_MONO}';font-size:12px;")
+                    f"color:{T.TEXT_DIM};font-family:{T.FONT_CSS};font-size:12px;")
             prev_end = end
 
     def _render_progress(self):

@@ -34,6 +34,7 @@ data/
 *.mp3
 *.m4a
 *.flac
+!assets/piano/*.flac
 *.ogg
 *.opus
 *.webm
@@ -60,3 +61,7 @@ htmlcov/
 poster/shot_*.png
 poster/crop_*.png
 poster/hero_full.png
+
+# 졸업작품 제출 문서(hwp·zip·백업) — 프로그램 아님
+졸작서류/
+2026_졸업작품 산출물 개정/

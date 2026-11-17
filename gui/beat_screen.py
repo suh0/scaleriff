@@ -1,7 +1,7 @@
-"""[2a] 박자 조정 화면 (§3.5 2차) — 분석 직후 마디선/BPM 확정.
+"""[2a] 박자 조정 화면 (§3.5 2차) — 메인 설정(⚙)에서 열어 마디선/BPM 확정.
 
-화면 순서: 박자 3단계(시작점 → 끝부분 박자 → 예비박) → 학습 설정. 코드 편집은 학습 설정의
-'코드 수정' 창(edit_chords, 확인=반영·취소=되돌림).
+화면 순서: 박자 3단계(시작점 → 끝부분 박자 → 예비박) → 학습 설정, ← = 바꾸지 않고 메인으로.
+코드 편집은 메인 설정의 '코드 수정' 창(edit_chords, 확인=반영·취소=되돌림).
 - 초기 격자 = 자동 인식값, 인식된 비트는 확대바에 흐리게 남긴다.
 - 1단계: 클릭한 곳이 1마디(격자 평행이동), 마디선 드래그도 평행이동.
 - 2단계: 끝부분 마디선 드래그 = 시작점 고정·BPM 조정(직접 입력도 가능).
@@ -22,7 +22,7 @@ from PyQt6.QtWidgets import (
     QGraphicsOpacityEffect, QLayout, QMenu, QStackedWidget, QDialog
 )
 from PyQt6.QtGui import QPainter, QColor, QPen, QFont, QCursor, QShortcut, QKeySequence
-from PyQt6.QtCore import Qt, QRectF, pyqtSignal, QTimer, QElapsedTimer, QUrl, QEvent
+from PyQt6.QtCore import Qt, QRectF, pyqtSignal, QTimer, QUrl, QEvent
 from PyQt6.QtMultimedia import QSoundEffect
 
 from gui import theme as T
@@ -231,7 +231,7 @@ class ZoomBar(QWidget):
             shade.setAlpha(28)
             x0 = self._sec_to_x(self._beat_at(-self._lead * self._beats))
             p.fillRect(QRectF(x0, 1, self._sec_to_x(self._beat_at(0)) - x0, h - 2), shade)
-        f = QFont(T.FONT_MONO)
+        f = QFont(T.FONTS)
         f.setPixelSize(10)
         p.setFont(f)
         # 창 안의 박(선명)·마디선(진함+번호) — 예비박 마디부터
@@ -271,7 +271,7 @@ class ZoomBar(QWidget):
 
 class BeatScreen(QWidget):
     proceedRequested = pyqtSignal()
-    backToLinkRequested = pyqtSignal()
+    backRequested = pyqtSignal()        # ← = 적용 없이 메인으로
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -293,8 +293,6 @@ class BeatScreen(QWidget):
         self._l_shift = 0.0      # 예비박이 넘쳐 처음 창을 왼쪽으로 민 양(줄이면 되돌림)
         self._metro_next: int | None = None     # 다음에 예약할 박 번호(anchor 기준)
         self._metro_gen = 0                     # 시킹/정지 시 예약 클릭 무효화
-        self._clock = QElapsedTimer()           # 오디오 위치 갱신 사이 보간
-        self._clock_pos: float | None = None
         self._clicks = {}                       # 강박/약박 클릭음
         for strong, freq in ((True, METRO_HI_HZ), (False, METRO_LO_HZ)):
             eff = QSoundEffect(self)
@@ -302,7 +300,7 @@ class BeatScreen(QWidget):
             eff.setVolume(0.8)
             self._clicks[strong] = eff
 
-        # 박자 조정 화면 + 같은 타임라인을 공유하는 코드 편집 창(학습 설정에서 연다)
+        # 박자 조정 화면 + 같은 타임라인을 공유하는 코드 편집 창(메인 설정에서 연다)
         content = T.compact_content(self)
         outer = QVBoxLayout(content)
         outer.setContentsMargins(T.PAD_H, T.PAD_V, T.PAD_H, T.PAD_V)
@@ -321,12 +319,12 @@ class BeatScreen(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(12)
 
-        self.link_btn = QPushButton("←")
-        self.link_btn.setToolTip("링크 입력으로")
-        self.link_btn.setFixedSize(48, 48)
-        self.link_btn.setStyleSheet(T.qss_icon_btn())
-        self.link_btn.clicked.connect(self.backToLinkRequested.emit)
-        root.addLayout(T.header_row(self.link_btn, T.title_block(
+        self.back_btn = QPushButton("←")
+        self.back_btn.setToolTip("연주 화면으로(적용 안 함)")
+        self.back_btn.setFixedSize(48, 48)
+        self.back_btn.setStyleSheet(T.qss_icon_btn())
+        self.back_btn.clicked.connect(self.backRequested.emit)
+        root.addLayout(T.header_row(self.back_btn, T.title_block(
             "박자 조정", "3단계 · Enter 다음 · Backspace 이전 · Space 재생")))
 
         self.warn_lbl = QLabel(
@@ -354,7 +352,7 @@ class BeatScreen(QWidget):
         combo_qss = (
             f"QComboBox{{background:{T.BG_SURFACE_ALT};color:{T.TEXT_BODY};"
             f"border:1px solid {T.BORDER_DEFAULT};border-radius:8px;"
-            f"padding:4px 10px;font-family:'{T.FONT_MONO}';font-size:12px;}}"
+            f"padding:4px 10px;font-family:{T.FONT_CSS};font-size:12px;}}"
             f"QComboBox QAbstractItemView{{background:{T.BG_SURFACE_ALT};"
             f"color:{T.TEXT_BODY};selection-background-color:{T.BORDER_DEFAULT};}}")
         self.tempo_row = QFrame()
@@ -376,7 +374,7 @@ class BeatScreen(QWidget):
         self.bpm_edit.setStyleSheet(
             f"QLineEdit{{background:{T.BG_SURFACE_ALT};color:{T.TEXT_PRIMARY};"
             f"border:1px solid {T.BORDER_DEFAULT};border-radius:8px;"
-            f"padding:4px 8px;font-family:'{T.FONT_MONO}';font-size:12px;"
+            f"padding:4px 8px;font-family:{T.FONT_CSS};font-size:12px;"
             "font-weight:700;}")
         self.bpm_edit.editingFinished.connect(self._on_bpm_edited)
         self.bpm_edit.returnPressed.connect(self.setFocus)   # Enter → 커서 해제(스페이스=재생)
@@ -412,7 +410,7 @@ class BeatScreen(QWidget):
         self.count_plus = QPushButton("+")
         self.count_lbl = QLabel()
         self.count_lbl.setStyleSheet(
-            f"color:{T.TEXT_PRIMARY};font-family:'{T.FONT_MONO}';font-size:13px;"
+            f"color:{T.TEXT_PRIMARY};font-family:{T.FONT_CSS};font-size:13px;"
             "font-weight:700;")
         for btn, d, name in ((self.count_minus, -1, "예비박 한 마디 줄이기"),
                              (self.count_plus, 1, "예비박 한 마디 늘리기")):
@@ -582,7 +580,7 @@ class BeatScreen(QWidget):
     def showEvent(self, e):
         super().showEvent(e)
         self.setFocus()
-        stagger([self.sections[0]])
+        stagger(self.sections)
 
     # ── 격자 상태 ────────────────────────────────────────────────
     def _beats(self) -> int:
@@ -882,26 +880,12 @@ class BeatScreen(QWidget):
     def _on_tick(self, sec: float):
         self.zoom_l.set_position(sec)
         self.zoom_r.set_position(sec)
-        self._metronome(self._smooth(sec))
-
-    def _smooth(self, sec: float) -> float:
-        """오디오 위치는 ~90ms 단위로만 갱신된다 → 마지막 갱신 이후 경과 시간으로 보간.
-
-        재생 시작 직후처럼 위치가 오래 멈춰 있으면 소리보다 앞서가지 않게 0.12초까지만.
-        """
-        if sec != self._clock_pos:
-            self._clock_pos = sec
-            self._clock.restart()
-            return sec
-        if self.playhead and self.playhead.is_playing():
-            return sec + min(0.12, self._clock.elapsed() / 1000.0)
-        return sec
+        self._metronome(sec)              # Playhead 위치가 이미 보간 시계
 
     def _metro_reset(self):
         """시킹·재생 전환 시 예약된 클릭 무효화 — 다음 틱에 현재 위치부터 다시 예약."""
         self._metro_gen += 1
         self._metro_next = None
-        self._clock_pos = None
 
     def _metronome(self, est: float):
         """다음 박(번호 단조 증가)을 정확한 시각에 한 번만 예약 — 틱 지터로 두 번 울리지 않음.
@@ -1057,19 +1041,19 @@ class BeatScreen(QWidget):
         bar_lbl.setAlignment(center)
         bar_lbl.setStyleSheet(
             f"color:{T.BADGE_OUT if detour else T.TEXT_DIM};"
-            f"font-family:'{T.FONT_MONO}';font-size:9px;border:none;")
+            f"font-family:{T.FONT_CSS};font-size:9px;border:none;")
         v.addWidget(bar_lbl)
         c = QLabel(chord_txt)
         c.setAlignment(center)
         c.setStyleSheet(
             f"color:{T.TEXT_PRIMARY if is_new_chord else T.TEXT_DIM};"
-            f"font-family:'{T.FONT_SANS_EN}';font-size:16px;font-weight:700;border:none;")
+            f"font-family:{T.FONT_CSS};font-size:16px;font-weight:700;border:none;")
         v.addWidget(c)
         s = QLabel(scale_txt)
         s.setAlignment(center)
         s.setStyleSheet(
             f"color:{T.BADGE_OUT if detour else T.TEXT_MUTED};"
-            f"font-family:'{T.FONT_MONO}';font-size:10px;border:none;")
+            f"font-family:{T.FONT_CSS};font-size:10px;border:none;")
         v.addWidget(s)
 
         if seg is not None:        # 클릭=코드 수정

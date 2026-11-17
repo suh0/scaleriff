@@ -210,24 +210,46 @@ class PatternTest(unittest.TestCase):
                                        is_detour=bool(detour)))
         return tl
 
-    def test_patterns_follow_scale_changes_not_chords(self):
-        # 7마디: 창 [0,2)[2,4)[4,6)[6,7) — 디투어(5마디=창 뒤, 6마디=홀수 끝 창)는 위치와 무관하게 1종
-        patterns = generate.chord_patterns(self._song())
-        self.assertEqual([(p["label"], len(p["spans"]), p["overlay"]) for p in patterns],
-                         [("C 메이저 · 2마디", 4, False), ("F# 믹솔리디안 · 1마디", 2, True)])
-        self.assertEqual(patterns[0]["spans"][0], (0, 4))   # 디투어 없는 온전한 창에서 굽는다
-        self.assertEqual(generate.allocate(patterns, 2), [1, 1])
-        self.assertEqual(generate.allocate(patterns, 3), [2, 1])   # 자주 나오는 패턴부터
-        self.assertEqual(generate.allocate(patterns, 9), [4, 2])   # 등장 횟수 상한
+    def test_blocks_every_four_bars_with_common_tones(self):
+        # 7마디: [1~4] 전부 C 메이저 / [5~6] Dm7 + F#7(디투어) → 공통음만 / 7마디는 짝 없어 버림
+        blocks = generate.riff_blocks(self._song())
+        self.assertEqual([(b["label"], b["bars"]) for b in blocks],
+                         [("1~4마디", [(0, 2), (2, 4), (4, 6), (6, 8)]), ("5~6마디", [(8, 10), (10, 12)])])
+        self.assertEqual(blocks[0]["allowed"], {0, 2, 4, 5, 7, 9, 11})
+        self.assertIsNone(blocks[1]["allowed"])   # 공통음 {E, B}뿐 → 단조로움 피해 코드별 스케일
+        skipped = generate.riff_blocks(self._song(), skip_detour=True)   # 디투어는 공통음 계산에서 제외
+        self.assertEqual(skipped[1]["allowed"], {0, 2, 4, 5, 7, 9, 11})
 
-    def test_transpose_moves_by_scale_degree_and_keeps_landings(self):
+    def test_call_bar_riff_fits_block_and_echoes_unchanged(self):
         tl = self._song()
-        riff = [{"midi": m, "start_sec": t, "duration_sec": .4, "velocity": 80}
-                for m, t in ((62, 0), (65, .5), (69, 1), (71, 2))]   # Dm7: D F A | G7: B
-        out = generate.transpose_riff(tl, riff, 0, 4, "third", landing_secs=[2])
-        self.assertEqual([n["start_sec"] for n in out], [4, 4.5, 5, 6])
-        self.assertEqual([n["midi"] for n in out], [67, 71, 74, 64])   # G7: G B D | Cmaj7: E
-        self.assertTrue(all(n["midi"] % 12 in tl.segments[0].note_set for n in out))
+        allowed = {0, 4, 7, 9}   # Dm7 마디, 착지 목표 F(3도)는 공통음 밖이어도 지킨다
+        for variant in range(5):
+            res = generate.bake_progression(tl, None, 8, 10, "third", variant,
+                                            count=generate.RIFF_NOTES, allowed=allowed)
+            land = {x["at_sec"] for x in res["landings"]}
+            self.assertTrue(5 <= len(res["notes"]))
+            self.assertTrue(all(n["midi"] % 12 in allowed for n in res["notes"]
+                                if n["start_sec"] not in land), res["notes"])
+            self.assertEqual(res["notes"][-1]["midi"] % 12, 5)
+
+    def test_strong_beats_avoid_semitone_against_repeat_chords(self):
+        # Dm7 마디 리프를 G7·G7·Cmaj7 마디에서 반복 — 정박 음은 어느 코드와도 반음 충돌 없음(코드톤 제외)
+        tl = self._song()
+        for variant in range(10):
+            res = generate.bake_progression(tl, None, 0, 2, None, variant, count=generate.RIFF_NOTES,
+                                            repeats=(4, 8, 12))
+            for n in res["notes"]:
+                beat = tl.beat_at(n["start_sec"])
+                if beat != int(beat):
+                    continue
+                for off in (4, 8, 12):
+                    cts = tl.segment_at(tl.time_at_beat(beat + off)).chord_tones()
+                    pc = n["midi"] % 12
+                    self.assertTrue(pc in cts or all((pc - c) % 12 not in (1, 11) for c in cts),
+                                    (variant, off, n))
+            echo = generate.shift_riff(tl, res["notes"], 8, 10)   # 다음 마디로 같은 음·같은 박
+            self.assertEqual([n["midi"] for n in echo], [n["midi"] for n in res["notes"]])
+            self.assertEqual([n["start_sec"] - 2 for n in echo], [n["start_sec"] for n in res["notes"]])
 
 
 class EvaluationTest(unittest.TestCase):

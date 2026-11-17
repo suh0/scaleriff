@@ -110,8 +110,8 @@ class CountInTest(unittest.TestCase):
         screen, _ = self._screen()
         screen.show()
         link = Mock()
-        screen.backToLinkRequested.connect(link)
-        screen.link_btn.setFocus()
+        screen.backRequested.connect(link)
+        screen.back_btn.setFocus()
         self.app.processEvents()
         screen.playhead.seek(5.0)
         # 창 경유(실제 키 입력 경로) — 단축키가 포커스 버튼보다 먼저 처리돼야 함
@@ -398,15 +398,6 @@ class CountInTest(unittest.TestCase):
         self.assertEqual(len(clicks), 3)
         screen._metronome(5.97)
         self.assertEqual(clicks[3:], [True])              # 6.0초 = 4마디 강박
-
-    def test_clock_smoothing_interpolates_and_caps(self):
-        screen, _ = self._screen()
-        screen.playhead.is_playing = lambda: True
-        self.assertEqual(screen._smooth(1.0), 1.0)
-        QTest.qWait(50)
-        self.assertTrue(1.03 < screen._smooth(1.0) <= 1.12)
-        QTest.qWait(150)
-        self.assertAlmostEqual(screen._smooth(1.0), 1.12)  # 멈춘 위치에서 앞서가지 않음
 
     def test_entry_aligns_bar_one_to_detected_beats(self):
         tl = build_dummy_timeline()

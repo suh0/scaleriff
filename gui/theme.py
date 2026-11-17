@@ -1,8 +1,10 @@
 """다크 스튜디오 디자인 토큰. 현행 기준: 이 파일."""
 from __future__ import annotations
+import functools
 import os
 from PyQt6.QtCore import Qt, QPointF
-from PyQt6.QtGui import QFontDatabase, QPalette, QColor, QPainter, QLinearGradient, QRadialGradient, QPen, QIcon
+from PyQt6.QtGui import (QFontDatabase, QPalette, QColor, QPainter, QLinearGradient, QRadialGradient, QPen, QIcon,
+                         QImage, QPixmap)
 from PyQt6.QtWidgets import QWidget, QHBoxLayout, QVBoxLayout, QGridLayout, QLabel
 
 # ── §3.1 표면 / 배경 ─────────────────────────────────────────────
@@ -62,25 +64,28 @@ KEY_CHORD       = BADGE_CHORD
 KEY_OUT         = BADGE_OUT
 
 # ── §4 폰트 패밀리 ────────────────────────────────────────────────
+# 글자마다 앞에서부터 글리프가 있는 폰트를 쓴다: 영문·숫자는 Segoe UI, 한글은 Segoe UI에 없어 본고딕으로.
 FONT_SANS_EN = "Segoe UI"
-FONT_MONO    = "Consolas"
-FONT_SANS    = "Malgun Gothic"
-FONT_SERIF    = FONT_SANS_EN   # 구 이름 별칭
-FONT_SERIF_KR = FONT_SANS
+FONT_SANS_KR = "Noto Sans KR"   # 본고딕(Source Han Sans KR)의 구글 배포판
+FONTS    = [FONT_SANS_EN, FONT_SANS_KR]            # QFont(FONTS, ...)
+FONT_CSS = f"'{FONT_SANS_EN}','{FONT_SANS_KR}'"    # QSS font-family 값
 
 
+@functools.cache   # 창을 만들 때마다 불려도 한 번만 등록
 def load_fonts():
-    """assets/fonts/*.ttf|otf 번들 로드. 시스템 설치에 의존하지 않음(§4)."""
+    """assets/fonts/*.ttf|otf(본고딕) 번들 로드 — 다른 PC에 설치돼 있지 않아도 같게 보인다(§4).
+    Segoe UI는 Windows 기본 폰트(재배포 불가)라 번들하지 않는다."""
+    # Windows offscreen 플러그인은 시스템 폰트 목록을 자동으로 읽지 않는다 — 번들 등록 전에 판단.
+    offscreen = os.name == "nt" and not QFontDatabase.families()
     base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     d = os.path.join(base, "assets", "fonts")
     if os.path.isdir(d):
         for fn in os.listdir(d):
             if fn.lower().endswith((".ttf", ".otf")):
                 QFontDatabase.addApplicationFont(os.path.join(d, fn))
-    # Windows offscreen 플러그인은 시스템 폰트 목록을 자동으로 읽지 않는다.
-    if os.name == "nt" and not QFontDatabase.families():
+    if offscreen:
         fonts = os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "Fonts")
-        for name in ("malgun.ttf", "segoeui.ttf", "consola.ttf", "seguisym.ttf"):
+        for name in ("segoeui.ttf", "segoeuib.ttf", "seguisym.ttf"):
             QFontDatabase.addApplicationFont(os.path.join(fonts, name))
 
 
@@ -115,8 +120,30 @@ def compact_content(parent: QWidget, max_width: int | None = None) -> QWidget:
     return content
 
 
+_BACKDROP = {}   # "img" → 원본, (w, h) → 그 크기로 채운 픽스맵(창·연주 무대 등 몇 개)
+
+
 def paint_backdrop(p: QPainter, w: float, h: float):
-    """공통 배경: 남색 대각 그라데이션 + 좌상·우하 모서리의 큰 원(연주 무대도 같이 씀)."""
+    """공통 배경(시작·학습 설정·연주 무대·박자 조정 공통): assets/backdrop.webp를 비율 유지로 꽉 채우고
+    넘치는 쪽은 가운데 기준으로 자름. 이미지가 없으면 남색 그라데이션 + 모서리 원."""
+    if "img" not in _BACKDROP:
+        base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        _BACKDROP["img"] = QImage(os.path.join(base, "assets", "backdrop.webp"))
+    img = _BACKDROP["img"]
+    if not img.isNull():
+        size = (int(w) + 1, int(h) + 1)
+        pix = _BACKDROP.get(size)
+        if pix is None:
+            scaled = img.scaled(*size, Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                                Qt.TransformationMode.SmoothTransformation)
+            pix = QPixmap.fromImage(scaled.copy((scaled.width() - size[0]) // 2,
+                                                (scaled.height() - size[1]) // 2, *size))
+            if len(_BACKDROP) > 4:          # 창 크기 바꾸는 중 쌓인 것 정리
+                _BACKDROP.clear()
+                _BACKDROP["img"] = img
+            _BACKDROP[size] = pix
+        p.drawPixmap(0, 0, pix)
+        return
     g = QLinearGradient(0, 0, w * 0.3, h)
     g.setColorAt(0, QColor("#121b2c"))
     g.setColorAt(1, QColor(BG_BASE))
@@ -246,7 +273,7 @@ def qss_app() -> str:
     icons = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "assets", "icons")).replace("\\", "/")
     return (
         f"QMainWindow,QDialog{{background:{BG_BASE};color:{TEXT_BODY};}}"
-        f"QWidget{{font-family:'{FONT_SANS}';font-size:13px;color:{TEXT_BODY};}}"
+        f"QWidget{{font-family:{FONT_CSS};font-size:13px;color:{TEXT_BODY};}}"
         "QLabel{background:transparent;border:none;}"
         + qss_ghost_btn() + qss_input() +
         f"QComboBox,QSpinBox{{background:{BG_SURFACE};color:{TEXT_BODY};border:1px solid {BORDER_DEFAULT};"

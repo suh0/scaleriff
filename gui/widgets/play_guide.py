@@ -29,7 +29,7 @@ class PlayGuide(QWidget):
         self.card.setFixedWidth(CARD_W)
         self.card.setStyleSheet(
             f"QFrame#guideCard{{background:{T.BG_SURFACE};border:1px solid {T.BORDER_DEFAULT};"
-            f"border-radius:14px;}} QFrame#guideCard QLabel{{font-family:'{T.FONT_SANS}';}}")
+            f"border-radius:14px;}} QFrame#guideCard QLabel{{font-family:{T.FONT_CSS};}}")
         v = QVBoxLayout(self.card)
         v.setContentsMargins(22, 18, 22, 18)
         v.setSpacing(10)

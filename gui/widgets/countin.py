@@ -43,7 +43,7 @@ class CountIn(QWidget):
         x = 0.0
 
         # 라벨
-        f = QFont(T.FONT_MONO); f.setPixelSize(10)
+        f = QFont(T.FONTS); f.setPixelSize(10)
         p.setFont(f)
         p.setPen(QColor(T.TEXT_DIM if self._lit == 0 else T.TEXT_MUTED))
         lab = "다음 코드까지"
@@ -60,7 +60,7 @@ class CountIn(QWidget):
 
         # 카운트 숫자
         if self._lit > 0:
-            fn = QFont(T.FONT_MONO); fn.setPixelSize(13); fn.setBold(True)
+            fn = QFont(T.FONTS); fn.setPixelSize(13); fn.setBold(True)
             p.setFont(fn)
             p.setPen(QColor(T.TEXT_PRIMARY))
             p.drawText(QRectF(x + 2, 0, 22, h),

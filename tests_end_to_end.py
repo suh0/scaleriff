@@ -46,7 +46,7 @@ class EndToEndTest(unittest.TestCase):
                     screen = window.main_screen
                     screen.note_player.set_volume(0)
                     window._on_timeline_ready(timeline)
-                    self.assertIs(window.stack.currentWidget(), window.beat)
+                    self.assertIs(window.stack.currentWidget(), window.setup)   # 분석 직후 학습 설정
                     apply_chord_edit(timeline, 0, 2.4, "Dm7")
                     apply_chord_edit(timeline, 2.4, 4.8, "G7")
                     timeline.bpm = 100

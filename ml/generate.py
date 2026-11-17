@@ -19,7 +19,7 @@ import json
 from ml.representation import (
     BOS, REST, HOLD, ONSET0, VOCAB, onset_token, is_onset, token_degree, decode,
     SCALE_DEGREES, QFAM_CHORD_TONES,
-    STEPS_PER_BAR, quality_family, _nearest_midi,
+    STEPS_PER_BAR, quality_family,
 )
 from ml.model import is_trained
 from analyze.theory import Chord, CHORD_SPECS
@@ -448,7 +448,8 @@ def _landing_pc(seg, goal):
     elif goal == "seventh":
         degree = {"maj7": 11, "m7": 10, "dom7": 10, "7": 10,
                   "m7b5": 10, "dim7": 9}.get(seg.chord.quality)
-        degrees = [] if degree is None else [degree]
+        # 3화음(코드 인식은 3화음뿐) = 스케일 안의 단7·장7 — 그 키의 다이어토닉 7화음 7음. 6화음은 7도 없음
+        degrees = [degree] if degree is not None else [10, 11] if len(intervals) == 3 else []
     elif goal == "root":
         degrees = [0] if intervals else []
     else:
@@ -489,7 +490,7 @@ def _fill_onsets(beats, end) -> list:
 
 
 def bake_progression(timeline, model, start_sec, end_sec, goal="third", variant=0, density=1.0,
-                     count=None):
+                     count=None, allowed=None, repeats=()):
     """Bake the selected source interval using its actual chords and assigned note sets.
 
     Returns {notes, start_sec, end_sec, goal, variant, density, landings, model_info}.
@@ -500,6 +501,10 @@ def bake_progression(timeline, model, start_sec, end_sec, goal="third", variant=
     goal=None: no landing constraint (free practice, scale notes only).
     count=(lo, hi): the whole selection (= one riff) gets lo..hi notes (chord entries included,
     so never fewer than the chord count) instead of density.
+    allowed: pitch classes the non-landing notes are limited to (the chord's scale when none fit).
+    repeats: beat offsets where this riff is replayed unchanged (echo bars). On-beat or 1-beat notes
+    avoid a semitone against chord tones of the chord at each repeat (chord tones exempt); this ranks
+    above the theory rules below and is skipped only when nothing fits.
     Riff rules: 8th-note grid, gaps < 4 beats, no two offbeats in a row, adjacent leaps < 12
     semitones, no pitch three times in a row; then (soft, skipped when nothing fits) non-chord
     tones entered and left by step, a leap of a 4th or more followed by a step back, a
@@ -576,11 +581,20 @@ def bake_progression(timeline, model, start_sec, end_sec, goal="third", variant=
         target = _landing_pc(seg, goal)
         landing_kind = None if goal is None else "final" if i == len(onsets) - 1 else (
             "change" if sec in mandatory and sec > start_sec else None)
-        pool = [m for m in range(60, 84) if m % 12 in seg.note_set]
+        full = [m for m in range(60, 84) if m % 12 in seg.note_set]
+        pool = [m for m in full if allowed is None or m % 12 in allowed] or full
         chord_pool = [m for m in pool if m % 12 in seg.chord_tones()]
         if landing_kind:
             pool = (chord_pool or pool) if goal == "chord_tone" or target is None else [
-                m for m in pool if m % 12 == target]
+                m for m in full if m % 12 == target]
+        next_sec = onsets[i + 1] if i + 1 < len(onsets) else end_sec
+        end_beat = min(timeline.beat_at(min(next_sec, boundary, end_sec)), beat + 1)
+        if repeats and (not _off(beat) or end_beat - beat >= 1):   # 정박·긴 음 = 반복 마디 코드와 반음 충돌 피함
+            chords = [x for x in (timeline.segment_at(timeline.time_at_beat(beat + off))
+                                  for off in repeats) if x]
+            pool = [m for m in pool if not any(
+                m % 12 not in x.chord_tones() and any((m - c) % 12 in (1, 11) for c in x.chord_tones())
+                for x in chords)] or pool
         if i:   # 우선순위 규칙 — pool을 비우지 않을 때만 적용(못 지키면 그 규칙만 건너뜀)
             f1, f2 = forced[i + 1], forced[i + 2]
             cts, ns = seg.chord_tones(), seg.note_set
@@ -616,8 +630,6 @@ def bake_progression(timeline, model, start_sec, end_sec, goal="third", variant=
                 weight *= 4 if abs(beat - round(beat)) < 1e-7 else 1.8
             weights.append(weight)
         midi = rng.choices(pool, weights=weights)[0]
-        next_sec = onsets[i + 1] if i + 1 < len(onsets) else end_sec
-        end_beat = min(timeline.beat_at(min(next_sec, boundary, end_sec)), beat + 1)
         note_end = min(boundary, end_sec, timeline.time_at_beat(beat + .9 * (end_beat - beat)))
         note = {"midi": midi, "start_sec": sec, "duration_sec": note_end - sec,
                 "velocity": 86 if abs(beat - round(beat)) < 1e-7 else 74}
@@ -658,105 +670,55 @@ def write_examples(timeline, start_sec, end_sec, notes):
             if a <= n["start_sec"] < b:
                 kept.append({"midi": n["midi"], "beat_pos": timeline.beat_at(n["start_sec"]) - segment_beat,
                              "dur_beats": timeline.beats_between(n["start_sec"], n["start_sec"] + n["duration_sec"]),
-                             "velocity": n["velocity"]})
+                             "velocity": n["velocity"], **({"call": True} if n.get("call") else {})})
         seg.example = sorted(kept, key=lambda n: n["beat_pos"])
 
 
-def chord_patterns(timeline, bars_per_riff=2):
-    """리프 패턴 = 곡 스케일 2마디 리프 1종(모든 창) + 디투어 마디용 1마디 리프(로컬 스케일별, overlay).
+RIFF_NOTES = (5, 6)   # 리프(1마디)당 음 수 — 사용자 선택 없음
 
-    창을 순서대로 잘라 묶으면 디투어 위치마다 패턴이 갈려 리프 수가 불어난다 — 디투어만 마디 단위로 덧씌운다.
-    다른 코드 구간에는 transpose_riff로 도수 이동. 패턴 수 = 최소 리프 수.
+
+def riff_blocks(timeline, skip_detour=False):
+    """곡 처음부터 끝까지 4마디 블록마다 1마디 리프 1개 — 마디 차례 [프로그램, 나, 프로그램, 나].
+
+    끝에 남는 마디는 짝수(2마디)까지만 쓴다. 첫 마디(프로그램 차례)에 코드가 없으면 블록을 건너뛴다.
+    allowed = 블록 안 코드들 스케일의 공통음 — 같은 음을 바뀐 코드 위에서 그대로 쳐도 덜 부딪히게.
+    공통음이 4개 미만이면 None(각 코드 스케일) — 두세 음만으론 리프가 단조로워진다.
+    skip_detour면 키 밖 코드는 공통음 계산에서 빼고, 첫 마디가 키 밖 코드인 블록은 건너뛴다.
     """
     bars = list(timeline.bar_times)
     if len(bars) < 2:
         bar = timeline.beat_sec() * timeline.time_sig_beats()
         bars = [i * bar for i in range(int(math.ceil(timeline.total_sec() / bar)) + 1)]
+    spans = list(zip(bars, bars[1:]))
 
     def segs_in(a, b):
         return [s for s in timeline.segments if s.start_sec < b and s.end_sec > a]
 
-    windows = [(bars[i], bars[min(i + bars_per_riff, len(bars) - 1)])
-               for i in range(0, len(bars) - 1, bars_per_riff)]
-    windows = [w for w in windows if segs_in(*w)]
-    if not windows:
-        return []
-    # 리프는 디투어 없는 첫 온전한(짧은 마지막 창 제외) 창에서 굽는다(spans[0])
-    full = timeline.beats_between(*windows[0])
-    clean = [w for w in windows if timeline.beats_between(*w) >= full - 1e-6
-             and not any(s.is_detour for s in segs_in(*w))]
-    first = clean[0] if clean else windows[0]
-    home = next((s.scale.name for s in timeline.segments if not s.is_detour and s.scale), "곡 스케일")
-    patterns = [{"label": f"{home} · {bars_per_riff}마디",
-                 "spans": [first] + [w for w in windows if w != first], "overlay": False}]
-    groups = {}
-    for a, b in zip(bars, bars[1:]):
-        segs = segs_in(a, b)
-        if not any(s.is_detour for s in segs):
+    blocks = []
+    for i in range(0, len(spans), 4):
+        block = spans[i:i + 4]
+        block = block[:len(block) // 2 * 2]
+        call = segs_in(*block[0]) if block else []
+        if not call or (skip_detour and any(s.is_detour for s in call)):
             continue
-        b0 = timeline.beat_at(a)
-        runs = []   # (상대 박, note_set, 이름) — 같은 스케일이 이어지면 하나로
-        for s in segs:
-            ns = tuple(sorted(s.note_set))
-            if not runs or runs[-1][1] != ns:
-                runs.append((round(timeline.beat_at(max(a, s.start_sec)) - b0, 3), ns,
-                             s.scale.name if s.scale else s.chord.name))
-        key = (round(timeline.beats_between(a, b), 3),) + tuple(r[:2] for r in runs)
-        groups.setdefault(key, {"label": "→".join(r[2] for r in runs) + " · 1마디",
-                                "spans": [], "overlay": True})["spans"].append((a, b))
-    return patterns + sorted(groups.values(), key=lambda p: -len(p["spans"]))
+        sets = [set(s.note_set) for s in segs_in(block[0][0], block[-1][1])
+                if s.note_set and not (skip_detour and s.is_detour)]
+        common = set.intersection(*sets) if sets else set()
+        # ponytail: 공통음 4개 미만이면 반복 마디 충돌 허용 — 청감으로 기준 조정
+        blocks.append({"label": f"{i + 1}~{i + len(block)}마디", "bars": block,
+                       "allowed": common if len(common) >= 4 else None})
+    return blocks
 
 
-def _degree(note_set, pc):
-    """정렬된 note_set에서 pc의 스케일 번호 — 없으면 바로 아래 도수."""
-    return max((i for i, x in enumerate(note_set) if x <= pc), default=len(note_set) - 1)
-
-
-def transpose_riff(timeline, notes, src_a, dst_a, goal=None, landing_secs=()):
-    """src_a에서 만든 리프를 dst_a 창으로 — 상대 박 유지, 음은 각 박의 코드 근음 차만큼 스케일 도수 이동.
-
-    같은 스케일이면 근음→근음·3도→3도로 옮겨지고 스케일 밖으로 나가지 않는다.
-    착지음(landing_secs)은 dst 코드의 목표음 중 가장 가까운 음으로 맞춘다(펜타 등 대비).
-    """
+def shift_riff(timeline, notes, src_a, dst_a):
+    """리프를 src_a 마디에서 dst_a 마디로 그대로 옮긴다 — 같은 음·같은 박(따라 치기 응답·반복)."""
     off = timeline.beat_at(dst_a) - timeline.beat_at(src_a)
     out = []
     for n in notes:
-        start = timeline.beat_at(n["start_sec"])
-        s_new = timeline.time_at_beat(start + off)
-        e_new = timeline.time_at_beat(timeline.beat_at(n["start_sec"] + n["duration_sec"]) + off)
-        src, dst = timeline.segment_at(n["start_sec"]), timeline.segment_at(s_new)
-        midi = n["midi"]
-        if src and dst and src.note_set and dst.note_set:
-            sset, dset = sorted(src.note_set), sorted(dst.note_set)
-            octave, pc = divmod(midi, 12)
-            # 스케일 번호(옥타브 포함) — 스케일이 다르면 dst 스케일에서 바로 아래 도수로 읽는다
-            idx = _degree(dset, pc) + len(dset) * octave
-            steps = _degree(dset, dst.chord.root) - _degree(sset, src.chord.root)
-            o, i = divmod(idx + steps, len(dset))
-            midi = 12 * o + dset[i]
-            if any(abs(n["start_sec"] - t) < 1e-9 for t in landing_secs) and goal:
-                targets = ({pc for pc in dst.chord_tones() if pc in dst.note_set}
-                           if goal == "chord_tone" else {_landing_pc(dst, goal)} - {None})
-                if targets:
-                    midi = min((m for m in range(midi - 6, midi + 7) if m % 12 in targets),
-                               key=lambda m: abs(m - midi))
-            # 범위 밖이거나 직전 음과 1옥타브 이상 벌어지면 직전 음에 가까운 옥타브로
-            prev = out[-1]["midi"] if out else midi
-            if not 60 <= midi <= 83 or abs(midi - prev) >= 12:
-                midi = _nearest_midi(midi % 12, prev, 60, 83)
-        out.append({**n, "midi": midi, "start_sec": s_new, "duration_sec": e_new - s_new})
+        s = timeline.time_at_beat(timeline.beat_at(n["start_sec"]) + off)
+        e = timeline.time_at_beat(timeline.beat_at(n["start_sec"] + n["duration_sec"]) + off)
+        out.append({**n, "start_sec": s, "duration_sec": e - s})
     return out
-
-
-def allocate(patterns, n):
-    """리프 n개를 패턴별 변형 수로 배분 — 패턴당 1개 후 '등장/변형'이 큰 패턴부터 하나씩."""
-    counts = [1] * len(patterns)
-    for _ in range(n - len(patterns)):
-        open_ = [i for i, p in enumerate(patterns) if counts[i] < len(p["spans"])]
-        if not open_:
-            break
-        counts[max(open_, key=lambda i: len(patterns[i]["spans"]) / counts[i])] += 1
-    return counts
 
 
 if __name__ == "__main__":

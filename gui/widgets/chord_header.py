@@ -36,7 +36,7 @@ class ChordHeader(QWidget):
         def text(name, size, y, alpha, spacing=0.0, bold=True):
             if not name or size < 1 or alpha <= 0:
                 return
-            f = QFont(T.FONT_SANS_EN)
+            f = QFont(T.FONTS)
             f.setBold(bold)
             f.setPixelSize(int(size))
             if spacing:

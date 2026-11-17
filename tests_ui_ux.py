@@ -29,6 +29,57 @@ class UIUXTest(unittest.TestCase):
         for w in self.app.topLevelWidgets():
             w.close()
 
+    def test_screen_switch_fades_old_snapshot_then_cleans_up(self):
+        stack = anim.FadeStack()
+        a, b = QWidget(), QWidget()
+        stack.addWidget(a)
+        stack.addWidget(b)
+        stack.resize(400, 300)
+        stack.show()
+        stack.setCurrentWidget(b)
+        snap = stack._snapshot
+        self.assertIsNotNone(snap, "전환 스냅샷 없음")
+        self.assertIs(stack.currentWidget(), b, "새 화면은 즉시 현재 화면(입력 가능)")
+        self.assertTrue(snap.testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents))
+        stack.setCurrentWidget(a)                     # 연달아 전환 — 이전 스냅샷 대신 새 스냅샷 하나
+        self.assertIsNot(stack._snapshot, snap)
+        QTest.qWait(anim.OUT_MS + anim.IN_MS + 150)
+        self.assertIsNone(stack._snapshot, "전환 뒤 스냅샷이 남음")
+        self.assertEqual([c for c in stack.children() if isinstance(c, anim._Snapshot)], [])
+        self.app.setProperty("reduceMotion", True)    # 효과 축소 = 스냅샷 없이 즉시
+        stack.setCurrentWidget(b)
+        self.assertIsNone(stack._snapshot)
+
+    def test_boxes_enter_in_order_after_old_screen_leaves(self):
+        def delays(boxes):
+            out = []
+            for w in boxes:
+                group = w._entry_animation
+                first = group.animationAt(0)
+                out.append(first.duration() if group.animationCount() == 2 else 0)
+            return out
+        holder = QWidget()                      # 자식 위젯이어야 '숨김' 여부가 명시 hide()로만 정해짐
+        head, sub, card, hidden, btn = (QWidget(holder) for _ in range(5))
+        hidden.hide()
+        anim.stagger([(head, sub), card, hidden, btn])
+        self.assertEqual(delays([head, sub, card, btn]), [0, 0, anim.STEP_MS, 2 * anim.STEP_MS],
+                         "한 박스(튜플)는 같이, 박스끼리는 차례로, 숨은 박스는 건너뜀")
+        self.assertIsNone(getattr(hidden, "_entry_animation", None))
+        # 화면 전환 중이면 이전 화면이 사라진 뒤(OUT_MS)부터
+        stack = anim.FadeStack()
+        class Page(QWidget):
+            def showEvent(self, e):
+                anim.stagger([self.box])
+        first, page = QWidget(), Page()
+        box = page.box = QWidget(page)
+        stack.addWidget(first)
+        stack.addWidget(page)
+        stack.resize(300, 200)
+        stack.show()
+        stack.setCurrentWidget(page)
+        self.assertGreater(delays([box])[0], anim.OUT_MS - 40)
+        self.assertEqual(box.graphicsEffect().opacity(), 0, "이전 화면이 사라지기 전에 새 박스가 보임")
+
     def test_reduced_motion_does_not_hide_new_content(self):
         self.app.setProperty("reduceMotion", True)
         w = QWidget()
@@ -91,21 +142,14 @@ class UIUXTest(unittest.TestCase):
                 top_left = widget.mapTo(screen.content, widget.rect().topLeft())
                 self.assertTrue(screen.content.rect().contains(widget.rect().translated(top_left)), widget.objectName())
 
-    def test_setup_screen_fits_and_landing_options_follow_method(self):
+    def test_setup_screen_fits_with_scale_only(self):
         screen = SetupScreen()
         screen.set_timeline(build_dummy_timeline())
         screen.resize(1040, 740)
         screen.show()
         self.app.processEvents()
         self.assertTrue(screen.rect().contains(screen.go_btn.mapTo(screen, screen.go_btn.rect().bottomRight())))
-        self.assertTrue(screen.landing_box.isVisible())          # 착지음 세부는 항상 보임
-        self.assertFalse(screen.landing_box.isEnabled())
-        free, landing = screen.method_btns["free"], screen.method_btns["landing"]
-        self.assertLess(free.mapTo(screen, free.rect().topRight()).x(),
-                        landing.mapTo(screen, landing.rect().topLeft()).x())   # 좌우 두 열
-        self.assertGreater(landing.mapTo(screen, landing.rect().topLeft()).x(), screen.width() * .4)
-        screen._pick_method("landing")
-        self.assertTrue(screen.landing_box.isEnabled())
+        self.assertFalse(hasattr(screen, "method_btns"), "연습 방식은 고르지 않음(자유연습으로 시작)")
 
     def test_keyboard_scrub_clamps_at_track_ends(self):
         scrub = ScrubBar()

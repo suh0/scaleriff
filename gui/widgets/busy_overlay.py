@@ -106,7 +106,7 @@ class BusyOverlay(QWidget):
             p.drawArc(QRectF(c.x() - r, c.y() - r - 16, 2 * r, 2 * r),
                       -self._angle * 16, 270 * 16)
         p.setPen(QColor(T.TEXT_PRIMARY))
-        p.setFont(QFont(T.FONT_SANS, 11))
+        p.setFont(QFont(T.FONTS, 11))
         p.drawText(QRectF(0, c.y() + r, self.width(), 30),
                    Qt.AlignmentFlag.AlignCenter, self._text)
 

@@ -42,7 +42,14 @@ class SongScaleTest(unittest.TestCase):
         self.assertIn("G", landing_blocker(tl, pent, "third"))
         self.assertIsNone(landing_blocker(tl, pent, "chord_tone"))
         self.assertIsNone(landing_blocker(tl, seven, "third"))
-        self.assertIsNotNone(landing_blocker(tl, seven, "seventh"))   # 3화음엔 7도 없음
+        self.assertIsNone(landing_blocker(tl, seven, "seventh"))      # 3화음 7도 = 스케일 안 7음(G·E·B·F)
+        self.assertIn("C", landing_blocker(tl, pent, "seventh"))      # A 마이너 펜타엔 C의 B·B♭ 없음
+
+    def test_triad_seventh_landing_is_diatonic(self):
+        tl = am_f_c_g()
+        tl.apply_song_scale(song_scale_options(9, "minor")[1])
+        self.assertEqual([s.chord.name for s in tl.segments[:4]], ["Am", "F", "C", "G"])
+        self.assertEqual([generate._landing_pc(s, "seventh") for s in tl.segments[:4]], [7, 4, 11, 5])
 
     def test_fit_recommends_by_chord_tones_and_disables_clashing_scale(self):
         from gui.setup_screen import scale_fit, recommend, landing_blocker
@@ -80,7 +87,6 @@ class SongScaleTest(unittest.TestCase):
             for variant in range(10):
                 result = generate.bake_progression(tl, None, 0, 4, goal, variant, count=count)
                 notes = result["notes"]
-                moved = generate.transpose_riff(tl, notes, 0, 4, goal)
                 # 이론 규칙(착지음은 목표 고정이라 제외): 비화성음 순차·도약 후 반대 순차·정점 반복 금지
                 land = {x["at_sec"] for x in result["landings"]}
                 m = [n["midi"] for n in notes]
@@ -97,17 +103,15 @@ class SongScaleTest(unittest.TestCase):
                     self.assertNotEqual(m[i], m[i - 1], (goal, variant, m))           # 같은 음 반복 금지
                     if i + 1 < len(m) and notes[i + 1]["start_sec"] in land:          # 착지 직전 ≠ 목표음
                         self.assertNotEqual(m[i] % 12, m[i + 1] % 12, (goal, variant, m))
-                for ns in (notes, moved):
-                    beats = [tl.beat_at(n["start_sec"]) - tl.beat_at(ns[0]["start_sec"]) for n in ns]
-                    midis = [n["midi"] for n in ns]
-                    self.assertTrue(all(b * 2 == int(b * 2) for b in beats), beats)        # 8분 격자
-                    self.assertTrue(all(y - x < 4 for x, y in zip(beats, beats[1:] + [8])), beats)
-                    off = [b % 1 != 0 for b in beats]
-                    self.assertFalse(any(p and q for p, q in zip(off, off[1:])), beats)      # 엇박 연속
-                    self.assertTrue(all(abs(y - x) < 12 for x, y in zip(midis, midis[1:])), midis)
-                    if ns is notes:   # 도수 이동 후 같은 음 3연속은 미보장(README Todo)
-                        self.assertFalse(any(a == b == c for a, b, c in zip(midis, midis[1:], midis[2:])),
-                                         midis)
+                ns = notes
+                beats = [tl.beat_at(n["start_sec"]) - tl.beat_at(ns[0]["start_sec"]) for n in ns]
+                midis = [n["midi"] for n in ns]
+                self.assertTrue(all(b * 2 == int(b * 2) for b in beats), beats)        # 8분 격자
+                self.assertTrue(all(y - x < 4 for x, y in zip(beats, beats[1:] + [8])), beats)
+                off = [b % 1 != 0 for b in beats]
+                self.assertFalse(any(p and q for p, q in zip(off, off[1:])), beats)      # 엇박 연속
+                self.assertTrue(all(abs(y - x) < 12 for x, y in zip(midis, midis[1:])), midis)
+                self.assertFalse(any(a == b == c for a, b, c in zip(midis, midis[1:], midis[2:])), midis)
 
     def test_free_goal_stays_in_scale(self):
         tl = am_f_c_g()

@@ -1,8 +1,9 @@
 """리프 피아노롤 — 세로 건반(왼쪽 90° 회전) + 음높이별 리프 노트.
 
 왼쪽 거터 = 오른손 2옥타브(도~시 = midi 60~83 고정) 세로 건반. 흰건반은 흑건
-중점까지 확장돼 실제 피아노 모양, 스케일 도수 배지를 각 건반 중앙에 표시(코드톤
-초록·근음 파랑·스케일음 회색). 오른쪽은 박자 격자 위 균등 세미톤 y로 노트 알약.
+중점까지 확장돼 실제 피아노 모양, 곡 스케일 도수 배지(고정 번호)를 각 건반 중앙에 표시.
+오른쪽은 박자 격자 위 균등 세미톤 y로 노트 알약 — 그 시점 코드 기준 색(근음 파랑·코드톤
+초록·스케일음 회색)과 같은 번호, 위 눈금에 코드명.
 
 리프는 ml/representation.decode가 60~83(C4~B5)만 생성 — 여기선 표시만.
 """
@@ -30,7 +31,7 @@ class RiffRoll(QWidget):
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self._notes: list[dict] = []
         self._note_set: set[int] = set()
-        self._chord_tones: set[int] = set()
+        self._chords: list[tuple] = []
         self._root = 0
         self._beats_per_bar = 4
         self._total_beats = 4.0
@@ -40,12 +41,14 @@ class RiffRoll(QWidget):
     def _lanes(self) -> int:
         return self._hi - self._lo + 1
 
-    def set_riff(self, notes, note_set, chord_tones,
+    def set_riff(self, notes, note_set, chords,
                  beats_per_bar: int, n_bars: int, root: int = 0):
+        """chords = [(시작 박, 끝 박, 코드톤 pcs, 근음 pc, 코드명)] — 음 색·코드명용.
+        번호는 건반·음 모두 곡 스케일 주음(root) 기준 고정."""
         self._notes = list(notes or [])
         self._root = root
         self._note_set = set(note_set)
-        self._chord_tones = set(chord_tones)
+        self._chords = [(a, b, set(tones), r, name) for a, b, tones, r, name in chords]
         self._beats_per_bar = max(1, beats_per_bar)
         max_note = max((n["beat_pos"] + n.get("dur_beats", 0.5) for n in self._notes),
                        default=0.0)
@@ -65,33 +68,29 @@ class RiffRoll(QWidget):
         """세미톤 균등 y(중심) — 위가 고음."""
         return RULER_H + (self._hi - midi) * SEMI_H + SEMI_H / 2
 
-    def _state(self, pc: int) -> str:
-        if pc in self._chord_tones:
-            return "CHORD"
-        if pc in self._note_set:
-            return "SCALE"
-        return "OUT"
-
-    def _fill(self, pc: int) -> QColor:
-        """상태색 — 코드톤 중 근음(도수 1)은 파랑, 나머지 코드톤 초록."""
-        st = self._state(pc)
-        if st == "CHORD":
-            return QColor(T.BADGE_ROOT if pc == self._root else T.BADGE_CHORD)
-        return QColor(T.BADGE_SCALE if st == "SCALE" else T.BADGE_OUT)
+    def _note_fill(self, n: dict) -> str:
+        """음 색 = 그 음이 나오는 시점 코드 기준(연주화면 리프 노드와 같음): 근음 파랑·코드톤 초록·스케일음 회색·밖 빨강."""
+        pc = n["midi"] % 12
+        for a, b, tones, root, _ in self._chords:
+            if a <= n["beat_pos"] < b:
+                if pc == root:
+                    return T.BADGE_ROOT
+                if pc in tones:
+                    return T.BADGE_CHORD
+                break
+        return T.BADGE_SCALE if pc in self._note_set else T.BADGE_OUT
 
     def _badge(self, p: QPainter, pc: int, r: QRectF, font: QFont):
-        """스케일 안 건반 정중앙에 도수 배지. OUT는 안 그림."""
-        st = self._state(pc)
-        if st == "OUT":
+        """스케일 안 건반 정중앙에 도수 배지(코드와 무관하게 고정). 스케일 밖은 안 그림."""
+        if pc not in self._note_set:
             return
-        fg = QColor(T.BADGE_TEXT if st == "CHORD" else T.BADGE_SCALE_TEXT)
-        p.setBrush(self._fill(pc))
+        p.setBrush(QColor(T.BADGE_SCALE))
         p.setPen(Qt.PenStyle.NoPen)
         p.drawEllipse(r)
         text = degree_number(pc, self._root)
         if text:
             p.setFont(font)
-            p.setPen(fg)
+            p.setPen(QColor(T.BADGE_SCALE_TEXT))
             p.drawText(r, Qt.AlignmentFlag.AlignCenter, text)
 
     # ── 렌더 ─────────────────────────────────────────────────────
@@ -103,7 +102,7 @@ class RiffRoll(QWidget):
         p.setPen(Qt.PenStyle.NoPen)
         p.drawRoundedRect(QRectF(0, 0, w, self.height()), 8, 8)
 
-        badge_f = QFont(T.FONT_MONO)
+        badge_f = QFont(T.FONTS)
         badge_f.setPixelSize(8)
         badge_f.setBold(True)
         bsz = SEMI_H - 1        # 배지 지름(건반 칸 안)
@@ -148,7 +147,7 @@ class RiffRoll(QWidget):
             self._badge(p, midi % 12, r, badge_f)
 
         # ── 박자 격자 + 눈금 ──
-        f = QFont(T.FONT_MONO)
+        f = QFont(T.FONTS)
         f.setPixelSize(9)
         p.setFont(f)
         total = int(round(self._total_beats))
@@ -163,23 +162,34 @@ class RiffRoll(QWidget):
                 p.drawText(QRectF(x + 2, 0, 24, RULER_H),
                            Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
                            str((b % self._beats_per_bar) + 1))
+        chord_f = QFont(T.FONTS)                # 코드명: 그 코드 시작 박 눈금 옆
+        chord_f.setPixelSize(10)
+        chord_f.setBold(True)
+        p.setFont(chord_f)
+        p.setPen(QColor(T.TEXT_PRIMARY))
+        for a, _, _, _, name in self._chords:
+            p.drawText(QRectF(self._x(a) + 12, 0, 80, RULER_H),
+                       Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, name)
 
         if not self._notes:
             p.setPen(QColor(T.TEXT_MUTED))
-            p.setFont(QFont(T.FONT_MONO, 9))
+            p.setFont(QFont(T.FONTS, 9))
             p.drawText(QRectF(GUTTER, RULER_H, w - GUTTER,
                               self.height() - RULER_H),
                        Qt.AlignmentFlag.AlignCenter, "리프 없음")
             return
 
-        # ── 노트 알약 — 음높이 y에 배치(도수는 거터가 보여주므로 무라벨) ──
+        # ── 노트 알약 — 음높이 y에 배치, 안에 곡 스케일 번호(건반 거터와 같은 번호) ──
         ph = SEMI_H * 1.2
+        p.setFont(badge_f)
         for n in self._notes:
             bp = n["beat_pos"]
             dur = max(0.25, n.get("dur_beats", 0.5))
             x0, x1 = self._x(bp), self._x(bp + dur)
-            p.setBrush(self._fill(n["midi"] % 12))
+            fill = self._note_fill(n)
+            pill = QRectF(x0 + 1, self._y(n["midi"]) - ph / 2, max(8.0, x1 - x0 - 2), ph)
+            p.setBrush(QColor(fill))
             p.setPen(QPen(QColor(T.BG_INSET), 1))
-            p.drawRoundedRect(
-                QRectF(x0 + 1, self._y(n["midi"]) - ph / 2,
-                       max(8.0, x1 - x0 - 2), ph), 3, 3)
+            p.drawRoundedRect(pill, 3, 3)
+            p.setPen(QColor(T.BADGE_SCALE_TEXT if fill == T.BADGE_SCALE else T.BADGE_TEXT))
+            p.drawText(pill, Qt.AlignmentFlag.AlignCenter, degree_number(n["midi"] % 12, self._root))

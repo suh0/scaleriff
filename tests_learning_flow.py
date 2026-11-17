@@ -1,10 +1,13 @@
 """메인 화면 입력·설정 통합 검사."""
 import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+import statistics
+import time
 import unittest
 from unittest.mock import patch
+from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication, QComboBox, QPushButton
-from gui.main_screen import MainScreen
+from gui.main_screen import MainScreen, tap_offset
 from player.dummy_timeline import build_dummy_timeline
 
 
@@ -25,6 +28,107 @@ class LearningFlowTest(unittest.TestCase):
 
         with patch("gui.main_screen.QDialog.exec", inspect_dialog):
             s._show_settings()
+
+    def test_settings_song_edit_buttons_emit_after_close(self):
+        s = self.screen
+        for text, signal in (("박자 조정", s.beatEditRequested), ("코드 수정", s.chordEditRequested)):
+            got = []
+            signal.connect(lambda: got.append(True))
+
+            def click(dialog, text=text):
+                next(b for b in dialog.findChildren(QPushButton) if b.text() == text).click()
+                self.assertEqual(got, [], "설정 창이 닫히기 전에 조정 창을 열면 모달이 겹침")
+            with patch("gui.main_screen.QDialog.exec", click):
+                s._show_settings()
+            self.assertEqual(got, [True])
+
+    def test_sync_offset_tap_sets_and_shifts_screen_and_judge(self):
+        s = self.screen
+        beats = [i * 0.6 for i in range(40)]
+        # 들리는 박보다 120ms 늦게 탭(±15ms 흔들림) + 헛탭 한 번 → 중앙값으로 약 120ms
+        jitter = [0.0, 0.015, -0.015, 0.01, -0.01, 0.005, -0.005, 0.25]
+        taps = [beats[5 + i] + 0.12 + j for i, j in enumerate(jitter)]
+        self.assertAlmostEqual(tap_offset(taps, beats), 0.12, delta=0.011)
+        saved, now = [], [0.0]
+        s.syncChanged.connect(saved.append)
+        s.tl.beat_grid = lambda: beats
+        s.playhead.is_playing = lambda: True
+        s.playhead.position_sec = lambda: now[0]
+
+        def tap_along(dialog):
+            button = next(b for b in dialog.findChildren(QPushButton) if b.text() == "박자에 탭")
+            for t in taps:
+                now[0] = t
+                button.pressed.emit()
+        with patch("gui.main_screen.QDialog.exec", tap_along):
+            s._show_settings()
+        self.assertTrue(saved and 115 <= saved[-1] <= 125, saved)
+        self.assertAlmostEqual(s._sync_sec, saved[-1] / 1000)
+        # 판정은 들리는 위치(재생 위치 - 보정)로
+        s._mode = "practice"
+        now[0] = 3.0
+        with patch.object(s.riff, "judge", return_value=None) as judge:
+            s.on_midi_event({"type": "note", "pitch": 65, "is_on": True})
+        self.assertAlmostEqual(judge.call_args.args[1], 3.0 - s._sync_sec)
+        del s.playhead.is_playing, s.playhead.position_sec
+        # 화면도 늦게: G7 시작(2.4초) 직후라도 보정만큼은 아직 Dm7
+        s._render_at(2.45)
+        self.assertEqual(s.piano._chord_root, 2)
+        s.set_sync_ms(0)
+        s._render_at(2.45)
+        self.assertEqual(s.piano._chord_root, 7)
+
+    def test_playback_tick_alone_drives_frames_at_60hz(self):
+        s = self.screen
+        s.resize(1040, 740)
+        s.show()
+        s._seek_to(0.5)                       # Dm7 구간 — 근음 반짝이가 보이는 자리
+        stamps = []
+        s.playhead.positionChanged.connect(lambda _: stamps.append(time.perf_counter()))
+        s.playhead.play()
+        QTest.qWait(400)
+        self.assertTrue(s.stage.driven)
+        self.assertFalse(s.stage._sparkle_timer.isActive(), "재생 중 반짝이 타이머가 따로 그림")
+        gaps = [b - a for a, b in zip(stamps, stamps[1:])]
+        self.assertLess(statistics.mean(gaps), 0.022, "재생 틱이 60fps보다 느림(Coarse 타이머 ~31ms)")
+        s.playhead.pause()
+        QTest.qWait(80)
+        self.assertFalse(s.stage.driven)
+        self.assertTrue(s.stage._sparkle_timer.isActive(), "멈춤 중엔 반짝이 타이머가 다시 돎")
+
+    def test_chord_change_reuses_key_cache_after_first_loop(self):
+        s = self.screen
+        s.resize(1040, 740)
+        s.show()
+        QTest.qWait(50)                                 # 레이아웃 → 무대 크기 확정
+        stage, segs = s.stage, s.tl.segments          # Dm7 G7 Cmaj7 ×2
+
+        def frame(sec):
+            s._render_at(sec)
+            stage.grab()                                # paintEvent 강제(오프스크린 repaint는 안 그릴 수 있음)
+        builds = stage.cache_builds
+        for seg in segs[:3]:                            # 첫 바퀴: 상태마다 한 번씩만 그림
+            frame(seg.start_sec + 0.1)
+        self.assertGreater(stage.cache_builds, builds)  # 실제로 그렸음(빈 검사 방지)
+        self.assertGreaterEqual(len(stage._caches), 3)
+        builds = stage.cache_builds
+        for seg in segs[3:]:                            # 둘째 바퀴: 같은 코드 → 다시 안 그림
+            frame(seg.start_sec + 0.1)
+        self.assertEqual(stage.cache_builds, builds, "같은 코드로 돌아와도 건반 캐시를 다시 그림")
+        bg = stage._bg
+        self.assertIsNotNone(bg)
+        s._select_practice("riff")                      # 리프모드 건반은 코드와 무관 → 상태 1개
+        frame(segs[0].start_sec + 0.1)
+        builds = stage.cache_builds
+        for seg in segs[1:]:
+            frame(seg.start_sec + 0.1)
+        self.assertEqual(stage.cache_builds, builds, "리프모드에서 코드마다 건반 캐시를 다시 그림")
+        self.assertIs(stage._bg, bg, "배경은 창 크기가 바뀔 때만")
+        s.resize(1000, 700)
+        QTest.qWait(50)
+        frame(segs[0].start_sec + 0.1)
+        self.assertIsNotNone(stage._bg)
+        self.assertIsNot(stage._bg, bg)
 
     @classmethod
     def setUpClass(cls):

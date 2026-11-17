@@ -80,7 +80,7 @@ class _Onboarding(QWidget):
         cl.addWidget(self.position)
         self.title = QLabel()
         self.title.setStyleSheet(
-            f"color:{T.TEXT_PRIMARY};font-family:'{T.FONT_SANS}';"
+            f"color:{T.TEXT_PRIMARY};font-family:{T.FONT_CSS};"
             "font-size:22px;font-weight:700;border:none;")
         self.title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.body = QLabel()
@@ -169,7 +169,7 @@ class LinkScreen(QWidget):
         title = QLabel(f"Scale<span style='color:{T.ACCENT_LIGHT}'>Riff</span>")
         title.setTextFormat(Qt.TextFormat.RichText)
         title.setStyleSheet(
-            f"color:{T.TEXT_PRIMARY};font-family:'{T.FONT_SANS_EN}';"
+            f"color:{T.TEXT_PRIMARY};font-family:{T.FONT_CSS};"
             "font-size:44px;font-weight:700;")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lay.addWidget(title)
@@ -249,7 +249,7 @@ class LinkScreen(QWidget):
         self._restricted_widgets = (self.url_edit, self.go_btn)
         self._restricted = False
         # 입장 애니메이션 순서(위 → 아래)
-        self._input_items = [logo, title, sub, row_wrap, self.save_label]
+        self._input_items = [(logo, title, sub), row_wrap, self.save_label, self.recent_box]
         return w
 
     # ── 제한 모드(백그라운드 분석 중) — 세션(.json) 선택만 활성 ──

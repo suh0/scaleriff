@@ -94,6 +94,15 @@ def main():
     screen._render_at(1.0)
     assert screen.stage.isVisible() and not screen.riff.show_notes
     assert not screen.riff._nodes(), "자유모드: 모니터박스는 있되 노드 없음"
+    bands = screen.riff.chord_bands()
+    from gui import theme as _T
+    assert {c for *_, c in bands} == {_T.BADGE_ROOT, _T.BADGE_CHORD, _T.BADGE_SCALE}, "자유모드: 코드 음 레인 색 띠"
+    seg_b = next(s for s in tl.segments if s.start_sec > 1.0)
+    assert any(abs(y + h - screen.riff.height() * (1 - (seg_b.start_sec - 1.0) / screen.riff._lead)) < 1
+               for _, y, _, h, _ in bands), "띠 아래 끝 = 코드 첫 박"
+    screen._select_practice("riff")
+    assert not screen.riff.chord_bands(), "리프모드엔 색 띠 없음"
+    screen._select_practice("free")
     # 모니터박스 코드: 경계 4박 전부터 다음 코드가 커지고, 재생 중 바뀌면 이전 코드를 밀어냄
     seg0, seg1 = tl.segments[1], tl.segments[2]
     beat = tl.beat_sec()
@@ -132,7 +141,10 @@ def main():
     assert colors == {TONE_ROOT, TONE_CHORD, TONE_SCALE}, colors
     screen._select_practice("riff")
     assert all(stage._state_color(m) is None for m in range(60, 84)), "리프모드는 스케일 표시 없음"
+    assert not any(stage._out_key(m) for m in range(60, 84)), "리프모드는 스케일 밖 투명 없음"
     screen._select_practice("free")
+    assert {m for m in range(60, 84) if stage._out_key(m)} == {m for m in range(60, 84) if screen.piano._is_out(m)} \
+        and any(stage._out_key(m) for m in range(60, 84)), "자유연습: 스케일 밖 건반 투명"
     # 근음 반짝이: 일반모드엔 근음 건반 앞면에서 타이머 동작, 근음 없으면 정지
     from PyQt6.QtGui import QImage as _Img
     probe = _Img(stage.size(), _Img.Format.Format_ARGB32_Premultiplied)
@@ -152,15 +164,47 @@ def main():
     for midi in (60, 83):
         area = stage._kxf.mapRect(stage._key_rect(midi)).adjusted(0, 0, 0, stage._lip())
         assert stage.rect().toRectF().contains(area), (midi, area)
-    # 스페이스 = 재생 토글 + 재생바 잠깐 표시
-    assert screen.scrub_row.isHidden(), "재생바 기본 숨김"
+    # 건반 누름: 바뀌는 화면은 그 건반(+빛기둥) 영역뿐 — 이웃 흑건 그림자가 덧그려져 진해지지 않음
+    import numpy as np
+
+    def snap():
+        img = _Img(stage.size(), _Img.Format.Format_ARGB32_Premultiplied)
+        stage.render(img)
+        ptr = img.constBits()
+        ptr.setsize(img.sizeInBytes())
+        return np.frombuffer(ptr, np.uint8).reshape(img.height(), img.bytesPerLine()).astype(np.int16)
+
+    stage._draw_sparkles = lambda p, t: None        # 시각 따라 깜빡이는 반짝이 제외
+    screen._render_at(1.0)
+    base = snap()
+    for midi in (60, 64, 66):                       # 맨 왼쪽(원근으로 띠가 넓음)·흰 건반·흑건
+        screen.piano.set_pressed({midi})
+        # 캐시 합성 vs 직접 그리기 반올림(≤2/255)은 무시
+        ys, xs = np.nonzero((np.abs(snap() - base) > 4).reshape(base.shape[0], -1, 4).any(axis=2))
+        area = stage._screen_rect(midi)
+        assert len(xs) and area.contains(int(xs.min()), int(ys.min())) and area.contains(int(xs.max()), int(ys.max())), \
+            (midi, area, xs.min(), xs.max(), ys.min(), ys.max())
+        screen.piano.set_pressed(set())
+    assert (snap() == base).all(), "떼면 원래 화면(캐시)"
+    del stage._draw_sparkles
+    # 레인 직육면체: 흑건 레인은 흑건 윗면 높이만큼 떠서 판정선에 닿는다
+    k = stage._unit(stage._lane_h)
+    from gui.widgets.stage import BLACK_RISE
+    rise = stage._lip() * BLACK_RISE
+    hit_y = stage._xf.map(QPointF(500, stage._lane_h)).y()
+    lip = stage._lip()
+    _, _, w_front = stage._block(500, 40, 0, stage._lane_h, -lip, k)
+    _, _, b_front = stage._block(500, 20, 0, stage._lane_h, rise - lip, k)
+    assert abs(w_front[0].y() - hit_y) < 1e-6 and abs(w_front[3].y() - (hit_y + lip)) < 1e-6, "흰 레인 윗면 = 흰 건반 윗면"
+    assert abs(b_front[0].y() - (hit_y - rise)) < 1e-6, "흑건 레인 윗면 = 흑건 윗면 높이"
+    # 재생바 = 무대 아래에 항상 표시(무대와 겹치지 않음), 스페이스 = 재생 토글
+    assert not screen.scrub_row.isHidden(), "재생바 항상 표시"
+    assert stage.geometry().bottom() < screen.scrub_row.geometry().top(), "무대는 재생바 위에서 끝남"
     playing = screen.playhead.is_playing()
     screen._on_space()
     assert screen.playhead.is_playing() != playing and not screen.scrub_row.isHidden()
     assert screen.play_btn.isHidden() == screen.playhead.is_playing(), "가운데 재생 아이콘은 멈춤일 때만"
     screen.playhead.pause()
-    screen._hide_scrub()
-    assert screen.scrub_row.isHidden(), "타이머 만료 후 재생바 숨김"
     # 비용: 정적 레이어는 캐시, 프레임·연타는 캐시 재생성 없음
     import time
     from PyQt6.QtGui import QImage

@@ -95,7 +95,7 @@ class RiffView(QWidget):
         p.drawRoundedRect(QRectF(0, 0, w, h), 8, 8)
 
         # 박자 격자 + 눈금 숫자
-        f = QFont(T.FONT_MONO); f.setPixelSize(9)
+        f = QFont(T.FONTS); f.setPixelSize(9)
         p.setFont(f)
         total = int(round(self._total_beats))
         for b in range(total + 1):
@@ -114,7 +114,7 @@ class RiffView(QWidget):
         # 비어있으면 안내
         if not self._notes:
             p.setPen(QColor(T.TEXT_MUTED))
-            p.setFont(QFont(T.FONT_MONO, 9))
+            p.setFont(QFont(T.FONTS, 9))
             p.drawText(QRectF(0, lane_y, w, lane_h),
                        Qt.AlignmentFlag.AlignCenter, "리프 없음")
             return
@@ -145,7 +145,7 @@ class RiffView(QWidget):
             p.drawRoundedRect(rect, 6, 6)
             # 스케일 도수 번호
             text = "×" if st == "OUT" else (degree_number(pc, self._root) or "·")
-            fn = QFont(T.FONT_MONO); fn.setPixelSize(13); fn.setBold(True)
+            fn = QFont(T.FONTS); fn.setPixelSize(13); fn.setBold(True)
             p.setFont(fn)
             p.setPen(fg)
             p.drawText(rect, Qt.AlignmentFlag.AlignCenter, text)

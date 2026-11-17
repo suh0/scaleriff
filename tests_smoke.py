@@ -11,14 +11,14 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from PyQt6.QtWidgets import QApplication, QLabel, QTextEdit, QWidget
-from PyQt6.QtCore import QPoint, QSettings
+from PyQt6.QtCore import QPoint, QSettings, Qt
 from gui.app import AppWindow
 from player.dummy_timeline import build_dummy_timeline
 
 
 def main():
     with open(os.path.join(os.path.dirname(__file__), "requirements.txt"), encoding="utf-8") as f:
-        assert "yt-dlp[default]" in f.read(), "YouTube EJS 의존성이 requirements.txt에 없음"
+        assert "yt-dlp[default,deno]" in f.read(), "YouTube EJS·Deno 의존성이 requirements.txt에 없음"
     from ingest import audio_source
     assert hasattr(audio_source, "_find_deno"), "Deno 런타임 탐색기가 없음"
     with patch("ingest.audio_source.shutil.which", return_value=None), \
@@ -91,10 +91,12 @@ def main():
     assert tl.total_bars() == len(tl.segments)
     assert tl.segment_for_bar(0) is tl.segments[0]
 
-    # 화면 흐름: 분석완료 → 박자 조정 → 코드 편집 → 악보 → 연습(메인)
+    # 화면 흐름: 분석완료 → 학습 설정 → 연습(메인), 박자 조정·코드 수정은 메인 설정에서
     assert win.link_screen.save_dir(), "분석 후 저장경로 기본값 없음"
     win._on_timeline_ready(tl)
     assert os.path.exists(win._session_path(tl)), "세션 자동 저장 안 됨"
+    assert win.stack.currentWidget() is win.setup, "분석 직후 학습 설정으로 안 감"
+    win.main_screen.beatEditRequested.emit()
     assert win.stack.currentWidget() is win.beat
     assert win.beat.pages.currentWidget() is win.beat.beat_page
     assert win.beat.zoom_l.isVisible() and not win.beat.chord_dialog.isVisible()
@@ -164,19 +166,13 @@ def main():
     size = win.size()
     win.resize(win.minimumSize())
     app.processEvents()
-    su_scroll = su.findChild(QScrollArea)
-    assert su_scroll.verticalScrollBar().maximum() > 0, "학습 설정이 낮은 창에서 스크롤되지 않음"
+    su_scroll = su.findChild(QScrollArea)   # 스케일만 남아 최소 창에도 들어갈 수 있음 — 닿기만 확인
     su_scroll.ensureWidgetVisible(su.go_btn)
     app.processEvents()
     assert not su.go_btn.visibleRegion().isEmpty(), "스크롤해도 연습 시작 버튼이 안 보임"
     win.resize(size)
-    assert not su.landing_box.isHidden() and not su.landing_box.isEnabled()
-    su._pick_method("landing")
-    assert su.landing_box.isEnabled()
-    assert su.goal_btns["chord_tone"].isEnabled()
-    su.count_mode.setCurrentIndex(2)
-    su.count_lo.setValue(3)
-    su.count_hi.setValue(4)
+    assert not hasattr(su, "method_btns"), "학습 설정은 스케일만 고름"
+    su._pick_scale(0)
     # 코드 수정 창: 취소 = 되돌림, 확인 = 반영 + 학습 설정 새로고침(화면 선택 유지)
     from PyQt6.QtCore import QTimer as _QT
 
@@ -186,28 +182,34 @@ def main():
             win.beat._apply_chord(tl.segments[0], "Em")
             (win.beat.done_btn if accept else win.beat.chord_cancel_btn).click()
         _QT.singleShot(0, run)
-        su.chord_btn.click()
+        win.main_screen.chordEditRequested.emit()   # 메인 설정의 '코드 수정'
     first = tl.segments[0].chord.name
     _edit(False)
     assert tl.segments[0].chord.name == first, "취소했는데 코드 수정이 남음"
     _edit(True)
     assert tl.segments[0].chord.name == "Em", "확인했는데 코드 수정이 반영 안 됨"
-    assert su._method == "landing" and su.count() == [3, 4], "새로고침 후 선택이 초기화됨"
-    # ← 박자 조정 버튼 = 박자 조정 화면으로
-    su.backToBeatRequested.emit()
-    assert win.stack.currentWidget() is win.beat
+    assert su._scale == 0, "새로고침 후 선택이 초기화됨"
+    assert win.stack.currentWidget() is win.setup, "코드 수정 확인 후 학습 설정으로 안 돌아옴"
+    # 설정의 '박자 조정' = 박자 조정 화면(1단계부터), ← = 적용 없이 연 화면으로(학습 설정 ⚙ 포함)
+    assert not su.settings_btn.isHidden(), "학습 설정에도 ⚙"
+    win.main_screen.beatEditRequested.emit()                    # 학습 설정에서 연 경우
+    win.beat.back_btn.click()
+    assert win.stack.currentWidget() is win.setup
+    win.stack.setCurrentWidget(win.main_screen)
+    win.main_screen.beatEditRequested.emit()
+    assert win.stack.currentWidget() is win.beat and win.beat._step == 1
     assert win.beat.pages.currentWidget() is win.beat.beat_page
+    win.beat.back_btn.click()
+    assert win.stack.currentWidget() is win.main_screen
     win._enter_setup()
-    su._pick_method("landing")
-    su._pick_goal("chord_tone")
-    su.count_mode.setCurrentIndex(2)
-    su.count_lo.setValue(3)
-    su.count_hi.setValue(4)
     su._pick_scale(0)
-    su.go_btn.click()
+    app.processEvents()
+    from PyQt6.QtTest import QTest
+    assert su.back_btn.focusPolicy() == Qt.FocusPolicy.NoFocus, "진입 시 Enter가 ←로 가면 안 됨"
+    QTest.keyClick(su.focusWidget() or su, Qt.Key.Key_Return)   # Enter = 연습 시작
+    assert win.stack.currentWidget() is win.main_screen, "학습 설정에서 Enter가 연습 시작으로 안 감"
     pent = su._options[0]
-    assert tl.practice == {"scale": pent, "method": "landing", "goal": "chord_tone", "count": [3, 4],
-                           "skip_detour": False}
+    assert {k: tl.practice.get(k) for k in ("scale", "skip_detour")} == {"scale": pent, "skip_detour": False}
     assert all(s.note_set == pent["note_set"] for s in tl.segments if not s.is_detour)
     assert not any(s.example for s in tl.segments), "스케일 변경 후 이전 리프가 남음"
     assert win.stack.currentWidget() is win.main_screen
@@ -219,16 +221,23 @@ def main():
     def _accept_dialog():
         d = next(w for w in app.topLevelWidgets() if isinstance(w, RiffDialog) and w.isVisible())
         assert d.roll._notes and all(n["midi"] % 12 in pent["note_set"] for n in d.roll._notes)
-        assert d.count_spin.minimum() == len(d.patterns) == d.list.count()
-        d.count_spin.setValue(d.count_spin.maximum())
-        d.make_riffs()
-        assert d.list.count() == d.count_spin.value()
-        d.list.setCurrentRow(d.list.count() - 1)   # 패턴 클릭 → 롤 음표만 교체
+        assert d.roll._chords and d.roll._chords[0][0] == 0, "리프 롤: 마디 첫 박 코드"
+        from gui import theme as T
+        _, _, tones, croot, _ = d.roll._chords[0]
+        first = [n for n in d.roll._notes if n["beat_pos"] < d.roll._chords[0][1]]
+        assert all(d.roll._note_fill(n) == (T.BADGE_ROOT if n["midi"] % 12 == croot else
+                   T.BADGE_CHORD if n["midi"] % 12 in tones else T.BADGE_SCALE) for n in first), "음 색 = 그 시점 코드 기준"
+        assert d.list.count() == len(d.blocks) == len(d.riffs) > 0   # 4마디마다 리프 1개(개수 선택 없음)
+        assert not d._goals() and "착지" not in d.list.item(1).text()
+        d.landing_chks["third"].setChecked(True)   # 3도 착지 섞기 = 기본·3도 리프 블록 번갈아(다시 굽기)
+        assert ["3도 착지" in d.list.item(i).text() for i in range(min(3, d.list.count()))] ==             [False, True, False][:d.list.count()]
+        d.list.setCurrentRow(d.list.count() - 1)   # 블록 클릭 → 롤 음표만 교체
         d.toggle_listen()
         assert d.listen_btn.text() == "정지 ■"
-        before = d._current()["variant"]
+        row = d.list.currentRow()
+        before = d.riffs[row]["variant"]
         d.regenerate()   # 다시 만들기는 듣기를 멈춘다
-        assert d._current()["variant"] != before and d.listen_btn.text() == "듣기 ▶"
+        assert d.riffs[row]["variant"] != before and d.listen_btn.text() == "듣기 ▶"
         d.toggle_listen()
         dialogs.append(d)
         d.accept()
@@ -236,6 +245,8 @@ def main():
     win.main_screen.playhead.seek(3.0)
     win.main_screen.riff_btn.click()
     assert dialogs and win.main_screen._mode == "practice" and win.main_screen._riff_events
+    assert tl.practice["landing"] == ["third"] and win.main_screen._landing_spans == [
+        (b["bars"][0][0], b["bars"][-1][1], "third") for b in dialogs[0].blocks[1::2]], "착지음 리프 블록 구간"
     assert win.main_screen.riff_btn.text() == "리프모드 해제"
     assert win.main_screen.playhead.position_sec() == tl.count_in_start(), "리프모드 진입 시 곡 처음 아님"
     win.main_screen.playhead.seek(3.0)
@@ -252,7 +263,7 @@ def main():
     # 렌더 + 입력 + 모드토글
     ms = win.main_screen
     app.processEvents()
-    assert ms.scrub_row.isHidden(), "재생바는 기본 숨김(스페이스로 표시)"
+    assert not ms.scrub_row.isHidden(), "재생바는 항상 표시(무대 아래 고정)"
     assert not hasattr(ms, "loop_btn"), "루프 기능 삭제됨"
     win.resize(1040, 740)
     app.processEvents()
@@ -329,11 +340,13 @@ def main():
     ms.note_player.play_note = lambda midi, *a: played.append(midi)
     ms.playhead.is_playing = lambda: True
     ms._on_tick(end)
-    assert not played, "리프듣기 꺼짐인데 리프 소리"
+    calls = [m for t, m, c in ms._riff_events if c and mid <= t <= end]
+    assert calls and played == calls, "리프듣기 꺼짐이면 프로그램 차례 음만 소리"
+    played.clear()
     ms._seek_to(mid)
     ms.riff_listen.setChecked(True)
     ms._on_tick(end)
-    assert played == [m for t, m in ms._riff_events if mid <= t <= end], "리프듣기 음 누락"
+    assert played == [m for t, m, _ in ms._riff_events if mid <= t <= end], "리프듣기 음 누락"
     del ms.note_player.play_note, ms.playhead.is_playing
     ms.riff_listen.setChecked(False)
     ms._select_practice("free")     # 자유연습
@@ -493,7 +506,7 @@ def main():
     fd, sess = _tmp.mkstemp(suffix=".json"); _os.close(fd)
     tl3.save_json(sess)
     win._start_build(sess)
-    assert win.stack.currentWidget() is win.beat, "세션 로드 후 박자 화면 아님"
+    assert win.stack.currentWidget() is win.setup, "세션 로드 후 학습 설정 화면 아님"
     assert win._timeline is not tl3 and win._timeline.bpm == tl3.bpm
     assert len(win._timeline.segments) == 2
     assert win._timeline.chord_spans == tl3.chord_spans   # 원자료도 복원 → 재보정 가능
@@ -528,8 +541,8 @@ def main():
     win.analyzing.timelineReady.emit(tl_bg)               # 완료 → 알약에 연주하기
     assert win._pending_tl is tl_bg and win.stack.currentWidget() is win.link_screen
     assert not win._pill.play_btn.isHidden() and not tl_bg.scale_riffs
-    win._play_pending()                                   # → 그 곡의 박자 조정
-    assert win.stack.currentWidget() is win.beat and win._timeline is tl_bg
+    win._play_pending()                                   # → 그 곡의 학습 설정
+    assert win.stack.currentWidget() is win.setup and win._timeline is tl_bg
     assert not win._bg_wait and win._pill.isHidden()
     assert win.link_screen.url_edit.isEnabled()
 

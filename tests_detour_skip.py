@@ -90,12 +90,78 @@ class DetourSkipTest(unittest.TestCase):
         tl.practice["skip_detour"] = True
         s = MainScreen()
         dialog = RiffDialog(tl, s._ml_model)
-        self.assertFalse(any(pt["overlay"] for pt in dialog.patterns))
         dialog.accept()
         self.assertTrue(all(seg.example == [] for seg in tl.segments if seg.is_detour))
         self.assertTrue(any(seg.example for seg in tl.segments if not seg.is_detour))
         s.close()
 
+
+    def test_riff_alternates_program_and_my_bars(self):
+        # 4마디 블록 = 같은 리프(같은 음·같은 박) [프로그램, 나, 프로그램, 나]
+        tl = build_dummy_timeline()
+        tl.apply_song_scale(song_scale_options(tl.key_root, "major")[0])
+        s = MainScreen()
+        s.set_timeline(tl)
+        dialog = RiffDialog(tl, s._ml_model)
+        self.assertTrue(dialog.blocks)
+        dialog.accept()
+        s._build_riff_events()
+        for block in dialog.blocks:
+            bars = []
+            for a, b in block["bars"]:
+                bars.append([(round(tl.beat_at(t) - tl.beat_at(a), 3), m, c)
+                             for t, m, c in s._riff_events if a <= t < b])
+            self.assertTrue(5 <= len(bars[0]) and all(c for _, _, c in bars[0]), bars[0])
+            for k, notes in enumerate(bars):
+                self.assertEqual([(x, m) for x, m, _ in notes], [(x, m) for x, m, _ in bars[0]])
+                self.assertTrue(all(c == (k % 2 == 0) for _, _, c in notes))
+        # 낙하 노드 = 두 차례 모두, 판정·흐린 레일 = 프로그램 차례만
+        self.assertEqual(len(s.riff._events), len(s._riff_events))
+        self.assertEqual(s.riff._calls, [span for blk in dialog.blocks for span in blk["bars"][::2]])
+        s.riff.show_notes = True
+        call = next((t, m) for t, m, c in s._riff_events if c)
+        mine = next((t, m) for t, m, c in s._riff_events if not c)
+        self.assertIsNone(s.riff.judge(call[1], call[0]))
+        self.assertEqual(s.riff.judge(mine[1], mine[0])[0], "PERFECT")
+        s.riff.resize(100, 400)
+        a, b = s.riff._calls[0]
+        s.riff.set_position(a)
+        self.assertEqual(s.riff.call_bands()[0], (400 * (1 - (min(b, a + s.riff._lead) - a) / s.riff._lead), 400))
+        s.close()
+
+    def test_landing_check_alternates_blocks_and_highlights_only_there(self):
+        from ml.generate import _landing_pc
+        tl = build_dummy_timeline()
+        tl.apply_song_scale(song_scale_options(tl.key_root, "major")[1])   # 키 7음 → 모든 코드 3도 가능
+        s = MainScreen()
+        s.set_timeline(tl)
+        dialog = RiffDialog(tl, s._ml_model)
+        self.assertGreaterEqual(len(dialog.blocks), 2)
+        n = len(dialog.blocks)
+        self.assertEqual([chk.text() for chk in dialog.landing_chks.values()], ["3도 착지 섞기", "7도 착지 섞기"])
+        self.assertEqual([dialog._goal(i) for i in range(n)], [None] * n)          # 기본 = 착지 없음
+        dialog.landing_chks["seventh"].setChecked(True)
+        self.assertEqual([dialog._goal(i) for i in range(n)], [None, "seventh"] * (n // 2) + [None] * (n % 2))
+        dialog.landing_chks["third"].setChecked(True)                             # 둘 다 = 기본→3도→7도 순환
+        self.assertEqual([dialog._goal(i) for i in range(6)], [None, "third", "seventh"] * 2)
+        last = dialog.riffs[1]["notes"][-1]                                        # 3도 리프 끝 = 3도
+        self.assertEqual(last["midi"] % 12, _landing_pc(tl.segment_at(last["start_sec"]), "third"))
+        dialog.accept()
+        self.assertEqual(tl.practice["landing"], ["third", "seventh"])
+        self.assertEqual(RiffDialog(tl, s._ml_model)._goals(), ["third", "seventh"])   # 다시 열어도 유지
+        s._select_practice("riff")
+        a, _, goal = s._landing_spans[0]
+        self.assertEqual(goal, "third")
+        s._seek_to(a + 1e-3)                    # 착지음 블록 = 목표음만 초록
+        seg = tl.segment_at(a + 1e-3)
+        self.assertEqual(set(s.piano._chord_tones), {_landing_pc(seg, "third")})
+        s._seek_to(dialog.blocks[0]["bars"][0][0] + 1e-3)   # 기본 블록 = 코드톤 전체
+        self.assertEqual(set(s.piano._chord_tones),
+                         set(tl.segment_at(dialog.blocks[0]["bars"][0][0] + 1e-3).chord_tones()))
+        s._select_practice("free")              # 자유연습 = 착지음 강조 없음
+        s._seek_to(a + 1e-3)
+        self.assertEqual(set(s.piano._chord_tones), set(seg.chord_tones()))
+        s.close()
 
 if __name__ == "__main__":
     unittest.main()

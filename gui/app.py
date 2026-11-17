@@ -1,7 +1,7 @@
 """메인 윈도우 — QStackedWidget 화면 흐름 (정의서 §6).
 
-[0] 링크 입력 → [1] 분석 중 → [2a] 박자 조정 → [2] 학습 설정(곡 스케일·연습 방식)
-→ [3] 메인(플레이어)
+[0] 링크 입력 → [1] 분석 중 → [2] 학습 설정(곡 스케일·연습 방식) → [3] 메인(플레이어)
+박자 조정·코드 수정은 메인의 설정(⚙)에서 열고, 확정하면 학습 설정으로 돌아온다.
 """
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ import hashlib
 import os
 
 from PyQt6.QtWidgets import (
-    QMainWindow, QStackedWidget, QFrame, QHBoxLayout, QVBoxLayout, QLabel, QPushButton, QFileDialog, QApplication
+    QMainWindow, QFrame, QHBoxLayout, QVBoxLayout, QLabel, QPushButton, QFileDialog, QApplication
 )
 from PyQt6.QtGui import QFont
 from PyQt6.QtCore import QSettings, pyqtSignal
@@ -22,6 +22,7 @@ _CACHE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file
                           "cache")
 
 from gui import theme as T
+from gui.anim import FadeStack
 from gui.link_screen import LinkScreen
 from gui.analyzing_screen import AnalyzingScreen
 from gui.beat_screen import BeatScreen
@@ -43,7 +44,7 @@ class AnalysisPill(QFrame):
         lay.setContentsMargins(16, 6, 10, 6)
         self.lbl = QLabel("분석 중… 0%")
         self.lbl.setStyleSheet(
-            f"color:{T.TEXT_BODY};font-family:'{T.FONT_MONO}';"
+            f"color:{T.TEXT_BODY};font-family:{T.FONT_CSS};"
             "font-size:12px;border:none;")
         lay.addWidget(self.lbl)
         self.play_btn = QPushButton("연주하기 ▶")
@@ -71,7 +72,7 @@ class AppWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         T.load_fonts()                       # 번들 폰트 로드(있으면)
-        base = QFont(T.FONT_SANS, 11)        # v4: Noto Sans KR 한글 기본
+        base = QFont(T.FONTS, 11)            # 영문 Segoe UI + 한글 본고딕
         base.setWeight(QFont.Weight.Medium)  # v4: light(300) 금지, 최소 Medium(500)
         self.setFont(base)
         self.setWindowTitle("ScaleRiff")
@@ -83,7 +84,7 @@ class AppWindow(QMainWindow):
         QApplication.instance().setProperty("reduceMotion", self._settings.value("reduce_motion", False, type=bool))
         seen_onboarding = self._settings.value("seen_onboarding", False, type=bool)
 
-        self.stack = QStackedWidget()
+        self.stack = FadeStack()             # 화면 전환 = 이전 화면 스냅샷 페이드
         backdrop = T.Backdrop()              # 전 화면 공통 배경(화면들은 투명)
         QVBoxLayout(backdrop).addWidget(self.stack)
         backdrop.layout().setContentsMargins(0, 0, 0, 0)
@@ -112,15 +113,18 @@ class AppWindow(QMainWindow):
         self.analyzing.analysisCancelled.connect(self._on_analysis_cancelled)
         self._pill.playRequested.connect(self._play_pending)
         self.beat.proceedRequested.connect(self._enter_setup)
-        self.beat.backToLinkRequested.connect(self._go_link)
+        self.beat.backRequested.connect(lambda: self.stack.setCurrentWidget(self._beat_back))   # 연 화면으로
         self.setup.practiceRequested.connect(self._enter_main)
-        self.setup.chordEditRequested.connect(self._edit_chords)
-        self.setup.backToBeatRequested.connect(
-            lambda: self.stack.setCurrentWidget(self.beat))
+        self.setup.backToLinkRequested.connect(self._go_link)
+        self.setup.settingsRequested.connect(self.main_screen._show_settings)   # 같은 설정 창
         self.main_screen.backToLinkRequested.connect(self._go_link)
         self.main_screen.backToSetupRequested.connect(self._go_setup)
+        self.main_screen.beatEditRequested.connect(self._edit_beat)
+        self.main_screen.chordEditRequested.connect(self._edit_chords)
         self.main_screen.midiPortRequested.connect(self._connect_midi)
         self.main_screen.guideFinished.connect(lambda: self._settings.setValue("seen_play_guide", True))
+        self.main_screen.set_sync_ms(self._settings.value("sync_ms", 0, type=int))
+        self.main_screen.syncChanged.connect(lambda ms: self._settings.setValue("sync_ms", ms))
 
         self._timeline = None
         self._midi = None
@@ -217,8 +221,8 @@ class AppWindow(QMainWindow):
     def _open_timeline(self, timeline):
         self._timeline = timeline
         self._save_session(timeline)         # 재분석 없이 불러올 세션 파일(캐시)
-        self.beat.set_timeline(timeline)
-        self.stack.setCurrentWidget(self.beat)
+        self.beat.set_timeline(timeline)     # 박자·코드 조정 창이 쓸 타임라인
+        self._enter_setup()                  # 분석 직후엔 자동 추정 격자 그대로 학습 설정으로
 
     # ── 백그라운드 분석 대기(연습하며 기다리기) ──────────────────
     def _enter_bg_wait(self):
@@ -268,13 +272,22 @@ class AppWindow(QMainWindow):
         self.setup.set_timeline(self._timeline)
         self.stack.setCurrentWidget(self.setup)
 
+    def _edit_beat(self):
+        """설정의 '박자 조정' — 확인하면 학습 설정으로, ←는 바꾸지 않고 연 화면(메인·학습 설정)으로."""
+        self.main_screen.pause()
+        self._beat_back = self.stack.currentWidget()
+        self.beat.set_timeline(self._timeline)   # 지난 조정을 버리고 현재 타임라인에서 1단계부터
+        self.stack.setCurrentWidget(self.beat)
+
     def _edit_chords(self):
-        """학습 설정의 '코드 수정' 창 — 확인하면 저장하고 학습 설정을 새로고침."""
+        """메인 설정의 '코드 수정' 창 — 확인하면 저장하고 새로고침한 학습 설정으로."""
+        self.main_screen.pause()
         self.setup.remember()
         key = self._timeline.key
         if self.beat.edit_chords():
             self._save_session(self._timeline)
             self.setup.set_timeline(self._timeline)
+            self.stack.setCurrentWidget(self.setup)
             if self._timeline.key != key:
                 self.statusBar().showMessage(f"코드에 맞춰 키를 {self._timeline.key}로 바꿨어요", 5000)
 

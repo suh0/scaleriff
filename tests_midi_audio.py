@@ -290,6 +290,28 @@ class MidiAudioTest(unittest.TestCase):
             head.stop()
             head._player.setSource(QUrl())
 
+    def test_real_audio_clock_is_smooth(self):
+        """음원 위치 보고는 약 0.1초 계단 — 재생 위치는 벽시계처럼 매끄럽게 흐르면서 음원을 따라가야 한다."""
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, "tone.wav")
+            rate = 22050
+            sf.write(path, 0.2 * np.sin(2 * np.pi * 440 * np.arange(rate * 4) / rate), rate)
+            head = Playhead(4, path)
+            head.set_volume(0)
+            try:
+                head.play()
+                self.assertTrue(wait_for(lambda: head._player.position() >= 300, 2000))  # 실제 음원이 흐른 뒤
+                samples = []
+                for _ in range(80):
+                    QTest.qWait(10)
+                    samples.append((time.perf_counter(), head.position_sec()))
+                steps = [(p1 - p0) - (t1 - t0) for (t0, p0), (t1, p1) in zip(samples, samples[1:])]
+                self.assertLess(max(map(abs, steps)), 0.03, "위치가 음원 보고처럼 계단으로 튐")
+                self.assertLess(abs(head.position_sec() - head._player.position() / 1000), 0.15, "음원과 어긋남")
+            finally:
+                head.stop()
+                head._player.setSource(QUrl())
+
     def test_real_ffmpeg_seek_play_burn_in_keeps_decoding_nonzero_audio(self):
         with tempfile.TemporaryDirectory() as folder:
             path = os.path.join(folder, "burn_in.wav")
@@ -323,7 +345,8 @@ class MidiAudioTest(unittest.TestCase):
                     head.seek(target)
                     head.play()
                     deadline = time.monotonic() + 0.8
-                    while ((head.position_sec() <= target + 0.025 or len(decoded) <= received_before)
+                    # 대기는 실제 디코드 진행(음원 보고) 기준 — position_sec는 재생 직후부터 흐르는 보간 시계
+                    while ((head._player.position() <= (target + 0.025) * 1000 or len(decoded) <= received_before)
                            and time.monotonic() < deadline):
                         QTest.qWait(10)
                     self.assertGreater(head.position_sec(), target + 0.025, (index, errors))

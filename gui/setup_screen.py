@@ -1,22 +1,22 @@
-"""[4] 학습 설정 — 곡 전체 스케일 1개 + 연습 방식(자유 / 착지음).
+"""[2] 학습 설정 — 곡 전체 스케일 1개만 고른다(연습은 자유연습으로 시작).
 
 - 스케일: 펜타토닉(추천) · 키 스케일 7음 · 블루스. 키 밖 코드(예외 구간)는 로컬 스케일 유지.
-- 착지음 목표는 선택한 스케일로 곡의 모든 코드에서 가능한 것만 켠다.
-- 음 개수(리프 하나에서 칠 스케일 음, 최소 3): 사용안함 / 정해진 개수 / 개수 범위.
+- 착지음은 연주화면 리프모드의 리프 생성 창에서 체크한다.
 """
 from __future__ import annotations
 
 from types import SimpleNamespace
 
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QPushButton, QComboBox, QSpinBox,
-    QFrame, QGraphicsOpacityEffect, QCheckBox, QScrollArea, QScroller,
+    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QPushButton,
+    QFrame, QCheckBox, QScrollArea, QScroller,
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 
 from analyze.theory import song_scale_options
 from ml.generate import _landing_pc
 from gui import theme as T
+from gui.anim import stagger
 
 GOALS = (("root", "1도"), ("third", "3도"), ("seventh", "7도"), ("chord_tone", "코드톤"))
 
@@ -85,42 +85,16 @@ def chip_qss(selected: bool) -> str:
             f"QPushButton:disabled{{color:{T.TEXT_DIM};border:1px solid {T.BORDER_SUBTLE};}}")
 
 
-def segment_qss(selected: bool) -> str:
-    """착지 목표 세그먼트 버튼(어두운 홈 안)."""
-    base = "border:none;border-radius:9px;padding:0 14px;min-width:36px;min-height:34px;font-size:13px;"
-    if selected:
-        return (f"QPushButton{{background:{T.ACCENT_GRAD};color:{T.WHITE};{base}font-weight:700;}}"
-                f"QPushButton:disabled{{background:transparent;color:{T.TEXT_DIM};}}")
-    return (f"QPushButton{{background:transparent;color:{T.TEXT_BODY};{base}}}"
-            f"QPushButton:hover{{background:{T.BG_SURFACE_ALT};}}"
-            "QPushButton:disabled{color:#5d6a7e;}")
-
-
-def method_qss(selected: bool) -> str:
-    """연습 방식 선택 카드(라디오 + 제목 + 설명)."""
-    look = (f"background:rgba(91,132,255,0.14);border:1px solid {T.ACCENT};" if selected
-            else f"background:{T.BG_SURFACE_ALT};border:1px solid {T.BORDER_DEFAULT};")
-    return (f"QPushButton{{{look}border-radius:14px;min-height:60px;text-align:left;}}"
-            f"QPushButton:hover,QPushButton:focus{{border-color:{T.ACCENT};}}")
-
-
-def radio_qss(selected: bool) -> str:
-    return (f"background:{T.WHITE};border:5px solid {T.ACCENT};border-radius:9px;" if selected
-            else f"background:transparent;border:2px solid {T.TEXT_DIM};border-radius:9px;")
-
-
 class SetupScreen(QWidget):
     practiceRequested = pyqtSignal()
-    backToBeatRequested = pyqtSignal()
-    chordEditRequested = pyqtSignal()
+    backToLinkRequested = pyqtSignal()
+    settingsRequested = pyqtSignal()     # ⚙ — 연주화면과 같은 설정 창
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.tl = None
         self._options: list[dict] = []
         self._scale = 0
-        self._method = "free"
-        self._goal = "third"
         self._skip = False                 # 키 밖 코드 제외(건반 강조·리프 없음)
         content = T.compact_content(self)
         # 창이 낮아도 잘리지 않게 스크롤 — 휠·스크롤바 외에 빈 곳을 끌어서도 움직인다
@@ -140,18 +114,27 @@ class SetupScreen(QWidget):
         root.setContentsMargins(T.PAD_H, T.PAD_V, T.PAD_H, T.PAD_V)
         root.setSpacing(16)
 
-        # ── 머리줄: ← · 제목 ──────────────────────────────────────
-        self.back_btn = QPushButton("←")
-        self.back_btn.setToolTip("박자 조정으로")
-        self.back_btn.setFixedSize(48, 48)
-        self.back_btn.setStyleSheet(T.qss_icon_btn())
-        self.back_btn.clicked.connect(self.backToBeatRequested.emit)
+        # ── 모서리 [←] [⚙]: 연주화면과 같은 화면 좌표에 고정(resizeEvent) ──
+        self.back_btn = QPushButton("←", self)
+        self.back_btn.setToolTip("링크 입력으로")
+        self.back_btn.clicked.connect(self.backToLinkRequested.emit)
+        self.settings_btn = QPushButton("⚙", self)
+        self.settings_btn.setAccessibleName("설정 — 박자·코드 조정, 입력·소리")
+        self.settings_btn.clicked.connect(self.settingsRequested.emit)
+        for b in (self.back_btn, self.settings_btn):
+            b.setFixedSize(48, 48)
+            b.setFocusPolicy(Qt.FocusPolicy.NoFocus)   # 진입 시 Enter가 ←로 가지 않게(연주화면과 같음)
+            b.setStyleSheet(T.qss_icon_btn())
+
+        # ── 제목: 천장과 첫 카드의 중간. 카드·시작 버튼은 대략 세로 가운데(stretch 1:1:2) ──
         head = T.title_block("학습내용 선택", "")
         self.title = head.title
-        root.addLayout(T.header_row(self.back_btn, head))
-        root.addSpacing(4)
+        root.addStretch(1)
+        root.addWidget(head)
+        self._boxes = [head]                   # 순차 등장 단위(위 → 아래)
+        root.addStretch(1)
 
-        # ── 곡 정보 카드: 곡 이름·추정 키·코드 수정 / 키 밖 코드 개수·제외 ──
+        # ── 곡 정보 카드: 곡 이름·추정 키 / 키 밖 코드 개수·제외 ──
         card, lay = self._card("곡 정보")
         info_row = QHBoxLayout()
         info_row.setSpacing(12)
@@ -159,15 +142,9 @@ class SetupScreen(QWidget):
         self.song_lbl.setStyleSheet(f"color:{T.TEXT_PRIMARY};font-size:15px;font-weight:700;")
         self.key_lbl = QLabel("")
         self.key_lbl.setStyleSheet(f"color:{T.TEXT_MUTED};font-size:13px;")
-        self.chord_btn = QPushButton("코드 수정")
-        self.chord_btn.setStyleSheet(T.qss_ghost_btn() + "QPushButton{border-radius:19px;padding:0 16px;"
-                                     "min-height:38px;font-size:13px;}")
-        self.chord_btn.setToolTip("코드·키를 수정합니다. 확인하면 이 화면에 반영돼요.")
-        self.chord_btn.clicked.connect(self.chordEditRequested.emit)
         info_row.addWidget(self.song_lbl)
         info_row.addWidget(self.key_lbl)
         info_row.addStretch(1)
-        info_row.addWidget(self.chord_btn)
         lay.addLayout(info_row)
         self.detour_lbl = QLabel("")
         self.detour_lbl.setWordWrap(True)
@@ -178,6 +155,7 @@ class SetupScreen(QWidget):
         self.skip_chk.clicked.connect(self._pick_skip)   # 사용자 클릭만(set_timeline의 setChecked는 무시)
         lay.addWidget(self.skip_chk)
         root.addWidget(card)
+        self._boxes.append(card)
 
         # ── 곡 스케일 카드 ────────────────────────────────────────
         card, lay = self._card("곡 스케일")
@@ -218,98 +196,7 @@ class SetupScreen(QWidget):
             g.addWidget(lbl, r, 1)
         lay.addWidget(guide)
         root.addWidget(card)
-
-        # ── 연습 방식 카드: 자유연습 | 착지음 + 착지음 설정 ────────
-        card, lay = self._card("연습 방식")
-        method_row = QHBoxLayout()
-        method_row.setSpacing(10)
-        self.method_btns = {}
-        self._radios = {}
-        for key, text, desc in (("free", "자유연습", "스케일 안에서 자유롭게 즉흥해요"),
-                                ("landing", "착지음", "코드가 바뀔 때 목표음에 도착해요")):
-            btn = QPushButton()
-            btn.setAccessibleName(text)
-            btn.clicked.connect(lambda _, k=key: self._pick_method(k))
-            inner = QHBoxLayout(btn)
-            inner.setContentsMargins(18, 10, 18, 10)
-            inner.setSpacing(14)
-            radio = QLabel()
-            radio.setFixedSize(18, 18)
-            words = QVBoxLayout()
-            words.setSpacing(2)
-            name = QLabel(text)
-            name.setStyleSheet(f"color:{T.TEXT_PRIMARY};font-size:14px;font-weight:700;")
-            sub = QLabel(desc)
-            sub.setStyleSheet(f"color:{T.TEXT_MUTED};font-size:12px;")
-            words.addWidget(name)
-            words.addWidget(sub)
-            for w in (radio, name, sub):
-                w.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-            inner.addWidget(radio)
-            inner.addLayout(words, 1)
-            method_row.addWidget(btn, 1)
-            self.method_btns[key] = btn
-            self._radios[key] = radio
-        lay.addLayout(method_row)
-
-        # 착지음 설정 — 항상 보이고, 착지음일 때만 활성(아니면 흐리게)
-        self.landing_box = QFrame()
-        self.landing_box.setObjectName("landingBox")
-        lv = QVBoxLayout(self.landing_box)
-        lv.setContentsMargins(18, 12, 18, 14)
-        lv.setSpacing(10)
-        top = QHBoxLayout()
-        sub_title = QLabel("착지음 설정")
-        sub_title.setStyleSheet(f"color:{T.TEXT_BODY};font-size:13px;font-weight:700;")
-        self.landing_hint = QLabel("착지음을 고르면 설정할 수 있어요")
-        self.landing_hint.setStyleSheet(f"color:{T.TEXT_MUTED};font-size:12px;")
-        top.addWidget(sub_title)
-        top.addStretch(1)
-        top.addWidget(self.landing_hint)
-        lv.addLayout(top)
-        form = QGridLayout()
-        form.setHorizontalSpacing(16)
-        form.setVerticalSpacing(10)
-        form.setColumnMinimumWidth(0, 110)
-        form.setColumnStretch(2, 1)
-        form.addWidget(self._caption("착지 목표"), 0, 0)
-        segment = QFrame()
-        segment.setObjectName("segment")
-        segment.setStyleSheet(f"QFrame#segment{{background:{T.BG_INSET};border:1px solid {T.BORDER_SUBTLE};"
-                              "border-radius:12px;}")
-        seg = QHBoxLayout(segment)
-        seg.setContentsMargins(4, 4, 4, 4)
-        seg.setSpacing(4)
-        self.goal_btns = {}
-        for key, text in GOALS:
-            btn = QPushButton(text)
-            btn.clicked.connect(lambda _, k=key: self._pick_goal(k))
-            seg.addWidget(btn)
-            self.goal_btns[key] = btn
-        form.addWidget(segment, 0, 1)
-        form.addWidget(self._caption("리프당 음 개수"), 1, 0)
-        count_row = QHBoxLayout()
-        count_row.setSpacing(8)
-        self.count_mode = QComboBox()
-        self.count_mode.addItems(["사용안함", "정해진 개수", "개수 범위"])
-        self.count_mode.setMinimumWidth(150)
-        self.count_mode.currentIndexChanged.connect(self._sync_count)
-        count_row.addWidget(self.count_mode)
-        self.count_lo, self.count_hi = QSpinBox(), QSpinBox()
-        for spin, value in ((self.count_lo, 3), (self.count_hi, 5)):
-            spin.setRange(3, 8)
-            spin.setValue(value)
-            spin.valueChanged.connect(self._sync_count)
-        self.count_dash = QLabel("~")
-        self.count_dash.setStyleSheet(f"color:{T.TEXT_MUTED};")
-        count_row.addWidget(self.count_lo)
-        count_row.addWidget(self.count_dash)
-        count_row.addWidget(self.count_hi)
-        count_row.addStretch(1)
-        form.addLayout(count_row, 1, 1, 1, 2)
-        lv.addLayout(form)
-        lay.addWidget(self.landing_box)
-        root.addWidget(card)
+        self._boxes.append(card)
         root.addSpacing(4)
 
         self.go_btn = QPushButton("  연습 시작")
@@ -318,7 +205,27 @@ class SetupScreen(QWidget):
                                   "min-height:46px;font-size:15px;}")
         self.go_btn.clicked.connect(self._start)
         root.addWidget(self.go_btn, alignment=Qt.AlignmentFlag.AlignHCenter)
-        root.addStretch(1)
+        self._boxes.append(self.go_btn)
+        root.addStretch(2)
+
+    def showEvent(self, e):
+        super().showEvent(e)
+        self.go_btn.setFocus()
+        stagger(self._boxes)
+
+    def keyPressEvent(self, e):
+        """Enter = 연습 시작(포커스가 어디든 — 버튼들은 Enter를 받지 않고 여기로 올려보낸다)."""
+        if e.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter) and self.go_btn.isEnabled():
+            self.go_btn.click()
+            return
+        super().keyPressEvent(e)
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        self.back_btn.move(T.PAD_H + 8, 24)
+        self.settings_btn.move(self.width() - T.PAD_H - 8 - 48, 24)
+        self.back_btn.raise_()
+        self.settings_btn.raise_()
 
     @staticmethod
     def _card(title):
@@ -332,12 +239,6 @@ class SetupScreen(QWidget):
         head.setStyleSheet(T.qss_section_title())
         lay.addWidget(head)
         return card, lay
-
-    @staticmethod
-    def _caption(text):
-        lbl = QLabel(text)
-        lbl.setStyleSheet(f"color:{T.TEXT_MUTED};font-size:13px;")
-        return lbl
 
     # ── 로드 ─────────────────────────────────────────────────────
     def set_timeline(self, tl):
@@ -359,15 +260,7 @@ class SetupScreen(QWidget):
         name = saved.get("scale", {}).get("name")
         self._scale = (names.index(name) if name in names and self.scale_btns[names.index(name)].isEnabled()
                        else best if best is not None else 1)
-        self._method = saved.get("method", "free")
-        self._goal = saved.get("goal") or "third"
-        count = saved.get("count")
-        self.count_mode.setCurrentIndex(0 if not count else 1 if count[0] == count[1] else 2)
-        if count:
-            self.count_lo.setValue(count[0])
-            self.count_hi.setValue(count[1])
         self._pick_scale(self._scale)
-        self._pick_method(self._method)
 
     def _sync_scales(self):
         """스케일 칩 사용 가능·추천 표시 → 추천 번호. 키 밖 코드 제외 여부에 따라 달라진다."""
@@ -397,59 +290,10 @@ class SetupScreen(QWidget):
         feel, use = SCALE_GUIDE.get(opt["kind"], ("", ""))
         self.feel_lbl.setText(feel)
         self.use_lbl.setText(use)
-        for key, btn in self.goal_btns.items():
-            reason = landing_blocker(self.tl, opt, key, self._skip)
-            btn.setEnabled(reason is None)
-            btn.setToolTip(reason or "")
-        if not self.goal_btns[self._goal].isEnabled():
-            self._goal = "chord_tone"     # 코드톤은 항상 가능(스케일 안 코드톤이 하나 이상)
-        self._pick_goal(self._goal)
-
-    def _pick_method(self, key: str):
-        self._method = key
-        for k, btn in self.method_btns.items():
-            btn.setStyleSheet(method_qss(k == key))
-            self._radios[k].setStyleSheet(radio_qss(k == key))
-        on = key == "landing"
-        self.landing_box.setEnabled(on)   # 세부 옵션은 항상 보이고, 착지음일 때만 활성(아니면 흐리게)
-        self.landing_hint.setVisible(not on)
-        self.landing_box.setStyleSheet(
-            f"QFrame#landingBox{{border-radius:14px;"
-            + ("background:rgba(91,132,255,0.05);border:1px solid #34466a;}" if on
-               else f"background:transparent;border:1px dashed {T.BORDER_DEFAULT};}}"))
-        effect = None
-        if not on:
-            effect = QGraphicsOpacityEffect(self.landing_box)
-            effect.setOpacity(0.42)
-        self.landing_box.setGraphicsEffect(effect)
-
-    def _pick_goal(self, key: str):
-        self._goal = key
-        for k, btn in self.goal_btns.items():
-            btn.setStyleSheet(segment_qss(k == key))
-        self._sync_count()
-
-    def _sync_count(self, *_):
-        mode = self.count_mode.currentIndex()
-        self.count_lo.setVisible(mode > 0)
-        self.count_hi.setVisible(mode == 2)
-        self.count_dash.setVisible(mode == 2)
-        if self.count_hi.value() < self.count_lo.value():
-            self.count_hi.setValue(self.count_lo.value())
-
-    def count(self):
-        mode = self.count_mode.currentIndex()
-        if mode == 0:
-            return None
-        lo = self.count_lo.value()
-        return [lo, lo if mode == 1 else max(lo, self.count_hi.value())]
 
     def remember(self):
         """화면 선택을 tl.practice에 기록(스케일 적용 없이) — 새로고침해도 유지."""
-        landing = self._method == "landing"
-        self.tl.practice.update(scale=dict(self._options[self._scale]), method=self._method,
-                                goal=self._goal if landing else None,
-                                count=self.count() if landing else None, skip_detour=self._skip)
+        self.tl.practice.update(scale=dict(self._options[self._scale]), skip_detour=self._skip)
 
     def _start(self):
         self.remember()

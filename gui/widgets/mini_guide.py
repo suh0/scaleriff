@@ -102,7 +102,7 @@ class MiniGuide(QWidget):
         p.drawEllipse(badge)
         text = "×" if st == "OUT" else degree_number(pc, self._root)
         if text:
-            f = QFont(T.FONT_MONO)
+            f = QFont(T.FONTS)
             f.setPixelSize(max(7, int(sz * 0.5)))
             f.setBold(True)
             p.setFont(f)

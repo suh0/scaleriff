@@ -1,21 +1,35 @@
-"""리프 생성 창 — 곡 스케일 2마디 리프 + 디투어 마디용 1마디 리프를 만든다(학습 설정 조건 적용).
+"""리프 생성 창 — 곡 처음부터 끝까지 4마디마다 1마디 리프 1개(곡 스케일, 리프당 5~6음).
 
-리프 수 = 패턴 수(최소) + 사용자가 늘린 만큼 자주 나오는 패턴에 변형 추가.
-패턴 목록 클릭 = 공유 롤의 음표만 교체, 듣기 = 선택 리프를 원곡 템포로 재생,
-다시 만들기 = 선택 리프만 다른 변주, 확정 = 모든 등장 구간에 변형을 순환 배정(코드 근음에 맞춰 스케일 도수 이동), 취소 = 이전 리프 복원.
+블록의 마디 차례 = [프로그램, 나, 프로그램, 나] — 같은 리프를 같은 음 그대로 주고받는다.
+착지 섞기 체크(3도·7도) = 블록이 기본 → 3도 → 7도 리프 순으로 돈다(켠 것만). 목표음이 스케일에 없는 코드는 코드톤 착지.
+목록 클릭 = 그 블록 리프를 롤에 표시, 듣기 = 선택 리프를 원곡 템포로 재생,
+다시 만들기 = 선택 리프만 다른 변주, 확정 = 블록마다 기록(프로그램 마디 음은 call 표시), 취소 = 이전 리프 복원.
 """
 from __future__ import annotations
 
 from PyQt6.QtCore import QTimer
-from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-                             QSpinBox, QListWidget)
+from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QListWidget,
+                             QCheckBox)
 
-from ml.generate import bake_progression, chord_patterns, allocate, write_examples, transpose_riff
+from ml.generate import bake_progression, riff_blocks, shift_riff, write_examples, RIFF_NOTES, _landing_pc
 from gui import theme as T
 from gui.widgets.riff_roll import RiffRoll
 from player.note_synth import shared_player
 
-GOAL_KR = {"root": "1도", "third": "3도", "seventh": "7도", "chord_tone": "코드톤"}
+GOAL_KR = {"third": "3도", "seventh": "7도"}
+LANDING_GOALS = ("third", "seventh")   # 순환 순서: 기본 → 3도 → 7도
+
+
+def landing_goals(tl) -> list:
+    """리프모드에서 켠 착지 섞기 목표들(tl.practice["landing"])."""
+    goals = tl.practice.get("landing")
+    return [g for g in LANDING_GOALS if isinstance(goals, list) and g in goals]
+
+
+def block_goal(goals, i: int):
+    """i번째 블록의 착지 목표 — [기본, 켠 목표들...]을 순환. None = 기본 리프."""
+    cycle = [None] + [g for g in LANDING_GOALS if g in goals]
+    return cycle[i % len(cycle)]
 
 
 class RiffDialog(QDialog):
@@ -25,40 +39,36 @@ class RiffDialog(QDialog):
         self.setStyleSheet(f"QDialog{{background:{T.BG_BASE};}}")
         self.setMinimumWidth(640)
         self.tl, self.model = tl, model
-        self.skip = bool(tl.practice.get("skip_detour"))   # 키 밖 코드 제외 → 디투어 리프 없음
-        self.patterns = [pt for pt in chord_patterns(tl) if not (self.skip and pt["overlay"])]
-        self.riffs: list[dict] = []   # {pattern, variant, notes, landings(절대초, 패턴 첫 등장 기준)}
+        self.skip = bool(tl.practice.get("skip_detour"))   # 키 밖 코드 제외 → 그 마디엔 리프 없음
+        self.blocks = riff_blocks(tl, self.skip)
+        self.riffs: list[dict] = []   # 블록 순서대로 {variant, notes, start_sec(프로그램 마디 시작)}
         self._play_id = 0
         self.note_player = shared_player()
         self._saved = [list(seg.example) for seg in tl.segments]
         lay = QVBoxLayout(self)
-        p = tl.practice
-        if p.get("method") == "landing":
-            count = p.get("count")
-            cond = f"착지음 {GOAL_KR[p['goal']]}" + (
-                "" if not count else f" · 리프당 {count[0]}음" if count[0] == count[1]
-                else f" · 리프당 {count[0]}~{count[1]}음")
-        else:
-            cond = "자유연습 · 스케일 안의 음"
-        scale = p.get("scale", {}).get("name", "")
-        self.info = QLabel(f"{scale} · {cond}")
+        scale = tl.practice.get("scale", {}).get("name", "")
+        self.info = QLabel(f"{scale} · 리프당 {RIFF_NOTES[0]}~{RIFF_NOTES[1]}음")
         self.info.setStyleSheet(f"color:{T.TEXT_BODY};font-size:13px;")
         lay.addWidget(self.info)
-        need = len(self.patterns)
-        top = QHBoxLayout()
-        self.need_lbl = QLabel(f"스케일 패턴 {need}종(곡 스케일 2마디 + 디투어 1마디) → 최소 리프 {need}개")
+        checks = QHBoxLayout()
+        self.landing_chks = {}
+        saved = landing_goals(tl)
+        segs = [s for s in tl.segments if not (self.skip and s.is_detour)]
+        for goal in LANDING_GOALS:
+            chk = QCheckBox(f"{GOAL_KR[goal]} 착지 섞기")
+            chk.setStyleSheet(f"QCheckBox{{color:{T.TEXT_BODY};font-size:13px;}}")
+            ok = any(_landing_pc(s, goal) is not None for s in segs)   # 안 되는 코드는 코드톤 착지
+            chk.setEnabled(ok)
+            chk.setToolTip("" if ok else f"이 스케일엔 어떤 코드의 {GOAL_KR[goal]} 음도 없어요")
+            chk.setChecked(ok and goal in saved)
+            chk.toggled.connect(self.make_riffs)
+            checks.addWidget(chk)
+            self.landing_chks[goal] = chk
+        checks.addStretch(1)
+        lay.addLayout(checks)
+        self.need_lbl = QLabel(f"4마디마다 1마디 리프를 프로그램·나·프로그램·나로 주고받아요 → 리프 {len(self.blocks)}개")
         self.need_lbl.setStyleSheet(f"color:{T.TEXT_MUTED};font-size:12px;")
-        top.addWidget(self.need_lbl)
-        top.addStretch(1)
-        self.count_spin = QSpinBox()
-        self.count_spin.setRange(need, max(need, sum(len(pt["spans"]) for pt in self.patterns)))
-        self.count_spin.setSuffix(" 개")
-        top.addWidget(self.count_spin)
-        self.make_btn = QPushButton("생성")
-        self.make_btn.setStyleSheet(T.qss_ghost_btn())
-        self.make_btn.clicked.connect(self.make_riffs)
-        top.addWidget(self.make_btn)
-        lay.addLayout(top)
+        lay.addWidget(self.need_lbl)
         self.list = QListWidget()
         self.list.setFixedHeight(110)
         self.list.setStyleSheet(
@@ -89,29 +99,29 @@ class RiffDialog(QDialog):
         self.ok_btn.clicked.connect(self.accept)
         self.make_riffs()
 
-    def _goal(self):
-        p = self.tl.practice
-        return p.get("goal") if p.get("method") == "landing" else None
+    def _goals(self) -> list:
+        return [g for g, chk in self.landing_chks.items() if chk.isChecked()]
 
-    def _bake(self, pattern: int, variant: int) -> dict:
-        count = self.tl.practice.get("count")
-        a, b = self.patterns[pattern]["spans"][0]
-        res = bake_progression(self.tl, self.model, a, b, self._goal(), variant,
-                               count=tuple(count) if count else None)
-        return {"notes": res["notes"], "landings": [x["at_sec"] for x in res["landings"]]}
+    def _goal(self, i: int):
+        return block_goal(self._goals(), i)
 
-    def make_riffs(self):
-        """리프 수만큼 생성 — 패턴별로 첫 등장 구간에서 한 번씩만 굽는다."""
+    def _bake(self, i: int, variant: int) -> dict:
+        block = self.blocks[i]
+        a, b = block["bars"][0]
+        b0 = self.tl.beat_at(a)
+        res = bake_progression(self.tl, self.model, a, b, self._goal(i), variant,
+                               count=RIFF_NOTES, allowed=block["allowed"],
+                               repeats=[self.tl.beat_at(x) - b0 for x, _ in block["bars"][1:]])
+        return {"notes": res["notes"]}
+
+    def make_riffs(self, *_):
+        """블록마다 프로그램 마디(첫 마디)에서 리프 1개를 굽는다. 착지음 체크를 바꿔도 다시 굽는다."""
         self.stop_listen()
-        self.riffs = [{"pattern": i, "variant": v, **self._bake(i, v)}
-                      for i, n in enumerate(allocate(self.patterns, self.count_spin.value()))
-                      for v in range(n)]
+        self.riffs = [{"variant": 0, **self._bake(i, 0)} for i in range(len(self.blocks))]
         self.list.clear()
-        for r in self.riffs:
-            pt = self.patterns[r["pattern"]]
-            total = sum(x["pattern"] == r["pattern"] for x in self.riffs)
-            self.list.addItem(f"{pt['label']}  ×{len(pt['spans'])}  · {r['variant'] % total + 1}/{total}"
-                              if total > 1 else f"{pt['label']}  ×{len(pt['spans'])}")
+        for i, block in enumerate(self.blocks):
+            goal = self._goal(i)
+            self.list.addItem(block["label"] + (f" · {GOAL_KR[goal]} 착지" if goal else ""))
         if self.riffs:
             self.list.setCurrentRow(0)
             self._show(0)
@@ -121,33 +131,31 @@ class RiffDialog(QDialog):
         if not 0 <= row < len(self.riffs):
             return
         r = self.riffs[row]
-        a, b = self.patterns[r["pattern"]]["spans"][0]
+        a, b = self.blocks[row]["bars"][0]
         b0 = self.tl.beat_at(a)
-        bpb = self.tl.time_sig_beats()
         notes = [{"midi": n["midi"], "beat_pos": self.tl.beat_at(n["start_sec"]) - b0,
                   "dur_beats": self.tl.beats_between(n["start_sec"], n["start_sec"] + n["duration_sec"])}
                  for n in r["notes"]]
         self.note_player.preload({n["midi"] for n in r["notes"]})
         scale = self.tl.practice.get("scale") or {}
-        bars = max(1, round(self.tl.beats_between(a, b) / bpb))
-        self.roll.set_riff(notes, scale.get("note_set", []), [], bpb, bars, scale.get("root", 0))
-
-    def _current(self) -> dict | None:
-        row = self.list.currentRow()
-        return self.riffs[row] if 0 <= row < len(self.riffs) else None
+        chords = [(max(self.tl.beat_at(s.start_sec) - b0, 0.0), self.tl.beat_at(min(s.end_sec, b)) - b0,
+                   s.chord_tones(), s.chord.root % 12, s.chord.name)
+                  for s in self.tl.segments if s.start_sec < b and s.end_sec > a]
+        self.roll.set_riff(notes, scale.get("note_set", []), chords, self.tl.time_sig_beats(), 1,
+                           scale.get("root", 0))
 
     def toggle_listen(self):
         if self._play_id % 2:
             self.stop_listen()
             return
-        r = self._current()
-        if r is None:
+        row = self.list.currentRow()
+        if not 0 <= row < len(self.riffs):
             return
         self._play_id += 1   # 홀수 = 재생 중; 바뀌면 남은 타이머는 무시된다
         pid = self._play_id
-        t0, t1 = self.patterns[r["pattern"]]["spans"][0]
+        t0, t1 = self.blocks[row]["bars"][0]
         self.note_player.warmup()
-        for n in r["notes"]:
+        for n in self.riffs[row]["notes"]:
             QTimer.singleShot(max(0, round((n["start_sec"] - t0) * 1000)),
                               lambda n=n: pid == self._play_id and self.note_player.play_note(
                                   n["midi"], n["duration_sec"]))
@@ -162,25 +170,24 @@ class RiffDialog(QDialog):
         self.listen_btn.setText("듣기 ▶")
 
     def regenerate(self):
-        r = self._current()
-        if r is None:
+        row = self.list.currentRow()
+        if not 0 <= row < len(self.riffs):
             return
-        r["variant"] += len(self.riffs)   # 같은 패턴의 다른 변형과 겹치지 않는 새 번호
-        r.update(self._bake(r["pattern"], r["variant"]))
-        self._show(self.list.currentRow())
+        r = self.riffs[row]
+        r["variant"] += 1
+        r.update(self._bake(row, r["variant"]))
+        self._show(row)
 
     def _apply(self):
-        """패턴의 k번째 등장 구간 ← 그 패턴 변형 k % n을 그 구간 코드에 맞춰 도수 이동해 기록.
-
-        기본(2마디) 패턴을 먼저 깔고, 디투어 1마디 패턴(overlay)을 그 마디에 덧씌운다.
-        """
-        for i, pt in sorted(enumerate(self.patterns), key=lambda x: x[1]["overlay"]):
-            mine = [r for r in self.riffs if r["pattern"] == i]
-            src = pt["spans"][0][0]
-            for k, (a, b) in enumerate(pt["spans"]):
-                r = mine[k % len(mine)]
-                write_examples(self.tl, a, b, transpose_riff(self.tl, r["notes"], src, a,
-                                                             self._goal(), r["landings"]))
+        """기존 리프를 지우고 블록마다 [프로그램, 나, 프로그램, 나] 마디에 같은 리프를 기록."""
+        self.tl.practice["landing"] = self._goals()
+        for seg in self.tl.segments:
+            seg.example = []
+        for block, r in zip(self.blocks, self.riffs):
+            src = block["bars"][0][0]
+            for k, (a, b) in enumerate(block["bars"]):
+                notes = [{**n, "call": k % 2 == 0} for n in shift_riff(self.tl, r["notes"], src, a)]
+                write_examples(self.tl, a, b, notes)
         for seg in self.tl.segments:
             if self.skip and seg.is_detour:
                 seg.example = []

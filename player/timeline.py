@@ -163,8 +163,8 @@ class Timeline:
     chord_end: float | None = None  # 코드 인식 끝(마디선, 초) — 이후는 재생만, 코드 없음
     analysis_info: dict = field(default_factory=dict)
     model_info: dict = field(default_factory=dict)
-    # 학습 설정 — {scale: ScaleOption dict, method: "free"|"landing",
-    #   goal: "root"|"third"|"seventh"|"chord_tone", count: None | [min, max]}
+    # 학습 설정 — {scale: ScaleOption dict, skip_detour: bool,
+    #   landing: ["third", "seventh"] 중 켠 것(리프모드 착지 섞기 — 기본→3도→7도 리프 순환)}
     practice: dict = field(default_factory=dict)
 
     def apply_song_scale(self, option: dict):
