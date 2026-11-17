@@ -19,6 +19,7 @@ powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | ie
 - madmom(학습 모델 비트·코드 인식, librosa보다 정확하지만 분석이 수 배 느림): `wheels/`의 미리 빌드·패치한 휠(Python 3.12 x64)로 빌드 도구 없이 설치, 휠이 없으면 Visual Studio C++ 빌드 도구로 소스 빌드, 둘 다 없으면 librosa. 모델은 비상업 CC BY-NC-SA 4.0(휠 안 `madmom/models/LICENSE`). 건너뛰기: `set SCALERIFF_NO_MADMOM=1`.
 - YouTube 링크 입력용 Deno는 의존성(`yt-dlp[deno]`)으로 `.venv`에 함께 설치된다. 로컬 음원은 불필요.
 - 리프 모델 `models/markov.json`은 저장소에 포함 — [Weimar Jazz Database](https://jazzomat.hfm-weimar.de)(Jazzomat Research Project, HfM Weimar)에서 만든 통계표로, 원본과 같은 [ODbL 1.0](https://opendatacommons.org/licenses/odbl/1-0/)을 따른다. 재학습은 `ml/train/`.
+- 연주음 `assets/piano/*.flac`은 [Salamander Grand Piano](https://github.com/sfzinstruments/SalamanderGrandPiano)(Alexander Holm, [CC BY 3.0](https://creativecommons.org/licenses/by/3.0/))를 음역·포맷만 바꿔 만든 것 — `tools/build_piano_samples.py`.
 - 건반 소리 `assets/piano/`는 [Salamander Grand Piano](https://github.com/sfzinstruments/SalamanderGrandPiano)(Alexander Holm, [CC BY 3.0](https://creativecommons.org/licenses/by/3.0/))의 v10 샘플을 변형(모노·44.1kHz·6초, 사이 음 리샘플)한 것. 재생성은 `tools/build_piano_samples.py`.
 
 검사: `$env:PYTHONUTF8='1'; $env:QT_QPA_PLATFORM='offscreen'; & ./.venv/Scripts/python.exe tools/run_checks.py` (`--network`: YouTube 포함)
