@@ -23,7 +23,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
 
 from gui import theme as T
-from gui.anim import stagger
+from gui.anim import open_curtain
 
 _ESTIMATED_SECONDS = 10 * 60  # 일반 곡의 다운로드·분석에 여유를 둔 예상 시간
 
@@ -219,10 +219,7 @@ class AnalyzingScreen(QWidget):
         lay.addSpacing(16)
         lay.addLayout(bg_row)
 
-        self.err_btn = QPushButton("←")
-        self.err_btn.setToolTip("돌아가기")
-        self.err_btn.setFixedSize(48, 48)
-        self.err_btn.setStyleSheet(T.qss_icon_btn())
+        self.err_btn = T.bare_icon_btn("chevron-left.svg", "돌아가기")
         self.err_btn.clicked.connect(self.backRequested.emit)
         self.err_btn.hide()
         lay.addWidget(self.err_btn)
@@ -230,8 +227,8 @@ class AnalyzingScreen(QWidget):
 
     def showEvent(self, e):
         super().showEvent(e)
-        stagger([(self.title, self.msg), self._steps_wrap, self._progress_wrap,
-                 (self.bg_btn, self.cancel_btn)])
+        if not e.spontaneous():           # 화면 전환 = 커튼(창 복원 같은 자발적 표시는 제외)
+            open_curtain(self)
 
     def start(self, build_fn, source):
         if self._worker is not None:

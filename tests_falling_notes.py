@@ -2,7 +2,7 @@
 import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtCore import QPointF
+from PyQt6.QtCore import QPointF, QRect
 from PyQt6.QtGui import QImage as _QImage, QRegion
 from PyQt6.QtWidgets import QApplication
 from gui.main_screen import MainScreen
@@ -23,6 +23,9 @@ def main():
     screen.resize(1040, 740)
     screen.show()
     app.processEvents()
+    curtain = getattr(screen.stage, "_curtain", None)   # 진입 커튼(불투명)이 덮고 있으면 무대가 안 그려짐 — 끝내고 치움
+    if curtain is not None:
+        curtain.anim.setCurrentTime(curtain.anim.totalDuration())
     screen._select_practice("riff")
     screen._on_seek(0)
     before = screen.riff._nodes()
@@ -112,17 +115,27 @@ def main():
     seg0, seg1 = tl.segments[1], tl.segments[2]
     beat = tl.beat_sec()
     screen._render_at(seg0.start_sec)
-    cur, _, nxt, prev, grow, push = screen.chord_hdr._chords
+    cur, nxt, prev, grow, push = screen.chord_hdr._chords
     assert (cur, nxt, prev, grow, push) == (seg0.chord.name, seg1.chord.name, "", 0.0, 1.0)
     screen._render_at(seg1.start_sec - 2 * beat)
-    assert abs(screen.chord_hdr._chords[4] - 0.5) < 1e-6, "4박 창 절반에서 grow 0.5"
+    assert abs(screen.chord_hdr._chords[3] - 0.5) < 1e-6, "4박 창 절반에서 grow 0.5"
     screen.playhead.is_playing = lambda: True
     screen._render_at(seg1.start_sec + 0.25 * beat)
-    cur, _, _, prev, _, push = screen.chord_hdr._chords
+    cur, _, prev, _, push = screen.chord_hdr._chords
     assert (cur, prev) == (seg1.chord.name, seg0.chord.name) and abs(push - 0.5) < 1e-6
     screen._render_at(seg1.start_sec + beat)
-    assert screen.chord_hdr._chords[3] == "" and screen.chord_hdr._chords[5] == 1.0, "push 끝나면 이전 코드 제거"
+    assert screen.chord_hdr._chords[2] == "" and screen.chord_hdr._chords[4] == 1.0, "push 끝나면 이전 코드 제거"
     del screen.playhead.is_playing
+    # 코드가 바뀌는 순간 끊김 없음: 바뀌기 직전(다음 코드 다 커짐) 화면 == 바뀐 직후(밀어내기 시작) 화면
+    hdr = screen.chord_hdr
+
+    def hdr_img(*state):
+        hdr.set_chords(*state)
+        img = _QImage(hdr.size(), _QImage.Format.Format_ARGB32_Premultiplied)
+        img.fill(0)
+        hdr.render(img)
+        return img
+    assert hdr_img("C", "G7", "", 1.0, 1.0) == hdr_img("G7", "Am", "C", 0.0, 0.0), "코드 전환 순간 튐"
     # 코드 전환선: 경계 4박 전부터 낙하, 경계에서 레인 끝 도착(자유모드에서도)
     lane_h = screen.riff.height()
     screen._render_at(seg1.start_sec - 2 * beat)
@@ -172,24 +185,24 @@ def main():
     # 건반 누름: 바뀌는 화면은 그 건반(+빛기둥) 영역뿐 — 이웃 흑건 그림자가 덧그려져 진해지지 않음
     import numpy as np
 
+    dpr = stage.devicePixelRatioF()     # 화면 배율 격자로 찍는다 — 1x로 찍으면 배율 캐시가 다시 샘플링돼 가짜 차이
     def snap():
-        img = _Img(stage.size(), _Img.Format.Format_ARGB32_Premultiplied)
+        img = _Img(stage.size() * dpr, _Img.Format.Format_ARGB32_Premultiplied)
+        img.setDevicePixelRatio(dpr)
         stage.render(img)
         ptr = img.constBits()
         ptr.setsize(img.sizeInBytes())
         return np.frombuffer(ptr, np.uint8).reshape(img.height(), img.bytesPerLine()).astype(np.int16)
 
-    curtain = getattr(stage, "_curtain", None)       # 진입 커튼(연출)이 무대를 덮고 있으면 끝내고 치움
-    if curtain is not None:
-        curtain.anim.setCurrentTime(curtain.anim.totalDuration())
-        curtain.hide()
     stage._draw_sparkles = lambda p, t: None        # 시각 따라 깜빡이는 반짝이 제외
+    stage._draw_back = lambda p, r: p.drawPixmap(0, 0, stage._bg)   # 시각 따라 흐르는 아지랑이도 제외
     screen._render_at(1.0)
     base = snap()
     for midi in (60, 64, 66):                       # 맨 왼쪽(원근으로 띠가 넓음)·흰 건반·흑건
         screen.piano.set_pressed({midi})
         # 캐시 합성 vs 직접 그리기 반올림(≤2/255)은 무시
         ys, xs = np.nonzero((np.abs(snap() - base) > 4).reshape(base.shape[0], -1, 4).any(axis=2))
+        ys, xs = (ys / dpr).astype(int), (xs / dpr).astype(int)    # 물리 픽셀 → 논리 좌표
         area = stage._screen_rect(midi)
         assert len(xs) and area.contains(int(xs.min()), int(ys.min())) and area.contains(int(xs.max()), int(ys.max())), \
             (midi, area, xs.min(), xs.max(), ys.min(), ys.max())
@@ -208,11 +221,22 @@ def main():
     assert abs(b_front[0].y() - (hit_y - rise)) < 1e-6, "흑건 레인 윗면 = 흑건 윗면 높이"
     # 재생바 = 무대 아래에 항상 표시(무대와 겹치지 않음), 스페이스 = 재생 토글
     assert not screen.scrub_row.isHidden(), "재생바 항상 표시"
-    assert stage.geometry().bottom() < screen.scrub_row.geometry().top(), "무대는 재생바 위에서 끝남"
+    assert stage.keys_rect().bottom() < screen.scrub_row.geometry().top(), "재생바는 건반 앞면 아래에 겹침"
     playing = screen.playhead.is_playing()
     screen._on_space()
     assert screen.playhead.is_playing() != playing and not screen.scrub_row.isHidden()
     assert screen.play_btn.isHidden() == screen.playhead.is_playing(), "가운데 재생 아이콘은 멈춤일 때만"
+    assert screen.bar_play_btn.text() == ("❚❚" if screen.playhead.is_playing() else "▶"), "재생바 버튼 = 재생 상태"
+    bar = stage.bar_rect()
+    assert screen.scrub_row.geometry() == QRect(stage.mapTo(screen.content, bar.topLeft()), bar.size()), \
+        "재생바는 건반 아래 받침 패널 안쪽"
+    # 레일 바깥 점선: 시간이 가면 같은 점선이 레인 속도로 아래로 흐름, 박 위 점선 구분
+    riff.set_position(1.0)
+    d0 = riff.dash_lines(12)
+    riff.set_position(1.05)
+    dy = riff.height() * 0.05 / riff._lead
+    assert d0 and any(on for _, on in d0) and not all(on for _, on in d0)
+    assert any(abs(y - (d0[-1][0] + dy)) < 1e-6 for y, _ in riff.dash_lines(12)), "점선이 레인과 같이 흐름"
     screen.playhead.pause()
     # 비용: 정적 레이어는 캐시, 프레임·연타는 캐시 재생성 없음
     import time

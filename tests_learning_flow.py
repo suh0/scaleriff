@@ -97,25 +97,24 @@ class LearningFlowTest(unittest.TestCase):
         self.assertFalse(s.stage.driven)
         self.assertTrue(s.stage._sparkle_timer.isActive(), "멈춤 중엔 반짝이 타이머가 다시 돎")
 
-    def test_chord_change_reuses_key_cache_after_first_loop(self):
+    def test_chord_change_never_rebuilds_key_cache(self):
         s = self.screen
         s.resize(1040, 740)
         s.show()
         QTest.qWait(50)                                 # 레이아웃 → 무대 크기 확정
         stage, segs = s.stage, s.tl.segments          # Dm7 G7 Cmaj7 ×2
+        if stage._curtain is not None:                  # 진입 커튼(불투명)이 덮고 있으면 무대가 안 그려짐 — 끝냄
+            stage._curtain.anim.setCurrentTime(stage._curtain.anim.totalDuration())
 
         def frame(sec):
             s._render_at(sec)
             stage.grab()                                # paintEvent 강제(오프스크린 repaint는 안 그릴 수 있음)
+        frame(segs[0].start_sec + 0.1)                  # 첫 프레임 = 곡의 건반 상태 전부를 한꺼번에 굽는다(로딩)
+        self.assertGreaterEqual(len(stage._caches), 3)  # 실제로 그렸음(빈 검사 방지)
         builds = stage.cache_builds
-        for seg in segs[:3]:                            # 첫 바퀴: 상태마다 한 번씩만 그림
+        for seg in segs:                                # 첫 바퀴부터 코드 전환 = 다시 안 그림
             frame(seg.start_sec + 0.1)
-        self.assertGreater(stage.cache_builds, builds)  # 실제로 그렸음(빈 검사 방지)
-        self.assertGreaterEqual(len(stage._caches), 3)
-        builds = stage.cache_builds
-        for seg in segs[3:]:                            # 둘째 바퀴: 같은 코드 → 다시 안 그림
-            frame(seg.start_sec + 0.1)
-        self.assertEqual(stage.cache_builds, builds, "같은 코드로 돌아와도 건반 캐시를 다시 그림")
+        self.assertEqual(stage.cache_builds, builds, "재생 중 코드 전환에 건반 캐시를 다시 그림")
         bg = stage._bg
         self.assertIsNotNone(bg)
         s._select_practice("riff")                      # 리프모드 건반은 코드와 무관 → 상태 1개

@@ -16,22 +16,22 @@ from PyQt6.QtCore import Qt, pyqtSignal
 from analyze.theory import song_scale_options
 from ml.generate import _landing_pc
 from gui import theme as T
-from gui.anim import stagger
+from gui.anim import open_curtain
 
 GOALS = (("root", "1도"), ("third", "3도"), ("seventh", "7도"), ("chord_tone", "코드톤"))
 
 # 스케일 종류별 (느낌, 쓰임) 안내 — song_scale_options의 kind 기준
 SCALE_GUIDE = {
-    "메이저 펜타토닉": ("밝고 시원해요. 5음뿐이라 부딪히는 음이 거의 없어요.",
+    "메이저 펜타토닉": ("밝고 시원함",
                     "팝·컨트리·록 멜로디, 즉흥 입문"),
-    "마이너 펜타토닉": ("어둡고 힘 있는 소리. 록·블루스 기타 솔로의 기본이에요.",
+    "마이너 펜타토닉": ("어둡고 힘 있는 소리",
                     "록·블루스·R&B 솔로, 즉흥 입문"),
-    "메이저": ("밝고 안정적인 7음. 곡의 멜로디를 그대로 담아요.",
-             "멜로디 따라 치기, 코드톤 착지 연습 — 4·7도는 코드에 따라 부딪힐 수 있어요"),
-    "마이너": ("슬프고 서정적인 7음(자연단음계).",
-             "발라드·단조 곡 멜로디 — 2·6도는 코드에 따라 부딪힐 수 있어요"),
-    "블루스": ("마이너 펜타토닉 + ♭5 블루노트. 끈적하고 거친 느낌이에요.",
-             "블루스·록·펑크 솔로 — 블루노트는 오래 끌지 말고 지나가는 음으로"),
+    "메이저": ("밝고 안정적",
+             "멜로디 따라 치기, 코드톤 착지 연습"),
+    "마이너": ("슬프고 서정적",
+             "발라드·단조 곡 멜로디"),
+    "블루스": ("끈적하고 거친 느낌",
+             "블루스·록·펑크 솔로"),
 }
 
 
@@ -42,34 +42,28 @@ def landing_blocker(tl, option: dict, goal: str, skip_detour=False) -> str | Non
             continue
         note_set = seg.note_set if seg.is_detour else option["note_set"]
         if _landing_pc(SimpleNamespace(chord=seg.chord, note_set=note_set), goal) is None:
-            return f"{seg.chord.name} 코드의 {dict(GOALS)[goal]} 음이 스케일에 없어요"
+            return f"{seg.chord.name} 코드의 {dict(GOALS)[goal]} 음이 스케일에 없음"
     return None
 
 
-def scale_fit(tl, option: dict) -> float:
-    """키 안 구간의 코드톤이 스케일에 드는 비율(구간 길이 가중). 예외 구간은 로컬 스케일이라 제외."""
-    total = hit = 0.0
+def scale_clash(tl, option: dict) -> float:
+    """키 안 구간에서 코드와 부딪히는 스케일 음 수(코드톤 반음 위 비코드톤 = 어보이드), 구간 길이 가중.
+    예외 구간은 로컬 스케일이라 제외."""
+    total = 0.0
     for seg in tl.segments:
-        tones = seg.chord_tones()
+        tones = set(seg.chord_tones())
         if seg.is_detour or not tones:
             continue
-        total += seg.duration()
-        hit += seg.duration() * len(set(tones) & set(option["note_set"])) / len(tones)
-    return hit / total if total else 1.0
-
-
-PENTA_MARGIN = 0.05   # 펜타토닉이 최고 적합도와 이만큼 이내면 쉬운 펜타를 추천
+        avoid = {(t + 1) % 12 for t in tones} - tones
+        total += seg.duration() * len(avoid & set(option["note_set"]))
+    return total
 
 
 def recommend(tl, options: list[dict], skip_detour=False) -> int | None:
-    """사용 가능(모든 코드에 스케일 안 코드톤 1개 이상)한 후보 중 코드톤 포함률 최고. 펜타 근접 시 펜타."""
+    """사용 가능(모든 코드에 스케일 안 코드톤 1개 이상)한 후보 중 부딪히는 음이 가장 적은 것.
+    동률이면 후보 순서(펜타토닉 먼저) — 펜타는 7음의 부분집합이라 사용 가능하면 사실상 항상 추천."""
     usable = [i for i, o in enumerate(options) if landing_blocker(tl, o, "chord_tone", skip_detour) is None]
-    if not usable:
-        return None
-    fits = {i: scale_fit(tl, options[i]) for i in usable}
-    best = max(usable, key=fits.get)
-    penta = next((i for i in usable if "펜타토닉" in options[i]["kind"]), None)
-    return penta if penta is not None and fits[best] - fits[penta] <= PENTA_MARGIN else best
+    return min(usable, key=lambda i: scale_clash(tl, options[i])) if usable else None
 
 
 def chip_qss(selected: bool) -> str:
@@ -115,23 +109,19 @@ class SetupScreen(QWidget):
         root.setSpacing(16)
 
         # ── 모서리 [←] [⚙]: 연주화면과 같은 화면 좌표에 고정(resizeEvent) ──
-        self.back_btn = QPushButton("←", self)
-        self.back_btn.setToolTip("링크 입력으로")
+        self.back_btn = T.bare_icon_btn("chevron-left.svg", "링크 입력으로", self)
         self.back_btn.clicked.connect(self.backToLinkRequested.emit)
-        self.settings_btn = QPushButton("⚙", self)
+        self.settings_btn = T.bare_icon_btn("settings.svg", "설정", self)
         self.settings_btn.setAccessibleName("설정 — 박자·코드 조정, 입력·소리")
         self.settings_btn.clicked.connect(self.settingsRequested.emit)
         for b in (self.back_btn, self.settings_btn):
-            b.setFixedSize(48, 48)
             b.setFocusPolicy(Qt.FocusPolicy.NoFocus)   # 진입 시 Enter가 ←로 가지 않게(연주화면과 같음)
-            b.setStyleSheet(T.qss_icon_btn())
 
         # ── 제목: 천장과 첫 카드의 중간. 카드·시작 버튼은 대략 세로 가운데(stretch 1:1:2) ──
-        head = T.title_block("학습내용 선택", "")
+        head = T.title_block("연습방식 선택", "")
         self.title = head.title
         root.addStretch(1)
         root.addWidget(head)
-        self._boxes = [head]                   # 순차 등장 단위(위 → 아래)
         root.addStretch(1)
 
         # ── 곡 정보 카드: 곡 이름·추정 키 / 키 밖 코드 개수·제외 ──
@@ -150,15 +140,14 @@ class SetupScreen(QWidget):
         self.detour_lbl.setWordWrap(True)
         self.detour_lbl.setStyleSheet(f"color:{T.TEXT_BODY};font-size:13px;")
         lay.addWidget(self.detour_lbl)
-        self.skip_chk = QCheckBox("키 밖 코드 제외 — 그 코드에선 건반 강조와 리프를 끕니다")
+        self.skip_chk = QCheckBox("키 밖 코드 제외 — 건반 강조와 리프 비활성화")
         self.skip_chk.setStyleSheet(f"color:{T.TEXT_BODY};font-size:13px;")
         self.skip_chk.clicked.connect(self._pick_skip)   # 사용자 클릭만(set_timeline의 setChecked는 무시)
         lay.addWidget(self.skip_chk)
         root.addWidget(card)
-        self._boxes.append(card)
 
         # ── 곡 스케일 카드 ────────────────────────────────────────
-        card, lay = self._card("곡 스케일")
+        card, lay = self._card("스케일 선택")
         scale_row = QHBoxLayout()
         scale_row.setSpacing(10)
         self.scale_btns: list[QPushButton] = []
@@ -196,7 +185,6 @@ class SetupScreen(QWidget):
             g.addWidget(lbl, r, 1)
         lay.addWidget(guide)
         root.addWidget(card)
-        self._boxes.append(card)
         root.addSpacing(4)
 
         self.go_btn = QPushButton("  연습 시작")
@@ -205,13 +193,13 @@ class SetupScreen(QWidget):
                                   "min-height:46px;font-size:15px;}")
         self.go_btn.clicked.connect(self._start)
         root.addWidget(self.go_btn, alignment=Qt.AlignmentFlag.AlignHCenter)
-        self._boxes.append(self.go_btn)
         root.addStretch(2)
 
     def showEvent(self, e):
         super().showEvent(e)
         self.go_btn.setFocus()
-        stagger(self._boxes)
+        if not e.spontaneous():           # 화면 전환 = 커튼(창 복원 같은 자발적 표시는 제외)
+            open_curtain(self)
 
     def keyPressEvent(self, e):
         """Enter = 연습 시작(포커스가 어디든 — 버튼들은 Enter를 받지 않고 여기로 올려보낸다)."""
@@ -222,8 +210,8 @@ class SetupScreen(QWidget):
 
     def resizeEvent(self, e):
         super().resizeEvent(e)
-        self.back_btn.move(T.PAD_H + 8, 24)
-        self.settings_btn.move(self.width() - T.PAD_H - 8 - 48, 24)
+        self.back_btn.move(T.PAD_H + 6, 20)
+        self.settings_btn.move(self.width() - T.PAD_H - self.settings_btn.width(), 20)
         self.back_btn.raise_()
         self.settings_btn.raise_()
 
@@ -246,11 +234,11 @@ class SetupScreen(QWidget):
         mode = "minor" if "minor" in (tl.key or "").lower() else "major"
         self._options = song_scale_options(tl.key_root, mode)
         self.song_lbl.setText(tl.title or tl.audio_ref or "내 곡")
-        self.key_lbl.setText(f"추정 키: {tl.key}")
+        self.key_lbl.setText(f"추정 키 {tl.key}")
         detours = [s.chord.name for s in tl.segments if s.is_detour]
         kinds = list(dict.fromkeys(detours))
-        self.detour_lbl.setText(f"키 밖 코드 {len(kinds)}종 · {len(detours)}번 나와요 ({', '.join(kinds)})"
-                                if detours else "키 밖 코드가 없어요")
+        self.detour_lbl.setText(f"키 밖 코드 {len(kinds)}종 · {len(detours)}번 ({', '.join(kinds)})"
+                                if detours else "키 밖 코드 없음")
         self._skip = bool(detours and tl.practice.get("skip_detour"))
         self.skip_chk.setChecked(self._skip)
         self.skip_chk.setEnabled(bool(detours))

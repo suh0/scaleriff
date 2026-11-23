@@ -11,9 +11,9 @@ import statistics
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QPushButton,
-    QComboBox, QDialog, QFormLayout, QSlider, QCheckBox, QMessageBox, QSizePolicy
+    QComboBox, QDialog, QFormLayout, QSlider, QCheckBox, QMessageBox
 )
-from PyQt6.QtCore import pyqtSignal, Qt, QPoint, QPointF, QRect, QTimer
+from PyQt6.QtCore import pyqtSignal, Qt, QPoint, QPointF, QRect, QSize, QTimer
 from PyQt6.QtGui import QKeySequence, QShortcut
 
 from player.timeline import Timeline
@@ -96,37 +96,27 @@ class MainScreen(QWidget):
         self.stage = Stage(self.piano, self.riff)
         root.addWidget(self.stage, 0, 0)
 
-        # ── 왼쪽 벽: [←](오른쪽 ⚙와 좌우대칭) + 곡 정보 ──
+        # ── 왼쪽 위: [<](배경 없는 아이콘) + 곡 제목 + 'D minor | 87 BPM' + 'D 마이너 펜타토닉 스케일' ──
         left = QWidget()
         lv = QVBoxLayout(left)
-        lv.setContentsMargins(T.PAD_H + 8, 24, 0, 0)
+        lv.setContentsMargins(T.PAD_H + 6, 20, 0, 0)
         lv.setSpacing(4)
-        self.back_btn = QPushButton("←")
-        self.back_btn.setToolTip("학습 설정으로")
-        self.back_btn.clicked.connect(self.backToSetupRequested.emit)
-        self.back_btn.setFixedSize(48, 48)
+        self.back_btn = T.bare_icon_btn("chevron-left.svg", "학습 설정으로")
         self.back_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.back_btn.setStyleSheet(T.qss_icon_btn())
+        self.back_btn.clicked.connect(self.backToSetupRequested.emit)
         lv.addWidget(self.back_btn)
-        lv.addSpacing(14)
+        lv.addSpacing(6)
         self.song_lbl = ElidedLabel("—")
-        self.song_lbl.setFixedWidth(240)
+        self.song_lbl.setFixedWidth(340)
         self.song_lbl.setStyleSheet(
-            f"color:{T.TEXT_PRIMARY};font-family:{T.FONT_CSS};font-size:16px;font-weight:700;")
+            f"color:{T.TEXT_PRIMARY};font-family:{T.FONT_CSS};font-size:21px;font-weight:700;")
         lv.addWidget(self.song_lbl)
-        key_bpm = QHBoxLayout()
-        key_bpm.setSpacing(28)
-        for cap in ("KEY", "BPM"):
-            col = QVBoxLayout()
-            col.setSpacing(4)
-            key_bpm.addLayout(col)
-            if cap == "KEY":
-                self.key_lbl = self._hud_stat(col, cap)
-            else:
-                self.bpm_lbl = self._hud_stat(col, cap)
-        key_bpm.addStretch(1)
-        lv.addLayout(key_bpm)
-        self.time_lbl = self._hud_stat(lv, "TIME")
+        self.info_lbl = QLabel("—")                     # 키 | BPM (지금 위치·전체 길이는 재생바에)
+        self.info_lbl.setStyleSheet(f"color:{T.TEXT_MUTED};font-family:{T.FONT_CSS};font-size:21px;")
+        lv.addWidget(self.info_lbl)
+        self.scale_lbl = QLabel("")                     # 학습 설정에서 고른 스케일
+        self.scale_lbl.setStyleSheet(self.info_lbl.styleSheet())
+        lv.addWidget(self.scale_lbl)
         root.addWidget(left, 0, 0, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
 
         # ── 상단 가운데: 현재/다음 코드 ──
@@ -137,24 +127,20 @@ class MainScreen(QWidget):
         self._hdr_box.addWidget(self.chord_hdr)
         root.addWidget(hdr_wrap, 0, 0, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter)
 
-        # ── 오른쪽 벽: [⚙] + 리프모드 ──
+        # ── 오른쪽 위: [⚙] + 리프모드(AI를 순환 화살표가 감싼 아이콘, 켜지면 네온색) ──
         right = QWidget()
         rv = QVBoxLayout(right)
-        rv.setContentsMargins(0, 24, T.PAD_H + 8, 0)
-        rv.setSpacing(8)
-        self.settings_btn = QPushButton("⚙")
+        rv.setContentsMargins(0, 20, T.PAD_H, 0)
+        rv.setSpacing(20)
+        self.settings_btn = T.bare_icon_btn("settings.svg", "설정")
+        self.settings_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.settings_btn.setAccessibleName("설정 — 박자·코드 조정, 입력·소리")
         self.settings_btn.clicked.connect(self._show_settings)
-        self.settings_btn.setFixedSize(48, 48)
-        self.settings_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.settings_btn.setStyleSheet(T.qss_icon_btn())
         rv.addWidget(self.settings_btn, 0, Qt.AlignmentFlag.AlignRight)
-        rv.addSpacing(6)
-        self.riff_btn = QPushButton("리프모드")
-        self.riff_btn.clicked.connect(self._toggle_riff_mode)
-        self.riff_btn.setFixedSize(116, 36)
-        self.riff_btn.setStyleSheet(T.qss_ghost_btn())
+        self.riff_btn = T.bare_icon_btn("riff-ai.svg", "리프모드")
         self.riff_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.riff_btn.setIconSize(QSize(32, 32))
+        self.riff_btn.clicked.connect(self._toggle_riff_mode)
         rv.addWidget(self.riff_btn, 0, Qt.AlignmentFlag.AlignRight)
         root.addWidget(right, 0, 0, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignRight)
 
@@ -172,22 +158,30 @@ class MainScreen(QWidget):
         self.play_btn.clicked.connect(self._toggle_play)
         root.addWidget(self.play_btn, 0, 0, Qt.AlignmentFlag.AlignCenter)
 
-        # ── 재생바: 무대 아래 칸에 항상 표시(무대는 그만큼 줄어 건반·레일이 위로) ──
+        # ── 재생바: 건반 아래 받침 패널(Stage가 그림) 안쪽에 항상 표시 — 자리는 _place_scrub ──
         self.scrub = ScrubBar()
         self.scrub.seekRequested.connect(self._on_seek)
-        self.scrub_row = QWidget()
+        self.scrub_row = QWidget(self.content)     # 레이아웃 밖: 무대 원근에 맞춘 패널 자리에 직접 놓는다
         scrub_row = QHBoxLayout(self.scrub_row)
-        scrub_row.setContentsMargins(T.PAD_H, 0, T.PAD_H, 6)
+        scrub_row.setSpacing(18)
+        self.bar_play_btn = QPushButton("▶")
+        self.bar_play_btn.setFixedSize(32, 32)
+        self.bar_play_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.bar_play_btn.setAccessibleName("재생/일시정지")
+        self.bar_play_btn.setToolTip("재생/일시정지 (스페이스)")
+        self.bar_play_btn.setStyleSheet(
+            f"QPushButton{{background:transparent;border:none;color:{T.TEXT_PRIMARY};font-size:18px;}}"
+            f"QPushButton:hover{{color:{T.NEON_LIGHT};}}")
+        self.bar_play_btn.clicked.connect(self._toggle_play)
         self.pos_lbl = QLabel("00:00")
         self.total_time_lbl = QLabel("00:00")
         for label in (self.pos_lbl, self.total_time_lbl):
             label.setStyleSheet(
-                f"color:{T.TEXT_BODY};font-family:{T.FONT_CSS};font-size:12px;")
+                f"color:{T.TEXT_PRIMARY};font-family:{T.FONT_CSS};font-size:15px;")
+        scrub_row.addWidget(self.bar_play_btn)
         scrub_row.addWidget(self.pos_lbl)
         scrub_row.addWidget(self.scrub, 1)
         scrub_row.addWidget(self.total_time_lbl)
-        self.scrub_row.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
-        root.addWidget(self.scrub_row, 1, 0)
         root.setRowStretch(0, 1)            # 남는 높이는 전부 무대
         self.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
         # 스페이스 = 재생/일시정지(포커스된 버튼 클릭보다 먼저 처리)
@@ -201,24 +195,8 @@ class MainScreen(QWidget):
             open_curtain(self.stage)
 
     # ── HUD ─────────────────────────────────────────────────────
-    @staticmethod
-    def _hud_stat(layout, caption):
-        """이미지형 HUD: 자간 넓은 작은 대문자 라벨 + 큰 값."""
-        cap = QLabel(caption)
-        cap.setStyleSheet(
-            f"color:{T.TEXT_MUTED};font-family:{T.FONT_CSS};font-size:11px;letter-spacing:3px;")
-        value = QLabel("—")
-        value.setStyleSheet(
-            f"color:{T.TEXT_PRIMARY};font-family:{T.FONT_CSS};font-size:24px;font-weight:600;")
-        layout.addSpacing(6)
-        layout.addWidget(cap)
-        layout.addWidget(value)
-        return value
-
     def _set_time(self, sec):
         self.pos_lbl.setText(_fmt_sec(sec))
-        total = _fmt_sec(self.tl.total_sec()) if self.tl else "00:00"
-        self.time_lbl.setText(f"{_fmt_sec(sec)} / {total}")
 
     def _on_space(self):
         if self.guide is not None:        # 가이드 중 스페이스 = 다음(가이드가 처리)
@@ -229,6 +207,7 @@ class MainScreen(QWidget):
     def resizeEvent(self, e):
         super().resizeEvent(e)
         QTimer.singleShot(0, self._place_chord_hdr)   # 무대 원근(레일 상단)이 새 크기로 잡힌 뒤
+        QTimer.singleShot(0, self._place_scrub)
         if self.guide is not None:
             self.guide.relayout()
 
@@ -237,6 +216,14 @@ class MainScreen(QWidget):
         far = self.stage._xf.map(QPointF(self.stage.width() / 2, 0))
         rail_top = self.stage.mapTo(self.content, far.toPoint()).y()
         self._hdr_box.setContentsMargins(0, max(0, rail_top // 2 - self.chord_hdr.height() // 2), 0, 0)
+
+    def _place_scrub(self):
+        """재생바를 건반 아래 받침 패널 안쪽(꺾인 양끝 안)에 맞춘다."""
+        r = self.stage.bar_rect()
+        self.scrub_row.setGeometry(QRect(self.stage.mapTo(self.content, r.topLeft()), r.size()))
+        side = r.height() // 2 + 6                     # 꺾인 끝 안쪽 여백
+        self.scrub_row.layout().setContentsMargins(side, 0, side, 0)
+        self.scrub_row.raise_()
 
     # ── 첫 진입 가이드 ──────────────────────────────────────────
     def show_guide(self):
@@ -249,7 +236,6 @@ class MainScreen(QWidget):
         # 설명용 자리: 근음이 1번이 아닌 첫 코드(1번 표시와 근음 표시가 서로 다른 건반에 보이게)
         seg = next((s for s in self.tl.segments if s.chord.root % 12 != tonic), self.tl.segments[0])
         self._seek_to(seg.start_sec + 1e-3)
-        root_no = degree_number(seg.chord.root % 12, tonic)
 
         def at(widget):
             return lambda: [QRect(widget.mapTo(self, QPoint(0, 0)), widget.size())]
@@ -273,24 +259,23 @@ class MainScreen(QWidget):
              "초록 = 지금 코드를 이루는 음(코드톤)<br>회색 = 스케일 음<br>"
              "<b>투명하게 테두리만 보이는 건반</b>(숫자 없음) = 스케일 밖 음이에요. 이 곡과 덜 어울려서 "
              "누르면 빨갛게 표시되지만 틀린 건 아니에요. 근음은 스케일 밖이어도 파랑으로 보여요.", keys),
-            ("지금 코드와 근음 번호",
+            ("지금 코드",
              "코드는 반주가 지금 울리는 화음이에요. 가운데 큰 글자가 지금 코드, 위 작은 글자가 다음 코드예요.<br>"
-             f"<b>'근음 {root_no}번'</b>은 지금 코드의 근음이 스케일 몇 번인지 알려줘요. "
              "코드가 바뀌면 파란 근음 건반도 따라 옮겨가요.", at(self.chord_hdr)),
             ("곡 정보",
-             "KEY = 곡의 조, BPM = 빠르기(분당 박 수), TIME = 지금 위치 / 전체 길이예요.<br>"
-             "<b>←</b> 버튼은 학습 설정으로 돌아가 스케일을 다시 골라요.", at(self.back_btn.parentWidget())),
+             "제목 아래는 곡의 조(키)와 BPM(빠르기, 분당 박 수), 그 아래는 고른 스케일이에요. 지금 위치·전체 길이는 아래 재생바에 있어요.<br>"
+             "<b>&lt;</b> 버튼은 학습 설정으로 돌아가 스케일을 다시 골라요.", at(self.back_btn.parentWidget())),
             ("재생하기",
              "가운데 <b>▶</b> 또는 <b>스페이스</b>로 재생·정지해요. 곡 앞에 박을 세는 예비박이 있어요.<br>"
              "아래 재생바를 클릭·드래그하면 원하는 위치로 이동해요.",
              lambda: at(self.play_btn)() + at(self.scrub_row)()),
-            ("리프모드 — 따라 치기",
+            ("리프모드(AI 아이콘) — 따라 치기",
              "누르면 리프(짧은 멜로디) 만들기 창이 열려요. <b>듣기</b>·<b>다시 만들기</b>로 고르고 "
              "<b>확정</b>하면 시작해요. '3도/7도 착지 섞기'를 켜면 코드의 3도·7도 음으로 끝나는 리프도 섞여요.<br>"
              "프로그램이 한 마디 치면(어둡고 흐린 블록, 소리로 들려줘요) 다음 마디에 "
              "<b>내가 같은 리프로 따라 쳐요</b>(선명한 색 블록). "
              "블록이 건반에 닿을 때 누르면 PERFECT·EARLY·LATE가 떠요.<br>"
-             "'리프모드 해제'로 자유연습에 돌아와요.",
+             "켜져 있으면 아이콘이 보라색이고, 다시 누르면 자유연습으로 돌아와요.",
              at(self.riff_btn)),
             ("설정 ⚙",
              "<b>박자 조정</b> — 박이 음악과 어긋나 보일 때<br><b>코드 수정</b> — 표시된 코드가 틀렸을 때<br>"
@@ -363,6 +348,7 @@ class MainScreen(QWidget):
         self._monitor_seg = None
         self.chord_hdr.set_detour({s.chord.name for s in tl.segments if s.is_detour})
         self._build_riff_events()          # 리프를 곡에 함께 구움(§2)
+        self.stage.set_states(self._stage_states())   # 건반 층은 진입 첫 프레임에 곡 전체를 미리 굽는다
         self.playhead = Playhead(tl.content_end(), tl.audio_ref, self)
         self.playhead.positionChanged.connect(self._on_tick)
         self.playhead.stateChanged.connect(self._on_state)
@@ -371,8 +357,9 @@ class MainScreen(QWidget):
         self._held_keys.clear()
 
         self.song_lbl.setText(tl.title or tl.audio_ref or "내 곡")
-        self.key_lbl.setText(tl.key)
-        self.bpm_lbl.setText(f"{tl.bpm:.0f}")
+        self.info_lbl.setText(f"{tl.key}    |    {tl.bpm:.0f} BPM")
+        scale = (tl.practice.get("scale") or {}).get("name")
+        self.scale_lbl.setText(f"{scale} 스케일" if scale else "")
         self.scrub.set_timeline(tl)
         self.total_time_lbl.setText(_fmt_sec(tl.total_sec()))
         self._seek_to(tl.count_in_start())   # 처음 = 예비박부터(음수는 무음 프리롤)
@@ -391,7 +378,10 @@ class MainScreen(QWidget):
     def _select_practice(self, mode: str):
         self._mode = "practice" if mode == "riff" else "guide"
         practice = (self._mode == "practice")
-        self.riff_btn.setText("리프모드 해제" if practice else "리프모드")
+        name = "리프모드 해제" if practice else "리프모드"
+        self.riff_btn.setToolTip(name)
+        self.riff_btn.setAccessibleName(name)
+        self.riff_btn.setIcon(T.tinted_icon("riff-ai.svg", T.NEON if practice else T.TEXT_PRIMARY))
         self.riff.show_notes = practice
         if practice:
             self._build_riff_events()
@@ -428,11 +418,13 @@ class MainScreen(QWidget):
     def _on_state(self, playing: bool):
         self.stage.driven = playing          # 재생 중엔 재생 틱 하나로만 그림(반짝이 타이머 멈춤)
         if not playing:
+            self.stage.beat = None           # 멈춤 = 박 펄스 없이 아지랑이만 숨 쉼
             self.note_player.stop_all()
             self._held_keys.clear()
             self.piano.set_pressed(set())
             self.stage.update()
         self.play_btn.setVisible(not playing)    # 멈춤일 때만 가운데 재생 아이콘
+        self.bar_play_btn.setText("❚❚" if playing else "▶")
 
     def _on_seek(self, sec: float):
         self._seek_to(sec)
@@ -451,6 +443,8 @@ class MainScreen(QWidget):
 
     def _on_tick(self, sec: float):
         self.scrub.set_position(sec)
+        if self.tl and self.playhead and self.playhead.is_playing():   # 무대 아지랑이 박 펄스(들리는 위치 기준)
+            self.stage.beat = (self.tl.beat_at(sec - self._sync_sec), self.tl.time_sig_beats())
         if self.tl:
             self._set_time(sec)
         self._render_at(sec)   # 구간 변경 시 무거운 갱신
@@ -471,30 +465,45 @@ class MainScreen(QWidget):
         sec -= self._sync_sec            # 화면은 스피커에서 들리는 위치 기준(리프음 발음은 재생 위치 그대로)
         idx = self.tl.segment_index_at(sec)
         self._update_scale_preview(sec, idx)
-        tonic, song_notes = self._song_scale()
         if idx >= 0 and self.tl.practice.get("skip_detour") and self.tl.segments[idx].is_detour:
             idx = -1                     # 제외한 키 밖 코드 = 예비박처럼 곡 스케일만(코드·근음 강조 없음)
         if idx < 0:
             # 코드 없는 구간(예비박 등)도 곡 스케일과 번호는 그대로 보여준다.
             self._last_idx = -1
-            self.piano.set_scale(song_notes, [])
-            self.piano.set_degrees({pc: degree_number(pc, tonic) for pc in song_notes})
+            self._show_keys(*self._key_display(-1))
             return
         landing = (next((g for a, b, g in self._landing_spans if a <= sec < b), None)
                    if self._mode == "practice" else None)
         if (idx, landing) == self._last_idx:
             return
         self._last_idx = (idx, landing)
+        self._show_keys(*self._key_display(idx, landing))
+        self.piano.set_pressed({m for _, m in self._held_keys})
+
+    def _key_display(self, idx, landing=None):
+        """구간 idx(-1 = 코드 없음: 곡 스케일만)의 건반 표시 (스케일 음, 강조음, 근음, 번호).
+        재생 중 표시와 무대 건반 캐시 미리 굽기(_stage_states)가 같은 규칙을 쓴다."""
+        tonic, song_notes = self._song_scale()
+        if idx < 0:
+            return song_notes, [], None, {pc: degree_number(pc, tonic) for pc in song_notes}
         seg = self.tl.segments[idx]
         chord_tones = seg.chord_tones()
         if landing:
             target = _landing_pc(seg, landing)   # 착지음 리프 블록에선 목표음만 초록으로 강조(없으면 코드톤)
             chord_tones = [target] if target is not None else chord_tones
         root = seg.chord.root % 12
-        self.piano.set_scale(seg.note_set, chord_tones, root)
         # 번호는 곡 스케일 주음 기준으로 곡 내내 고정(예외 구간 음은 ♭/♯로), 근음은 스케일 밖이어도 번호 표시
-        self.piano.set_degrees({pc: degree_number(pc, tonic) for pc in set(seg.note_set) | {root}})
-        self.piano.set_pressed({m for _, m in self._held_keys})
+        return seg.note_set, chord_tones, root, {pc: degree_number(pc, tonic) for pc in set(seg.note_set) | {root}}
+
+    def _show_keys(self, notes, tones, root, degrees):
+        self.piano.set_scale(notes, tones, root)
+        self.piano.set_degrees(degrees)
+
+    def _stage_states(self):
+        """자유연습에서 나올 수 있는 건반 표시 전부(제외한 키 밖 코드는 곡 스케일 표시와 같음)."""
+        skip = self.tl.practice.get("skip_detour")
+        return [self._key_display(-1)] + [self._key_display(i) for i, seg in enumerate(self.tl.segments)
+                                          if not (skip and seg.is_detour)]
         # 현재/다음 코드는 모니터박스가 그림(_update_monitor)
 
     def _song_scale(self):
@@ -530,11 +539,7 @@ class MainScreen(QWidget):
         push = min(1.0, max(0.0, (sec - change) / (0.5 * self.tl.beat_sec()))) if self._monitor_prev else 1.0
         if push >= 1:
             self._monitor_prev = ""
-        caption = ""
-        if seg:      # 지금 코드 근음이 곡 스케일 몇 번인지 + 스케일 종류
-            number = degree_number(seg.chord.root % 12, self._song_scale()[0])
-            caption = f"근음 {number}번" + (f" · {seg.scale.kind}" if seg.scale else "")
-        self.chord_hdr.set_chords(seg.chord.name if seg else "", caption,
+        self.chord_hdr.set_chords(seg.chord.name if seg else "",
                              upcoming.chord.name if upcoming else "",
                              self._monitor_prev, grow, push)
 
@@ -570,7 +575,6 @@ class MainScreen(QWidget):
 
     def set_midi_status(self, ports, name="", error=""):
         self._midi_ports, self._midi_name = list(ports), name
-        self.settings_btn.setStyleSheet(T.qss_icon_btn(T.TEXT_PRIMARY if name else T.TEXT_DIM))
         self.settings_btn.setToolTip(error or (f"MIDI: {name}" if name else "MIDI 미연결 · 화면 건반으로 연습 가능"))
 
     def _show_settings(self):

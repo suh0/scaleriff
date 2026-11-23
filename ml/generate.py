@@ -508,7 +508,7 @@ def bake_progression(timeline, model, start_sec, end_sec, goal="third", variant=
     Riff rules: 8th-note grid, gaps < 4 beats, no two offbeats in a row, adjacent leaps < 12
     semitones, no pitch three times in a row; then (soft, skipped when nothing fits) non-chord
     tones entered and left by step, a leap of a 4th or more followed by a step back, a
-    single highest note, no repeated pitch, and no target pitch class right before a landing.
+    single highest note, no repeated or revisited pitch, and no target pitch class right before a landing.
     Chord tones are weighted up (downbeat x4, offbeat x1.8). If 20 draws miss the onset rules, downbeats are
     added (the count may then exceed hi).
     Call during preparation or an explicit user action, never from a playback tick.
@@ -608,6 +608,7 @@ def bake_progression(timeline, model, start_sec, end_sec, goal="third", variant=
                                        and (m - prev_midi) * leap < 0),
                 lambda m: m != peak,                                        # 최고음은 한 번만
                 lambda m: m != prev_midi,                                   # 같은 음 반복 금지
+                lambda m: all(n["midi"] != m for n in result["notes"]),     # 이미 쓴 음 재방문 피함(이웃음 왕복 방지)
             ):
                 pool = [m for m in pool if keep(m)] or pool
         gap = max(0, int(round((beat - previous_end) * 4)))
@@ -618,12 +619,12 @@ def bake_progression(timeline, model, start_sec, end_sec, goal="third", variant=
             prior = model.blended(quality_family(seg.chord.quality), _query_scale(model, kind),
                                   int(round(beat * 4)) % (bpb * 4), tuple(prev_tokens[-2:]))
         mass = sum(prior.get(onset_token((m - seg.chord.root) % 12), 0) for m in pool)
-        contour = 62 + 2 * _contour_target(shape, i / max(1, len(onsets) - 1))
+        contour = 60 + 3 * _contour_target(shape, i / max(1, len(onsets) - 1))
         weights = []
         for midi in pool:
             p = prior.get(onset_token((midi - seg.chord.root) % 12), 0) / mass if mass else 0
-            weight = (.03 + p) / (1 + abs(midi - prev_midi)) ** 1.5
-            weight /= 1 + abs(midi - contour) * .15
+            weight = (.03 + p) / (1 + abs(midi - prev_midi)) ** 1.2
+            weight /= 1 + abs(midi - contour) * .3
             if midi == prev_midi:
                 weight *= .2
             if midi % 12 in seg.chord_tones():                         # 코드톤 선호(정박 > 엇박)

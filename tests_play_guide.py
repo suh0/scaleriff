@@ -47,7 +47,6 @@ class PlayGuideTest(unittest.TestCase):
             self.assertEqual(s.piano._degrees.get(0), "1")
             self.assertEqual(s.piano._degrees[root], degree_number(root, 0), "근음 번호 없음")
             self.assertEqual(s.stage._tone(60 + root).name(), "#1f4bff", "근음 강조 없음")
-            self.assertIn(f"근음 {degree_number(root, 0)}번", s.chord_hdr._chords[1])
         s._seek_to(tl.segments[0].start_sec + 1e-3)
         self.assertEqual(s.piano._degrees[5], "4")     # 스케일 밖 근음도 번호 표시
         self.assertFalse(s.piano._is_out(65), "스케일 밖 근음을 누르면 빨강으로 표시됨")

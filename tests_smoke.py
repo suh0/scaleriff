@@ -156,11 +156,11 @@ def main():
     assert all(a is b for a, b in zip(segments_before, tl.segments)), \
         "박자 변경 없이 확인하면 코드 편집 내용을 보존해야 함"
     assert win.stack.currentWidget() is win.setup
-    # 학습 설정: 곡 스케일 3후보, ii–V–I는 7음이 추천(칩 안 추천 배지), 착지음 옵션은 항상 보이고 착지 방식에서만 활성
+    # 학습 설정: 곡 스케일 3후보, ii–V–I도 펜타가 추천(부딪힘 최소, 칩 안 추천 배지), 착지음 옵션은 항상 보이고 착지 방식에서만 활성
     su = win.setup
-    assert [l.text() for l in su.rec_lbls] == ["", "추천", ""]
+    assert [l.text() for l in su.rec_lbls] == ["추천", "", ""]
     assert "%" not in su.scale_btns[1].text()
-    assert "펜타토닉" in su.scale_btns[0].text() and su.scale_btns[0].isEnabled() and su._scale == 1
+    assert "펜타토닉" in su.scale_btns[0].text() and su.scale_btns[0].isEnabled() and su._scale == 0
     assert su.title.text() == "학습내용 선택" and su.key_lbl.text().startswith("추정 키: ")
     from PyQt6.QtWidgets import QScrollArea   # 낮은 창: 잘리지 않고 스크롤로 연습 시작 버튼까지 닿음
     size = win.size()
@@ -168,6 +168,8 @@ def main():
     app.processEvents()
     su_scroll = su.findChild(QScrollArea)   # 스케일만 남아 최소 창에도 들어갈 수 있음 — 닿기만 확인
     su_scroll.ensureWidgetVisible(su.go_btn)
+    if su._curtain is not None:             # 전환 커튼(불투명)이 걷힌 화면에서 확인
+        su._curtain.anim.setCurrentTime(su._curtain.anim.totalDuration())
     app.processEvents()
     assert not su.go_btn.visibleRegion().isEmpty(), "스크롤해도 연습 시작 버튼이 안 보임"
     win.resize(size)
@@ -247,11 +249,11 @@ def main():
     assert dialogs and win.main_screen._mode == "practice" and win.main_screen._riff_events
     assert tl.practice["landing"] == ["third"] and win.main_screen._landing_spans == [
         (b["bars"][0][0], b["bars"][-1][1], "third") for b in dialogs[0].blocks[1::2]], "착지음 리프 블록 구간"
-    assert win.main_screen.riff_btn.text() == "리프모드 해제"
+    assert win.main_screen.riff_btn.accessibleName() == "리프모드 해제"
     assert win.main_screen.playhead.position_sec() == tl.count_in_start(), "리프모드 진입 시 곡 처음 아님"
     win.main_screen.playhead.seek(3.0)
     win.main_screen.riff_btn.click()   # 해제 → 자유연습 + 처음으로
-    assert win.main_screen._mode == "guide" and win.main_screen.riff_btn.text() == "리프모드"
+    assert win.main_screen._mode == "guide" and win.main_screen.riff_btn.accessibleName() == "리프모드"
     assert win.main_screen.playhead.position_sec() == tl.count_in_start(), "리프모드 해제 시 곡 처음 아님"
     win.main_screen._select_practice("riff")
     covered = [seg for seg in tl.segments if seg.example]
@@ -263,7 +265,7 @@ def main():
     # 렌더 + 입력 + 모드토글
     ms = win.main_screen
     app.processEvents()
-    assert not ms.scrub_row.isHidden(), "재생바는 항상 표시(무대 아래 고정)"
+    assert not ms.scrub_row.isHidden(), "재생바는 항상 표시(무대 맨 아래에 겹침)"
     assert not hasattr(ms, "loop_btn"), "루프 기능 삭제됨"
     win.resize(1040, 740)
     app.processEvents()
@@ -538,10 +540,6 @@ def main():
     assert win.stack.currentWidget() is win.setup and win._timeline is tl_bg
     assert not win._bg_wait and win._pill.isHidden()
     assert win.link_screen.url_edit.isEnabled()
-
-    # 입장 애니메이션 헬퍼 — 헤드리스에서 예외 없이 동작
-    from gui.anim import stagger as _stagger
-    _stagger([ms.play_btn, ms.riff])
 
     print("\nSMOKE OK — 스케일/악보+수동수정/리프동기재생/리프불변식(1마디·스케일안·밀도·해결·음역)/보정/난이도/마디선+확정잠금/건반간격/파형·세션/애니메이션 정상")
     win.close()

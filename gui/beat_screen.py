@@ -26,7 +26,7 @@ from PyQt6.QtCore import Qt, QRectF, pyqtSignal, QTimer, QUrl, QEvent
 from PyQt6.QtMultimedia import QSoundEffect
 
 from gui import theme as T
-from gui.anim import stagger
+from gui.anim import open_curtain
 from analyze.theory import (
     parse_chord, scale_pcs, degree_for, diatonic_option, pc_name,
 )
@@ -319,10 +319,7 @@ class BeatScreen(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(12)
 
-        self.back_btn = QPushButton("←")
-        self.back_btn.setToolTip("연주 화면으로(적용 안 함)")
-        self.back_btn.setFixedSize(48, 48)
-        self.back_btn.setStyleSheet(T.qss_icon_btn())
+        self.back_btn = T.bare_icon_btn("chevron-left.svg", "연주 화면으로(적용 안 함)")
         self.back_btn.clicked.connect(self.backRequested.emit)
         root.addLayout(T.header_row(self.back_btn, T.title_block(
             "박자 조정", "3단계 · Enter 다음 · Backspace 이전 · Space 재생")))
@@ -580,7 +577,8 @@ class BeatScreen(QWidget):
     def showEvent(self, e):
         super().showEvent(e)
         self.setFocus()
-        stagger(self.sections)
+        if not e.spontaneous():           # 화면 전환 = 커튼(창 복원 같은 자발적 표시는 제외)
+            open_curtain(self)
 
     # ── 격자 상태 ────────────────────────────────────────────────
     def _beats(self) -> int:

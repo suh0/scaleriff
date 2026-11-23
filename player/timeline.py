@@ -385,7 +385,8 @@ class Timeline:
         fd, temporary = tempfile.mkstemp(prefix=".session_", suffix=".tmp", dir=folder)
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump(payload, f, ensure_ascii=False, indent=2, allow_nan=False)
+                # 한 줄 dumps = C 인코더(indent·dump 스트리밍은 순수 파이썬이라 화면 전환 직전 UI가 ~0.3초 멈춤)
+                f.write(json.dumps(payload, ensure_ascii=False, allow_nan=False))
                 f.flush()
                 os.fsync(f.fileno())
             os.replace(temporary, path)

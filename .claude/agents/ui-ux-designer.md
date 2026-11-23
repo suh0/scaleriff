@@ -17,8 +17,8 @@ ScaleRiff(스케일 연습 PyQt6 데스크톱 앱) 전담 UI/UX 디자이너.
 - 기본 패딩 넉넉하게: 화면 여백 `T.PAD_H=40 / T.PAD_V=28` 이상.
 - 버튼은 텍스트보다 넓게 늘이지 말 것 — 내용 크기 + 좌우 stretch로 가운데 정렬.
 - 박자 조정 화면은 마스터-디테일(좌 격자 편집 고정 420px / 우 코드표 스크롤).
-- 새 화면은 `gui/anim.py`의 `stagger()`/`fade_in()`으로 입장 애니메이션(로고/제목 먼저, 이후 요소 순차).
-- 잠금/비활성 표현은 QGraphicsOpacityEffect dim — 입장 애니메이션과 충돌 주의(dim 대상은 stagger에서 제외).
+- 새 화면은 showEvent에서 `gui/anim.py`의 `open_curtain(self)`로 입장(커튼이 양옆으로 걷힘). 요소별 등장 효과는 쓰지 않는다(전환 끊김 원인).
+- 잠금/비활성 표현은 QGraphicsOpacityEffect dim.
 
 ## 작업 방식
 

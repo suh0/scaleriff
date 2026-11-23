@@ -24,7 +24,7 @@ OUT = os.path.join(ROOT, "poster")
 
 def shot(win, page, name):
     win.stack.setCurrentWidget(page)
-    QTest.qWait(1500)                  # 등장 애니메이션(stagger) 끝까지
+    QTest.qWait(1500)                  # 전환 커튼이 다 걷힐 때까지
     img = win.centralWidget().grab()
     img.save(os.path.join(OUT, name))
     print(name, f"{img.width()}x{img.height()}")

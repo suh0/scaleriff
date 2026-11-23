@@ -18,7 +18,7 @@ from PyQt6.QtCore import Qt, pyqtSignal, QSize, QEvent
 from PyQt6.QtGui import QIcon
 
 from gui import theme as T
-from gui.anim import stagger
+from gui.anim import open_curtain
 
 try:
     from PyQt6.QtSvgWidgets import QSvgWidget
@@ -134,18 +134,12 @@ class LinkScreen(QWidget):
         self.stack.addWidget(self._onboard)   # 0
         self.stack.addWidget(self._input)     # 1
         self.stack.setCurrentIndex(0 if show_onboarding else 1)
-        self.stack.currentChanged.connect(lambda _: self._animate_page())
+        self.stack.currentChanged.connect(lambda _: open_curtain(self))   # 온보딩 → 입력도 커튼
 
-    # ── 입장 애니메이션: 로고 → 제목 → 입력란 순 ────────────────
     def showEvent(self, e):
         super().showEvent(e)
-        self._animate_page()
-
-    def _animate_page(self):
-        if self.stack.currentIndex() == 0:
-            stagger([self._onboard.card, self._onboard.next_btn])
-        else:
-            stagger(self._input_items)
+        if not e.spontaneous():           # 화면 전환 = 커튼(창 복원 같은 자발적 표시는 제외)
+            open_curtain(self)
 
     def _build_input(self):
         w = QWidget()
@@ -248,8 +242,6 @@ class LinkScreen(QWidget):
         # 제한 모드에서 잠글 위젯들(세션 선택만 남김)
         self._restricted_widgets = (self.url_edit, self.go_btn)
         self._restricted = False
-        # 입장 애니메이션 순서(위 → 아래)
-        self._input_items = [(logo, title, sub), row_wrap, self.save_label, self.recent_box]
         return w
 
     # ── 제한 모드(백그라운드 분석 중) — 세션(.json) 선택만 활성 ──

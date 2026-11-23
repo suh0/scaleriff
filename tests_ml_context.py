@@ -232,6 +232,14 @@ class PatternTest(unittest.TestCase):
                                 if n["start_sec"] not in land), res["notes"])
             self.assertEqual(res["notes"][-1]["midi"] % 12, 5)
 
+    def test_riff_spreads_over_more_keys(self):
+        # 이웃음 왕복(A-B-A)·좁은 컨투어로 2~4건반만 오가던 문제 — 리프당 서로 다른 음 평균 4.7개 이상(이전 4.45)
+        tl = self._song()
+        uniq = [len({n["midi"] for n in generate.bake_progression(
+                    tl, None, 0, 2, "third", v, count=generate.RIFF_NOTES, repeats=(4, 8, 12))["notes"]})
+                for v in range(40)]
+        self.assertGreaterEqual(sum(uniq) / len(uniq), 4.7, uniq)
+
     def test_strong_beats_avoid_semitone_against_repeat_chords(self):
         # Dm7 마디 리프를 G7·G7·Cmaj7 마디에서 반복 — 정박 음은 어느 코드와도 반음 충돌 없음(코드톤 제외)
         tl = self._song()

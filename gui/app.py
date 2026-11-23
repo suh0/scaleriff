@@ -10,10 +10,11 @@ import hashlib
 import os
 
 from PyQt6.QtWidgets import (
-    QMainWindow, QFrame, QHBoxLayout, QVBoxLayout, QLabel, QPushButton, QFileDialog, QApplication
+    QMainWindow, QFrame, QHBoxLayout, QVBoxLayout, QLabel, QPushButton, QFileDialog, QApplication,
+    QStackedWidget
 )
-from PyQt6.QtGui import QFont
-from PyQt6.QtCore import QSettings, pyqtSignal
+from PyQt6.QtGui import QFont, QCursor
+from PyQt6.QtCore import QSettings, QTimer, pyqtSignal
 
 from player.timeline import Timeline
 from ingest.audio_source import _cache_key, _is_url
@@ -22,7 +23,6 @@ _CACHE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file
                           "cache")
 
 from gui import theme as T
-from gui.anim import FadeStack
 from gui.link_screen import LinkScreen
 from gui.analyzing_screen import AnalyzingScreen
 from gui.beat_screen import BeatScreen
@@ -68,11 +68,55 @@ class AnalysisPill(QFrame):
         self.adjustSize()
 
 
+class WindowBar(QFrame):
+    """전체화면에서 마우스를 화면 맨 위에 대면 내려오는 창 버튼(최소화·축소·닫기)."""
+    HEIGHT = 36
+
+    def __init__(self, win):
+        super().__init__(win)
+        self.setStyleSheet(
+            f"QFrame{{background:{T.BG_SURFACE};border-bottom:1px solid {T.BORDER_DEFAULT};}}"
+            f"QPushButton{{background:transparent;border:none;color:{T.TEXT_BODY};"
+            "font-size:14px;min-width:46px;min-height:36px;}}"
+            f"QPushButton:hover{{background:{T.BG_SURFACE_ALT};}}"
+            "QPushButton#close:hover{background:#c42b1c;color:white;}")
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(12, 0, 0, 0)
+        lay.setSpacing(0)
+        title = QLabel("ScaleRiff")
+        title.setStyleSheet(f"color:{T.TEXT_MUTED};font-size:12px;border:none;")
+        lay.addWidget(title)
+        lay.addStretch()
+        for text, slot, name in (("—", win.showMinimized, ""),
+                                 ("❐", win.showNormal, ""),
+                                 ("✕", win.close, "close")):
+            b = QPushButton(text)
+            b.setObjectName(name)
+            b.clicked.connect(slot)
+            lay.addWidget(b)
+        self.hide()
+        # ponytail: 100ms 커서 폴링 — 자식 위젯이 마우스 이동을 삼키므로 이벤트보다 단순
+        self._poll = QTimer(self, interval=100, timeout=self._check)
+        self._poll.start()
+
+    def _check(self):
+        win = self.parentWidget()
+        y = win.mapFromGlobal(QCursor.pos()).y()
+        if not win.isFullScreen() or not win.isActiveWindow():
+            self.hide()
+        elif self.isHidden() and 0 <= y <= 2:
+            self.setGeometry(0, 0, win.width(), self.HEIGHT)
+            self.show()
+            self.raise_()
+        elif self.isVisible() and y > self.HEIGHT + 8:
+            self.hide()
+
+
 class AppWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         T.load_fonts()                       # 번들 폰트 로드(있으면)
-        base = QFont(T.FONTS, 11)            # 영문 Segoe UI + 한글 본고딕
+        base = QFont(T.FONTS, 11)            # 영문 Segoe UI + 한글 Pretendard
         base.setWeight(QFont.Weight.Medium)  # v4: light(300) 금지, 최소 Medium(500)
         self.setFont(base)
         self.setWindowTitle("ScaleRiff")
@@ -84,7 +128,7 @@ class AppWindow(QMainWindow):
         QApplication.instance().setProperty("reduceMotion", self._settings.value("reduce_motion", False, type=bool))
         seen_onboarding = self._settings.value("seen_onboarding", False, type=bool)
 
-        self.stack = FadeStack()             # 화면 전환 = 이전 화면 스냅샷 페이드
+        self.stack = QStackedWidget()        # 화면 전환 = 새 화면이 제 showEvent에서 커튼을 연다
         backdrop = T.Backdrop()              # 전 화면 공통 배경(화면들은 투명)
         QVBoxLayout(backdrop).addWidget(self.stack)
         backdrop.layout().setContentsMargins(0, 0, 0, 0)
@@ -99,6 +143,9 @@ class AppWindow(QMainWindow):
         for w in (self.link_screen, self.analyzing, self.beat, self.setup,
                   self.main_screen):
             self.stack.addWidget(w)
+        # 연주화면은 무대가 배경을 덮고 제 아지랑이를 그린다 — 그동안 공통 배경 애니메이션은 쉰다
+        self.stack.currentChanged.connect(
+            lambda i: backdrop.set_running(self.stack.widget(i) is not self.main_screen))
 
         self.link_screen.buildRequested.connect(self._start_build)
         self.analyzing.timelineReady.connect(self._on_timeline_ready)
@@ -112,6 +159,7 @@ class AppWindow(QMainWindow):
         self.analyzing.analysisFailed.connect(self._on_bg_failed)
         self.analyzing.analysisCancelled.connect(self._on_analysis_cancelled)
         self._pill.playRequested.connect(self._play_pending)
+        self._window_bar = WindowBar(self)
         self.beat.proceedRequested.connect(self._enter_setup)
         self.beat.backRequested.connect(lambda: self.stack.setCurrentWidget(self._beat_back))   # 연 화면으로
         self.setup.practiceRequested.connect(self._enter_main)

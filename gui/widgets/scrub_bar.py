@@ -6,9 +6,11 @@
 """
 from __future__ import annotations
 
+import math
+
 from PyQt6.QtWidgets import QWidget
 from PyQt6.QtGui import QPainter, QColor, QPen, QFont
-from PyQt6.QtCore import Qt, QRectF, pyqtSignal
+from PyQt6.QtCore import Qt, QPointF, QRectF, pyqtSignal
 
 from gui import theme as T
 
@@ -18,19 +20,26 @@ class ScrubBar(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setMinimumHeight(52)
+        self.setMinimumHeight(36)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setAccessibleName("곡 재생 위치")
         self.setToolTip("클릭·드래그로 이동 · 방향키로 5초 이동 · Home/End로 처음/끝")
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setMouseTracking(True)
         self._timeline = None
+        self._bars = []
         self._pos = 0.0
         self._dragging = False
         self._hover_x = None
+        self._kb_focus = False            # 키보드(Tab)로 들어온 포커스만 테두리 표시
 
     def set_timeline(self, timeline):
         self._timeline = timeline
+        self._bars = []                               # 마디 시작 = 눈금(검출 마디 없으면 BPM으로 등간격)
+        if timeline:
+            bar = timeline.beat_sec() * timeline.time_sig_beats()
+            self._bars = (list(timeline.bar_times) if len(timeline.bar_times) >= 2 else
+                          [i * bar for i in range(int(timeline.total_sec() / bar) + 1)])
         self.update()
 
     def set_position(self, sec: float):
@@ -63,6 +72,10 @@ class ScrubBar(QWidget):
     def mouseReleaseEvent(self, e):
         self._dragging = False
 
+    def focusInEvent(self, event):
+        self._kb_focus = event.reason() in (Qt.FocusReason.TabFocusReason, Qt.FocusReason.BacktabFocusReason)
+        super().focusInEvent(event)
+
     def leaveEvent(self, event):
         self._hover_x = None
         self.update()
@@ -82,30 +95,40 @@ class ScrubBar(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         w, h = self.width(), self.height()
-        track_y = h - 16
-        track_h = 8
+        y = h * 0.6                       # 가는 네온 선 높이(위쪽은 호버 시각 자리)
 
-        p.setBrush(QColor(T.BORDER_SUBTLE))
-        p.setPen(Qt.PenStyle.NoPen)
-        p.drawRoundedRect(QRectF(0, track_y, w, track_h), 4, 4)
+        def line(x0, x1, color, alpha, width):
+            c = QColor(color)
+            c.setAlpha(alpha)
+            p.setPen(QPen(c, width, cap=Qt.PenCapStyle.RoundCap))
+            p.drawLine(QPointF(x0, y), QPointF(x1, y))
 
+        line(0, w, T.NEON, 160, 2.0)
         if not self._timeline or not self._timeline.segments:
             return
+        # 마디 눈금: 화면에서 36px 이상 떨어지게 몇 마디씩 건너뛴다
+        step = max(1, math.ceil(len(self._bars) * 36 / max(1, w)))
+        tick = QColor(T.NEON_LIGHT)
+        tick.setAlpha(90)
+        p.setPen(QPen(tick, 1.5))
+        for when in self._bars[::step]:
+            x = self._sec_to_x(when)
+            p.drawLine(QPointF(x, y - 5), QPointF(x, y + 5))
 
-        # 재생된 부분
+        # 재생된 부분 = 번진 빛 + 밝은 심
         head_x = self._sec_to_x(self._pos)
-        p.setBrush(QColor(T.SCRUB_FILL))
-        p.setPen(Qt.PenStyle.NoPen)
-        p.drawRoundedRect(QRectF(0, track_y, head_x, track_h), 4, 4)
-
-        # 헤드 — 흰 원
-        p.setBrush(QColor(T.SCRUB_HEAD))
-        p.setPen(QPen(QColor(T.BORDER_DEFAULT), 1))
-        p.drawEllipse(QRectF(head_x - 6, track_y + track_h / 2 - 6, 12, 12))
-        if self.hasFocus():
+        line(0, head_x, T.NEON, 70, 7.0)
+        line(0, head_x, T.NEON_LIGHT, 255, 2.0)
+        # 헤드 = 빛나는 세로 막대
+        for width, alpha in ((9.0, 60), (3.0, 255)):
+            c = QColor(T.NEON_LIGHT)
+            c.setAlpha(alpha)
+            p.setPen(QPen(c, width, cap=Qt.PenCapStyle.RoundCap))
+            p.drawLine(QPointF(head_x, y - 12), QPointF(head_x, y + 12))
+        if self.hasFocus() and self._kb_focus:
             p.setBrush(Qt.BrushStyle.NoBrush)
             p.setPen(QPen(QColor(T.BORDER_ACTIVE), 1))
-            p.drawRoundedRect(QRectF(1, track_y - 5, w - 2, track_h + 10), 7, 7)
+            p.drawRoundedRect(QRectF(1, y - 14, w - 2, 28), 7, 7)
         if self._hover_x is not None:
             seconds = int(self._x_to_sec(self._hover_x))
             p.setFont(QFont(T.FONTS, 9))

@@ -91,6 +91,24 @@ class FallingNotes(QWidget):
         return [(self.height() * (1 - (when - self._sec) / self._lead), when)
                 for when in times if self._sec <= when <= self._sec + self._lead]
 
+    def dash_lines(self, per_beat):
+        """레일 바깥 점선: 박 사이를 per_beat로 나눈 시각 → [(레인 y, 박 위인지)]. 박자선과 같이 흐른다."""
+        if self._lead <= 0 or self._beat <= 0:
+            return []
+        s0, s1, grid = self._sec, self._sec + self._lead, self._beat_grid
+        if len(grid) < 2:
+            first = int(s0 // self._beat)
+            grid = [(first + i) * self._beat for i in range(int(self._lead / self._beat) + 3)]
+        else:   # 보이는 구간 앞뒤 한 박씩 포함해 나눈다
+            grid = grid[max(0, bisect.bisect_left(grid, s0) - 1):bisect.bisect_right(grid, s1) + 1]
+        out = []
+        for a, b in zip(grid, grid[1:]):
+            for i in range(per_beat):
+                when = a + (b - a) * i / per_beat
+                if s0 <= when <= s1:
+                    out.append((self.height() * (1 - (when - s0) / self._lead), i == 0))
+        return out
+
     def _x(self, midi):
         """레인 가운데 x — 흰 건반은 격자 칸 가운데, 흑건은 실제 흑건 가운데(격자 칸 없음)."""
         whites, x0, _, kw, _ = self.piano._geometry()

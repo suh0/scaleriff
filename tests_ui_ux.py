@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 from PyQt6.QtCore import Qt, QSettings
 from PyQt6.QtTest import QTest
-from PyQt6.QtWidgets import QApplication, QWidget, QGraphicsOpacityEffect
+from PyQt6.QtWidgets import QApplication, QWidget
 from gui import anim
 from gui import theme as T
 from gui.link_screen import LinkScreen
@@ -29,93 +29,37 @@ class UIUXTest(unittest.TestCase):
         for w in self.app.topLevelWidgets():
             w.close()
 
-    def test_screen_switch_fades_old_snapshot_then_cleans_up(self):
-        stack = anim.FadeStack()
-        a, b = QWidget(), QWidget()
-        stack.addWidget(a)
-        stack.addWidget(b)
-        stack.resize(400, 300)
-        stack.show()
-        stack.setCurrentWidget(b)
-        snap = stack._snapshot
-        self.assertIsNotNone(snap, "전환 스냅샷 없음")
-        self.assertIs(stack.currentWidget(), b, "새 화면은 즉시 현재 화면(입력 가능)")
-        self.assertTrue(snap.testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents))
-        stack.setCurrentWidget(a)                     # 연달아 전환 — 이전 스냅샷 대신 새 스냅샷 하나
-        self.assertIsNot(stack._snapshot, snap)
-        QTest.qWait(anim.OUT_MS + anim.IN_MS + 150)
-        self.assertIsNone(stack._snapshot, "전환 뒤 스냅샷이 남음")
-        self.assertEqual([c for c in stack.children() if isinstance(c, anim._Snapshot)], [])
-        self.app.setProperty("reduceMotion", True)    # 효과 축소 = 스냅샷 없이 즉시
-        stack.setCurrentWidget(b)
-        self.assertIsNone(stack._snapshot)
-
-    def test_boxes_enter_in_order_after_old_screen_leaves(self):
-        def delays(boxes):
-            out = []
-            for w in boxes:
-                group = w._entry_animation
-                first = group.animationAt(0)
-                out.append(first.duration() if group.animationCount() == 2 else 0)
-            return out
-        holder = QWidget()                      # 자식 위젯이어야 '숨김' 여부가 명시 hide()로만 정해짐
-        head, sub, card, hidden, btn = (QWidget(holder) for _ in range(5))
-        hidden.hide()
-        anim.stagger([(head, sub), card, hidden, btn])
-        self.assertEqual(delays([head, sub, card, btn]), [0, 0, anim.STEP_MS, 2 * anim.STEP_MS],
-                         "한 박스(튜플)는 같이, 박스끼리는 차례로, 숨은 박스는 건너뜀")
-        self.assertIsNone(getattr(hidden, "_entry_animation", None))
-        # 화면 전환 중이면 이전 화면이 사라진 뒤(OUT_MS)부터
-        stack = anim.FadeStack()
-        class Page(QWidget):
-            def showEvent(self, e):
-                anim.stagger([self.box])
-        first, page = QWidget(), Page()
-        box = page.box = QWidget(page)
+    def test_screen_switch_opens_curtain_then_cleans_up(self):
+        from PyQt6.QtWidgets import QStackedWidget
+        stack = QStackedWidget()
+        first, link = QWidget(), LinkScreen(show_onboarding=True)
         stack.addWidget(first)
-        stack.addWidget(page)
-        stack.resize(300, 200)
+        stack.addWidget(link)
+        stack.resize(960, 700)
         stack.show()
-        stack.setCurrentWidget(page)
-        self.assertGreater(delays([box])[0], anim.OUT_MS - 40)
-        self.assertEqual(box.graphicsEffect().opacity(), 0, "이전 화면이 사라지기 전에 새 박스가 보임")
+        stack.setCurrentWidget(link)                  # 화면 전환 = 새 화면 전체를 덮은 커튼이 걷힘
+        curtain = link._curtain
+        self.assertIsNotNone(curtain, "전환 커튼 없음")
+        self.assertIs(curtain.parentWidget(), link)
+        self.assertEqual(curtain.size(), link.size())
+        self.assertTrue(curtain.testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents))
+        link.stack.setCurrentIndex(1)                 # 온보딩 → 입력도 커튼 — 이전 커튼 대신 새 커튼 하나
+        self.assertIsNot(link._curtain, curtain)
+        QTest.qWait(link._curtain.anim.totalDuration() + 150)
+        self.assertIsNone(link._curtain, "전환 뒤 커튼이 남음")
+        self.assertEqual([c for c in link.children() if isinstance(c, anim.Curtain)], [])
+        self.app.setProperty("reduceMotion", True)    # 효과 축소 = 커튼 없이 즉시
+        stack.setCurrentWidget(first)
+        stack.setCurrentWidget(link)
+        self.assertIsNone(link._curtain)
 
-    def test_reduced_motion_does_not_hide_new_content(self):
-        self.app.setProperty("reduceMotion", True)
-        w = QWidget()
-        anim.fade_in(w, delay=500)
-        self.assertIsNone(w.graphicsEffect(), "효과 축소 시 콘텐츠를 즉시 표시해야 함")
-
-    def test_entry_preserves_existing_opacity_lock(self):
-        w = QWidget()
-        effect = QGraphicsOpacityEffect(w)
-        effect.setOpacity(.35)
-        w.setGraphicsEffect(effect)
-        anim.fade_in(w)
-        self.assertIs(w.graphicsEffect(), effect, "화면 진입 효과가 잠금을 덮어씀")
-
-    def test_preference_saves_and_cancels_an_active_transition(self):
-        w = QWidget()
-        anim.fade_in(w)
+    def test_reduced_motion_preference_saves(self):
         with tempfile.TemporaryDirectory() as directory:
             settings = QSettings(os.path.join(directory, "ui.ini"), QSettings.Format.IniFormat)
             with patch("gui.anim.QSettings", return_value=settings):
                 anim.set_reduced_motion(True)
             self.assertTrue(settings.value("reduce_motion", False, type=bool))
             self.assertTrue(anim.reduced_motion())
-            self.assertIsNone(w.graphicsEffect())
-
-    def test_repeated_entry_and_early_close_are_safe(self):
-        w = QWidget()
-        w.show()
-        for _ in range(12):
-            anim.fade_in(w, delay=10)
-            self.app.processEvents()
-        QTest.qWait(250)
-        self.assertIsNone(w.graphicsEffect(), "전환이 끝나도 효과가 남음")
-        anim.fade_in(w, delay=20)
-        w.deleteLater()
-        QTest.qWait(80)
 
     def test_input_fits_and_empty_submit_explains_next_action(self):
         screen = LinkScreen(show_onboarding=False)
@@ -128,6 +72,62 @@ class UIUXTest(unittest.TestCase):
         screen._submit()
         self.assertFalse(screen.input_hint.text() == "", "빈 입력 시 다음 행동 안내")
         self.assertEqual(self.app.focusWidget(), field)
+
+    def test_backdrop_uses_physical_pixels(self):
+        from PyQt6.QtGui import QPainter, QPixmap
+        for name in ("backdrop.webp", "stage_backdrop.webp"):
+            dev = QPixmap(1920, 1080)
+            dev.setDevicePixelRatio(1.25)            # 배율 125% 노트북(논리 1536x864)
+            p = QPainter(dev)
+            T.paint_backdrop(p, 1536, 864, name)
+            p.end()
+            pix = T._BACKDROP[(name, 1921, 1081)]
+            self.assertEqual(pix.devicePixelRatio(), 1.25, "배경은 화면 실제 픽셀 크기로(늘려 흐려지지 않게)")
+
+    def test_backdrop_sprites_move_and_repaint_only_their_area(self):
+        bd = T.Backdrop()
+        bd.resize(1000, 700)
+        bd.show()
+        self.assertTrue(bd._timer.isActive())
+        bd._tick(100.0)
+        first = [r for _, r, _ in bd._scene()]
+        bd._tick(100.5)
+        moved = sum(a.center() != b.center() for a, b in zip(first, (r for _, r, _ in bd._scene())))
+        self.assertGreater(moved, len(first) // 2, "시각이 흐르면 기둥·반딧불이 움직인다")
+        dirty = sum(r.width() * r.height() for _, r, _ in bd._scene())
+        self.assertLess(dirty, 1000 * 700 * 0.25, "다시 그리는 곳은 스프라이트 자리뿐(배경 전체 아님)")
+        bd.set_running(False)
+        self.assertFalse(bd._timer.isActive())
+        self.assertTrue(bd._areas.isEmpty())
+        bd.set_running(True)
+        self.app.setProperty("reduceMotion", True)
+        bd._tick(101.0)
+        self.assertFalse(bd._show, "동작 줄이기 = 스프라이트 없음")
+        self.assertEqual(bd._timer.interval(), 500)
+
+    def test_stage_haze_pulses_on_beats(self):
+        from PyQt6.QtGui import QImage
+        screen = MainScreen()
+        screen.set_timeline(build_dummy_timeline())
+        screen.resize(1200, 800)
+        screen.show()
+        stage = screen.stage
+        self.assertTrue(stage._haze_timer.isActive(), "멈춤 중에도 아지랑이는 숨 쉰다")
+        self.assertEqual(stage._pulse(), 0.0)
+        stage.beat = (8.0, 4)
+        down = stage._pulse()
+        stage.beat = (9.0, 4)
+        self.assertGreater(down, stage._pulse(), "마디 첫 박이 더 세게")
+        stage.beat = (9.6, 4)
+        self.assertLess(stage._pulse(), 0.05, "박 사이엔 잦아듦")
+        curtain = getattr(stage, "_curtain", None)    # 진입 커튼(불투명)이 덮고 있으면 무대는 안 그려짐 — 끝내고 확인
+        if curtain is not None:
+            curtain.anim.setCurrentTime(curtain.anim.totalDuration())
+        img = QImage(stage.size(), QImage.Format.Format_ARGB32_Premultiplied)
+        stage.render(img)
+        self.assertIsNotNone(stage._haze)
+        screen.hide()
+        self.assertFalse(stage._haze_timer.isActive())
 
     def test_player_uses_width_and_keeps_controls_visible(self):
         screen = MainScreen()

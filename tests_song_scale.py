@@ -51,14 +51,15 @@ class SongScaleTest(unittest.TestCase):
         self.assertEqual([s.chord.name for s in tl.segments[:4]], ["Am", "F", "C", "G"])
         self.assertEqual([generate._landing_pc(s, "seventh") for s in tl.segments[:4]], [7, 4, 11, 5])
 
-    def test_fit_recommends_by_chord_tones_and_disables_clashing_scale(self):
-        from gui.setup_screen import scale_fit, recommend, landing_blocker
+    def test_recommends_fewest_clashes_and_disables_clashing_scale(self):
+        from gui.setup_screen import scale_clash, recommend, landing_blocker
         tl = am_f_c_g()
         options = song_scale_options(9, "minor")
-        self.assertAlmostEqual(scale_fit(tl, options[0]), 10 / 12)
-        self.assertEqual(scale_fit(tl, options[1]), 1.0)
-        self.assertEqual(recommend(tl, options), 1)                      # 7음
-        self.assertEqual(recommend(am_f_c_g(("Am", "C", "Am", "C")), options), 0)   # 펜타
+        # 어보이드(코드톤 반음 위): Am→F · F→없음 · C→F · G→C. 펜타(F 없음)는 G의 C만, 7음은 F·F·C
+        self.assertEqual(scale_clash(tl, options[0]), 2)
+        self.assertEqual(scale_clash(tl, options[1]), 6)
+        self.assertEqual(recommend(tl, options), 0)                      # 펜타(부딪힘 최소)
+        self.assertEqual(recommend(tl, options[1:]), 1)                  # 7음 vs 블루스: 블루스(펜타+♭5)가 덜 부딪힘
         clash = {"kind": "테스트", "root": 1, "name": "C# 테스트", "note_set": [1, 3, 6, 8, 10]}
         self.assertIn("Am", landing_blocker(tl, clash, "chord_tone"))
         self.assertEqual(recommend(tl, [clash, options[1]]), 1)
