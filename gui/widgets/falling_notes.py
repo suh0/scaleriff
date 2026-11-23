@@ -150,5 +150,5 @@ class FallingNotes(QWidget):
             speed = self.height() / self._lead
             length = duration * speed
             bottom = self.height() - remaining * speed
-            nodes.append((self._x(midi), bottom - length, self._w(midi, kw), length, color))
+            nodes.append((self._x(midi), bottom - length, self._w(midi, kw), length, color, self.in_call(when)))
         return nodes

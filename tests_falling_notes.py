@@ -28,6 +28,11 @@ def main():
     before = screen.riff._nodes()
     assert len(before) == 2
     assert abs(before[1][3] - before[0][3] * 2) < 1e-6, "1박 막대는 반 박 막대의 두 배 길이"
+    assert not any(n[5] for n in before), "프로그램 차례 아님 = 내 차례 노드"
+    screen.riff._calls = [(0.0, 99.0)]                # 프로그램 차례 마디 → 노드에 표시, 어둡게 그려짐
+    assert all(n[5] for n in screen.riff._nodes())
+    screen.stage.render(_QImage(screen.stage.size(), _QImage.Format.Format_ARGB32_Premultiplied))
+    screen.riff._calls = []
     screen._on_seek(0.6)
     after = screen.riff._nodes()
     assert all(b[1] > a[1] for a, b in zip(before, after)), "박자 진행에 따라 아래로 낙하"
@@ -39,7 +44,7 @@ def main():
     node = screen.riff._nodes()[0]
     assert abs(node[1] + node[3] - screen.riff.height()) < 1e-6, "해당 박자에 막대 아래 끝 도착"
     stage = screen.stage
-    for x, _, _, _, _ in screen.riff._nodes():
+    for x, *_ in screen.riff._nodes():
         lane_end = stage._xf.map(QPointF(x, screen.riff.height()))
         key_top = stage._kxf.map(QPointF(x, stage._lane_h))
         assert (lane_end - key_top).manhattanLength() <= 1.5, "원근 레인 끝이 건반 윗선과 이어짐"
@@ -174,6 +179,10 @@ def main():
         ptr.setsize(img.sizeInBytes())
         return np.frombuffer(ptr, np.uint8).reshape(img.height(), img.bytesPerLine()).astype(np.int16)
 
+    curtain = getattr(stage, "_curtain", None)       # 진입 커튼(연출)이 무대를 덮고 있으면 끝내고 치움
+    if curtain is not None:
+        curtain.anim.setCurrentTime(curtain.anim.totalDuration())
+        curtain.hide()
     stage._draw_sparkles = lambda p, t: None        # 시각 따라 깜빡이는 반짝이 제외
     screen._render_at(1.0)
     base = snap()

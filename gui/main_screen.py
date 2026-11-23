@@ -24,7 +24,7 @@ from ml.model import load_model
 from ml.generate import _landing_pc, riff_blocks
 
 from gui import theme as T
-from gui.anim import reduced_motion, set_reduced_motion
+from gui.anim import open_curtain, reduced_motion, set_reduced_motion
 from gui.widgets.elided_label import ElidedLabel
 from gui.widgets.piano import MIDI_HIGH, MIDI_LOW, PianoWidget
 from gui.widgets.scrub_bar import ScrubBar
@@ -57,7 +57,6 @@ class MainScreen(QWidget):
     midiPortRequested = pyqtSignal(str)
     beatEditRequested = pyqtSignal()   # 설정 창 '박자 조정'(창을 닫은 뒤)
     chordEditRequested = pyqtSignal()  # 설정 창 '코드 수정'(창을 닫은 뒤)
-    guideFinished = pyqtSignal()       # 첫 진입 가이드를 끝까지 넘기거나 건너뜀
     syncChanged = pyqtSignal(int)      # 싱크 보정(ms) 변경 — 저장은 앱이
 
     def __init__(self, parent=None):
@@ -72,7 +71,7 @@ class MainScreen(QWidget):
         self._riff_events: list[tuple[float, int, bool]] = []   # (절대초, midi, 프로그램 차례)
         self._riff_times: list[float] = []
         self._riff_durations: list[float] = []
-        self._riff_idx = 0                 # 리프듣기 재생 커서
+        self._riff_idx = 0                 # 프로그램 차례 리프음 재생 커서
         self._landing_spans: list[tuple[float, float, str]] = []   # 착지음 리프 블록(시작, 끝, 목표) — 리프모드 목표음 강조
         self._held_keys = set()
         self._input_volume = .8
@@ -139,7 +138,7 @@ class MainScreen(QWidget):
         root.addWidget(hdr_wrap, 0, 0, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter)
 
         # ── 오른쪽 벽: [⚙] + 리프모드 ──
-        right = self.right_wall = QWidget()
+        right = QWidget()
         rv = QVBoxLayout(right)
         rv.setContentsMargins(0, 24, T.PAD_H + 8, 0)
         rv.setSpacing(8)
@@ -157,11 +156,6 @@ class MainScreen(QWidget):
         self.riff_btn.setStyleSheet(T.qss_ghost_btn())
         self.riff_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         rv.addWidget(self.riff_btn, 0, Qt.AlignmentFlag.AlignRight)
-        self.riff_listen = QCheckBox("리프듣기")    # 리프모드 중에만 보임 — 내 차례(낙하) 리프 음도 소리로
-        self.riff_listen.setStyleSheet(f"QCheckBox{{color:{T.TEXT_BODY};font-size:13px;}}")
-        self.riff_listen.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.riff_listen.hide()
-        rv.addWidget(self.riff_listen, 0, Qt.AlignmentFlag.AlignRight)
         root.addWidget(right, 0, 0, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignRight)
 
         # ── 가운데 재생 아이콘: 멈춤일 때만 반투명하게 ──
@@ -202,7 +196,9 @@ class MainScreen(QWidget):
 
     def showEvent(self, e):
         super().showEvent(e)
-        # 연주 가이드와 건반은 즉시 표시한다.
+        # 연주 가이드와 건반은 즉시 표시한다. 무대엔 커튼이 열리는 연출(창 복원 같은 자발적 표시는 제외).
+        if not e.spontaneous():
+            open_curtain(self.stage)
 
     # ── HUD ─────────────────────────────────────────────────────
     @staticmethod
@@ -263,24 +259,48 @@ class MainScreen(QWidget):
 
         steps = [
             ("연주 화면에 오신 걸 환영해요",
-             "곡에 맞춰 즉흥으로 연주하는 화면이에요.<br>건반의 <b>숫자</b>와 <b>색</b>만 알면 바로 칠 수 있어요.", None),
+             "노래에 맞춰 건반으로 즉흥 연주하는 화면이에요.<br>"
+             "피아노를 몰라도 괜찮아요. 건반의 <b>숫자</b>와 <b>색</b>만 보면 바로 칠 수 있어요.", None),
+            ("건반 치는 법",
+             "왼쪽으로 갈수록 낮은 음, 오른쪽으로 갈수록 높은 음이에요.<br>"
+             "화면 건반을 <b>마우스로 클릭</b>하거나, <b>MIDI 키보드</b>를 연결해 쳐요.<br>"
+             "흰 건반과 검은 건반 모두 똑같이 한 음씩이에요.", keys),
             ("건반 위 숫자 = 스케일 번호",
              f"이 곡은 <b>{scale}</b>로 연습해요. <b>1번 = {pc_name(tonic)}</b>이고, "
              "곡이 끝날 때까지 번호는 바뀌지 않아요.<br>숫자가 있는 건반만 쳐도 곡과 어울려요.", keys),
             ("색으로 보는 음의 역할",
-             "연한 파랑 = 스케일 음<br>파랑 = 지금 코드를 이루는 음(코드톤)<br>"
-             "<b>진한 파랑·반짝임·파란 원 숫자 = 지금 코드의 근음</b>", keys),
+             "<b>파랑·반짝임 = 지금 코드의 근음</b>(가장 안정적인 음)<br>"
+             "초록 = 지금 코드를 이루는 음(코드톤)<br>회색 = 스케일 음<br>"
+             "<b>투명하게 테두리만 보이는 건반</b>(숫자 없음) = 스케일 밖 음이에요. 이 곡과 덜 어울려서 "
+             "누르면 빨갛게 표시되지만 틀린 건 아니에요. 근음은 스케일 밖이어도 파랑으로 보여요.", keys),
             ("지금 코드와 근음 번호",
-             f"가운데 큰 글자가 지금 코드, 위 작은 글자가 다음 코드예요.<br>"
+             "코드는 반주가 지금 울리는 화음이에요. 가운데 큰 글자가 지금 코드, 위 작은 글자가 다음 코드예요.<br>"
              f"<b>'근음 {root_no}번'</b>은 지금 코드의 근음이 스케일 몇 번인지 알려줘요. "
-             "코드가 바뀌면 근음 건반도 따라 옮겨가요.", at(self.chord_hdr)),
-            ("숫자 없는 건반",
-             "스케일 밖 음이에요. 누르면 빨갛게 표시되지만 틀린 건 아니에요.<br>"
-             "처음엔 숫자 있는 건반 위주로 치고, <b>근음에서 시작하거나 끝내</b> 보세요.", keys),
-            ("재생과 도구",
-             "가운데 ▶ 또는 <b>스페이스</b>로 재생·정지해요.<br>"
-             "오른쪽 위 — 리프모드: 따라 칠 예시 리프 · 톱니 버튼: 박자·코드 조정, MIDI 입력과 소리",
-             lambda: at(self.right_wall)() + at(self.play_btn)()),
+             "코드가 바뀌면 파란 근음 건반도 따라 옮겨가요.", at(self.chord_hdr)),
+            ("곡 정보",
+             "KEY = 곡의 조, BPM = 빠르기(분당 박 수), TIME = 지금 위치 / 전체 길이예요.<br>"
+             "<b>←</b> 버튼은 학습 설정으로 돌아가 스케일을 다시 골라요.", at(self.back_btn.parentWidget())),
+            ("재생하기",
+             "가운데 <b>▶</b> 또는 <b>스페이스</b>로 재생·정지해요. 곡 앞에 박을 세는 예비박이 있어요.<br>"
+             "아래 재생바를 클릭·드래그하면 원하는 위치로 이동해요.",
+             lambda: at(self.play_btn)() + at(self.scrub_row)()),
+            ("리프모드 — 따라 치기",
+             "누르면 리프(짧은 멜로디) 만들기 창이 열려요. <b>듣기</b>·<b>다시 만들기</b>로 고르고 "
+             "<b>확정</b>하면 시작해요. '3도/7도 착지 섞기'를 켜면 코드의 3도·7도 음으로 끝나는 리프도 섞여요.<br>"
+             "프로그램이 한 마디 치면(어둡고 흐린 블록, 소리로 들려줘요) 다음 마디에 "
+             "<b>내가 같은 리프로 따라 쳐요</b>(선명한 색 블록). "
+             "블록이 건반에 닿을 때 누르면 PERFECT·EARLY·LATE가 떠요.<br>"
+             "'리프모드 해제'로 자유연습에 돌아와요.",
+             at(self.riff_btn)),
+            ("설정 ⚙",
+             "<b>박자 조정</b> — 박이 음악과 어긋나 보일 때<br><b>코드 수정</b> — 표시된 코드가 틀렸을 때<br>"
+             "고치고 확정하면 학습 설정으로 돌아와요.<br>"
+             "그 밖에 MIDI 키보드 연결, 원곡·내 연주 음량, 화면과 소리가 어긋날 때 맞추는 "
+             "<b>싱크 보정</b>('박자에 탭')이 있어요.", at(self.settings_btn)),
+            ("이렇게 시작해 보세요",
+             "① ▶를 누르고 <b>파란 근음 건반</b>만 박자에 맞춰 눌러 보세요.<br>"
+             "② 익숙해지면 <b>숫자 있는 건반</b>으로 넓혀 짧게 쳐 보세요.<br>"
+             "③ 더 연습하고 싶으면 <b>리프모드</b>로 따라 쳐 보세요.", None),
         ]
         self.guide = PlayGuide(self, steps)
         self.guide.finished.connect(self._end_guide)
@@ -288,14 +308,13 @@ class MainScreen(QWidget):
     def _end_guide(self):
         self.guide = None
         self._seek_to(self.tl.count_in_start())                  # 지금의 연주화면 첫 상태로
-        self.guideFinished.emit()
 
     # ── 리프를 재생에 함께 굽기(재생 헤드 동기) ──────────────────
     def _build_riff_events(self):
         """모든 구간의 리프 음을 (절대초, midi, 프로그램 차례)로 펼쳐 정렬. 곡 타임라인에 '구워' 둔다.
 
         프로그램 차례(call) 음은 재생 중 항상 소리 내고 낙하하되 판정은 안 하며, 그 마디 레일은 흐리게.
-        리프듣기를 켜면 내 차례 음도 소리 낸다. 착지음 리프 블록은 목표음 강조 구간으로 기록.
+        내 차례 음은 소리 없이 낙하만(내가 친 음만 들림). 착지음 리프 블록은 목표음 강조 구간으로 기록.
         """
         ev: list[tuple[float, int, bool]] = []
         durations = {}
@@ -373,7 +392,6 @@ class MainScreen(QWidget):
         self._mode = "practice" if mode == "riff" else "guide"
         practice = (self._mode == "practice")
         self.riff_btn.setText("리프모드 해제" if practice else "리프모드")
-        self.riff_listen.setVisible(practice)
         self.riff.show_notes = practice
         if practice:
             self._build_riff_events()
@@ -388,6 +406,7 @@ class MainScreen(QWidget):
             self.pause()
             self._select_practice("free")
             self._seek_to(self.tl.count_in_start())
+            open_curtain(self.stage)          # 처음부터 다시 = 커튼 다시 열림
         else:
             self._open_riff_dialog()
 
@@ -399,6 +418,7 @@ class MainScreen(QWidget):
         if dialog.exec() == QDialog.DialogCode.Accepted:
             self._select_practice("riff")
             self._seek_to(self.tl.count_in_start())
+            open_curtain(self.stage)
 
     # ── 재생 제어 ────────────────────────────────────────────────
     def _toggle_play(self):
@@ -436,12 +456,11 @@ class MainScreen(QWidget):
         self._render_at(sec)   # 구간 변경 시 무거운 갱신
         if self._seeking:
             return
-        # 리프 커서는 항상 따라가고, 프로그램 차례 음은 항상·내 차례 음은 리프듣기일 때만 소리(몰아 재생 없음)
+        # 리프 커서는 항상 따라가고, 프로그램 차례 음만 소리(내 차례는 내가 친 음만 들림, 몰아 재생 없음)
         playing = (self._mode == "practice" and self.playhead is not None and self.playhead.is_playing())
-        listen = self.riff_listen.isChecked()
         while self._riff_idx < len(self._riff_times) and self._riff_times[self._riff_idx] <= sec:
             _, midi, call = self._riff_events[self._riff_idx]
-            if playing and (call or listen):
+            if playing and call:
                 self.note_player.play_note(midi, self._riff_durations[self._riff_idx], 80)
             self._riff_idx += 1
 

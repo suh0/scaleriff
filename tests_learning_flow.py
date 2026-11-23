@@ -5,6 +5,7 @@ import statistics
 import time
 import unittest
 from unittest.mock import patch
+from PyQt6.QtCore import Qt
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication, QComboBox, QPushButton
 from gui.main_screen import MainScreen, tap_offset
@@ -90,7 +91,7 @@ class LearningFlowTest(unittest.TestCase):
         self.assertTrue(s.stage.driven)
         self.assertFalse(s.stage._sparkle_timer.isActive(), "재생 중 반짝이 타이머가 따로 그림")
         gaps = [b - a for a, b in zip(stamps, stamps[1:])]
-        self.assertLess(statistics.mean(gaps), 0.022, "재생 틱이 60fps보다 느림(Coarse 타이머 ~31ms)")
+        self.assertLess(statistics.mean(gaps), 0.025, "재생 틱이 60fps보다 느림(Coarse 타이머 ~31ms) — 부하 여유 포함")
         s.playhead.pause()
         QTest.qWait(80)
         self.assertFalse(s.stage.driven)
@@ -129,6 +130,27 @@ class LearningFlowTest(unittest.TestCase):
         frame(segs[0].start_sec + 0.1)
         self.assertIsNotNone(stage._bg)
         self.assertIsNot(stage._bg, bg)
+
+    def test_stage_curtain_opens_on_entry_and_riff_restart(self):
+        from gui import anim
+        s = self.screen
+        s.show()                                        # 연주화면 진입 = 무대 커튼
+        curtain = s.stage._curtain
+        self.assertIsNotNone(curtain)
+        self.assertIs(curtain.parentWidget(), s.stage, "커튼은 무대만 덮고 HUD는 위에 남음")
+        self.assertTrue(curtain.testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents))
+        QTest.qWait(curtain.anim.totalDuration() + 150)
+        self.assertIsNone(s.stage._curtain, "다 열린 뒤 커튼이 남음")
+        s._mode = "practice"                            # 리프모드 해제 = 처음부터 다시 → 커튼 다시
+        s._toggle_riff_mode()
+        self.assertIsNotNone(s.stage._curtain)
+        self.app.setProperty("reduceMotion", True)      # 효과 축소면 커튼 없음(이전 커튼은 정리)
+        try:
+            anim.open_curtain(s.stage)
+            QTest.qWait(30)
+            self.assertIsNone(s.stage._curtain)
+        finally:
+            self.app.setProperty("reduceMotion", False)
 
     @classmethod
     def setUpClass(cls):

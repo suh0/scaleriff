@@ -33,7 +33,7 @@ DIP = 0.42         # 눌림 깊이(흰 건반 앞면 두께 대비, 실측 10mm)
 RAIL = 0.022       # 도로 양옆 레일 폭(평면 폭 비율)
 BEAM = 0.45        # 빛기둥 길이(레인 길이 비율)
 CHORD_LINE = QColor(255, 255, 255, 90)   # 코드 전환선(박자선보다 밝게)
-CALL_DIM = QColor(0, 0, 0, 70)            # 리프 주고받기 중 프로그램 차례 마디 — 레인을 살짝 흐리게
+CALL_DIM = QColor(0, 0, 0, 120)           # 리프 주고받기 중 프로그램 차례 마디 — 레인을 어둡게
 SPLASH_LIFE = 0.45                       # 타격 스플래시·판정 문구 수명(초)
 
 # 근음 파랑·코드톤 초록·스케일음 회색(앞면·노드·눌림 공통, 리프 노드 배지 색과 같음)
@@ -41,7 +41,9 @@ TONE_ROOT = T.BADGE_ROOT
 TONE_CHORD = T.BADGE_CHORD
 TONE_SCALE = T.BADGE_SCALE
 BAND_ALPHA = {TONE_ROOT: 55, TONE_CHORD: 40, TONE_SCALE: 18}   # 자유연습 레일 색 띠(윗면) — 리프 노드보다 투명
-NODE_ALPHA = 225        # 리프 노드 직육면체 윗면 불투명도(앞·옆면은 더 진하게)
+NODE_ALPHA = 255        # 내 차례 리프 노드 = 불투명·선명
+CALL_ALPHA = 110        # 프로그램 차례 리프 노드 윗면 불투명도(앞·옆면은 조금 더 진하게) — 칠 필요 없음
+CALL_DARK = 180        # 프로그램 차례 노드 색 어둡게(QColor.darker 비율)
 OUT_EDGE = "#8a94a3"    # 자유연습 스케일 밖 건반 = 투명, 이 색 테두리만
 ROOT_GLOW = 0.8        # 근음 발광(글로우) 세기 0~1
 SPARKLE_COUNT = 4       # 근음 건반·노드마다 반짝이 개수
@@ -521,8 +523,12 @@ class Stage(QWidget):
         kw, rise, k = piano._geometry()[3], self._lip() * BLACK_RISE, self._unit(self._lane_h)
         blocks = []
         sources = [(b, BAND_ALPHA[b[4]], False) for b in self.riff.chord_bands()]
-        for node in self.riff._nodes():
+        for *node, call in self.riff._nodes():
             x, y, _, length, color = node
+            if call:                                    # 프로그램 차례 = 어둡고 투명하게, 발광 없음(칠 필요 없음)
+                node[4] = QColor(color).darker(CALL_DARK).name()
+                sources.append((node, CALL_ALPHA, False))
+                continue
             if y + length >= self._lane_h - 1:          # 판정선 도착 = 그 건반 발광
                 midi = piano._midi_at(x, 1)
                 if midi is not None:

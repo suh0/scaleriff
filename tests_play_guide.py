@@ -1,4 +1,4 @@
-"""자유연습 번호 표시(곡 스케일 주음 고정 + 코드 근음 강조)와 첫 진입 화면 가이드."""
+"""자유연습 번호 표시(곡 스케일 주음 고정 + 코드 근음 강조)와 진입마다 뜨는 화면 가이드."""
 import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import tempfile
@@ -64,20 +64,17 @@ class PlayGuideTest(unittest.TestCase):
         s, tl = self.screen, pentatonic_timeline()
         s.set_timeline(tl)
         s.show()
-        done = []
-        s.guideFinished.connect(lambda: done.append(1))
         s.show_guide()
         guide = s.guide
         self.assertIsNotNone(guide)
         self.assertNotEqual(s.piano._chord_root, 0, "설명 자리 근음이 1번과 같은 건반")
         steps = len(guide._steps)
-        self.assertGreaterEqual(steps, 5)
+        self.assertGreaterEqual(steps, 10)
         for i in range(steps):
             self.assertTrue(guide.isVisible())
             self.assertEqual(guide.count_lbl.text(), f"{i + 1} / {steps}")
             self.assertTrue(all(guide.rect().contains(r.center()) for r in guide._holes()), i)
             QTest.keyClick(guide, Qt.Key.Key_Return)
-        self.assertEqual(done, [1])
         self.assertIsNone(s.guide)
         self.assertAlmostEqual(s.playhead.position_sec(), tl.count_in_start())
         self.assertFalse(s.playhead.is_playing())
@@ -94,7 +91,7 @@ class PlayGuideTest(unittest.TestCase):
         self.assertIsNone(s.guide)
         self.assertAlmostEqual(s.playhead.position_sec(), tl.count_in_start())
 
-    def test_app_shows_guide_only_on_first_entry(self):
+    def test_app_shows_guide_on_every_entry(self):
         from gui.app import AppWindow
         with tempfile.TemporaryDirectory() as directory, \
                 patch.object(AppWindow, "_try_start_midi"), \
@@ -106,9 +103,9 @@ class PlayGuideTest(unittest.TestCase):
             win._enter_main()
             self.assertIsNotNone(win.main_screen.guide, "첫 진입에 가이드 없음")
             win.main_screen.guide.finish()
-            self.assertTrue(win._settings.value("seen_play_guide", False, type=bool))
+            self.assertIsNone(win.main_screen.guide)
             win._enter_main()
-            self.assertIsNone(win.main_screen.guide, "두 번째 진입에도 가이드가 뜸")
+            self.assertIsNotNone(win.main_screen.guide, "두 번째 진입에 가이드 없음")
             win.close()
 
 
