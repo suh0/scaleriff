@@ -10,8 +10,7 @@ import hashlib
 import os
 
 from PyQt6.QtWidgets import (
-    QMainWindow, QFrame, QHBoxLayout, QVBoxLayout, QLabel, QPushButton, QFileDialog, QApplication,
-    QStackedWidget
+    QMainWindow, QFrame, QHBoxLayout, QVBoxLayout, QLabel, QPushButton, QFileDialog, QApplication
 )
 from PyQt6.QtGui import QFont, QCursor
 from PyQt6.QtCore import QSettings, QTimer, pyqtSignal
@@ -23,6 +22,7 @@ _CACHE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file
                           "cache")
 
 from gui import theme as T
+from gui.anim import CurtainStack
 from gui.link_screen import LinkScreen
 from gui.analyzing_screen import AnalyzingScreen
 from gui.beat_screen import BeatScreen
@@ -128,7 +128,7 @@ class AppWindow(QMainWindow):
         QApplication.instance().setProperty("reduceMotion", self._settings.value("reduce_motion", False, type=bool))
         seen_onboarding = self._settings.value("seen_onboarding", False, type=bool)
 
-        self.stack = QStackedWidget()        # 화면 전환 = 새 화면이 제 showEvent에서 커튼을 연다
+        self.stack = CurtainStack()          # 화면 전환 = 떠난 화면 위로 커튼이 닫히고, 새 화면이 제 showEvent에서 연다
         backdrop = T.Backdrop()              # 전 화면 공통 배경(화면들은 투명)
         QVBoxLayout(backdrop).addWidget(self.stack)
         backdrop.layout().setContentsMargins(0, 0, 0, 0)

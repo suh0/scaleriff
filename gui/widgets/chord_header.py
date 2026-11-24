@@ -18,6 +18,7 @@ class ChordHeader(QWidget):
         self._chords = ("", "", "", 0.0, 1.0)
         self._detour: set[str] = set()   # 키 밖 코드 이름 — 옅은 주황으로
         self._paths = {}                 # (글자, 굵게, 자간) → BASE 크기 외곽선(가운데 정렬)
+        self.mirror = None               # GL 무대가 대신 그릴 때 바뀜 알림() — 이 위젯 자체는 투명(HUD 창 갱신 없음)
 
     def set_detour(self, names):
         self._detour = set(names)
@@ -26,12 +27,24 @@ class ChordHeader(QWidget):
     def set_chords(self, cur, nxt, prev, grow, push):
         """cur=현재 코드, nxt=다음 코드, prev=방금 밀려나는 코드.
         grow 0→1: 다음 코드가 커짐 · push 0→1: 바뀐 직후 새 코드가 내려오며 prev를 밀어냄."""
-        self._chords = (cur, nxt, prev, grow, push)
-        self.update()
+        chords = (cur, nxt, prev, grow, push)
+        if chords != self._chords:          # 바뀔 때만(재생 틱마다 같은 값이면 HUD 창을 다시 그리지 않음)
+            self._chords = chords
+            self.update()
+
+    def update(self, *args):
+        if self.mirror is not None:      # GL 무대가 그림 → HUD 창(레이어드 창)을 다시 그리지 않는다
+            self.mirror()
+        else:
+            super().update(*args)
 
     def paintEvent(self, event):
+        if self.mirror is None:
+            self.paint(QPainter(self))
+
+    def paint(self, p):
+        """코드 표시를 p(위젯 크기 좌표)에 — 위젯 paintEvent와 GL 무대(그림으로 떠서 붙임)가 같이 쓴다."""
         cur, nxt, prev, grow, push = self._chords
-        p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         h, w = self.height(), self.width()
         big = h * 0.42

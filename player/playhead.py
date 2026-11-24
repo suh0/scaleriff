@@ -22,8 +22,9 @@ except Exception:  # QtMultimedia 미설치 환경 폴백
 
 TICK_MS = 16  # 위치 갱신 = 화면 프레임 주기(~60fps). 기본 Coarse 타이머는 Windows에서 ~31ms로 뭉개져 Precise로
 # ponytail: 모니터 vsync와 맞물리진 않음(가끔 한 프레임 겹침/건너뜀) — 필요하면 QOpenGLWidget frameSwapped로 구동
-SNAP_SEC = 0.15  # 음원 보고와 이만큼 어긋나면 바로 맞춤(재생 시작 지연·버퍼링)
-PULL = 0.2       # 작은 어긋남은 보고마다 이 비율만 당김 — 보고 시각 흔들림(±수십 ms)이 화면에 안 보이게
+SNAP_SEC = 0.3   # 음원 보고와 이만큼 어긋날 때만 바로 맞춤(버퍼링 사고) — 보고는 ~0.1초 계단이라 그 안은 무시
+SNAP_REPORTS = 3 # 그 어긋남이 보고 이만큼 이어질 때만(시킹 직후 한 번 오는 옛 위치 보고는 무시)
+WARM_MS = 400    # 로딩 직후 무음으로 미리 재생해 오디오 장치를 여는 시간(첫 재생 지연을 진입 때 치름)
 
 
 class Playhead(QObject):
@@ -53,6 +54,8 @@ class Playhead(QObject):
         self._virt_base = 0.0          # 마지막 재생·시킹·보정 시점의 위치
         self._elapsed = QElapsedTimer()
         self._preroll = False         # 음수 시각은 가상 클럭, 원본 오디오는 0초부터
+        self._warming = False         # 무음 예열 재생 중
+        self._off = 0                 # 음원 보고가 SNAP_SEC 넘게 어긋난 연속 횟수
 
         if self._use_audio and _HAS_MULTIMEDIA:
             self._player = QMediaPlayer(self)
@@ -90,8 +93,8 @@ class Playhead(QObject):
         return self._virt_base
 
     def _ticking(self) -> bool:
-        """시계가 흐르는 중 — 실제 음원 구간은 로딩이 끝나 재생을 건 뒤부터."""
-        return self._playing and (self._preroll or not self._use_audio or self._media_ready)
+        """시계가 흐르는 중 — 실제 음원 구간은 로딩·장치 예열이 끝나 재생을 건 뒤부터(그 전엔 멈춘 채 = 로딩)."""
+        return self._playing and (self._preroll or not self._use_audio or self._media_ready and not self._warming)
 
     # ── 제어 ─────────────────────────────────────────────────────
     def set_volume(self, volume: float):
@@ -106,8 +109,8 @@ class Playhead(QObject):
             return
         self._playing = True
         self._elapsed.restart()
-        if self._use_audio and not self._preroll and self._media_ready:
-            self._player.play()
+        if self._use_audio and not self._preroll and self._media_ready and not self._warming:
+            self._player.play()                       # 예열 중이면 예열이 끝날 때 출발(_end_warm)
         self._tick.start()
         self.stateChanged.emit(True)
 
@@ -116,7 +119,7 @@ class Playhead(QObject):
             return
         self._virt_base = self.position_sec()
         self._playing = False
-        if self._use_audio and not self._preroll:
+        if self._use_audio and not self._preroll and not self._warming:
             self._player.pause()
         self._tick.stop()
         self.stateChanged.emit(False)
@@ -131,7 +134,9 @@ class Playhead(QObject):
         self._preroll = sec < 0
         self._virt_base = sec
         self._elapsed.restart()        # setPosition이 바로 내는 음원 보고보다 먼저 기준점을 옮긴다
-        if self._use_audio and not self._preroll:
+        if self._warming:
+            pass                       # 예열이 끝날 때 이 위치로 맞춘다
+        elif self._use_audio and not self._preroll:
             if not self._media_ready or self._pending_seek is not None:
                 self._pending_seek = sec
             elif self._player is not None:
@@ -171,11 +176,14 @@ class Playhead(QObject):
                       QMediaPlayer.MediaStatus.BufferedMedia):
             if not self._media_ready and not self._preroll:
                 self._elapsed.restart()   # 로딩 동안 멈춰 있던 시계는 지금부터 흐른다
+            warm = not self._media_ready
             self._media_ready = True
             if self._pending_seek is not None:
                 position = self._pending_seek
                 self._pending_seek = None
                 self._player.setPosition(round(position * 1000))
+            if warm:
+                self._warm_up()
             if (status == QMediaPlayer.MediaStatus.LoadedMedia and self._playing
                     and not self._preroll
                     and self._player.playbackState() != QMediaPlayer.PlaybackState.PlayingState):
@@ -183,18 +191,38 @@ class Playhead(QObject):
         elif status == QMediaPlayer.MediaStatus.EndOfMedia:
             self.pause()
 
-    def _on_audio_position(self, ms: int):
-        """음원 보고로 시계 오차만 보정 — 작으면 조금씩 당기고, 크면(시작 지연·버퍼링) 바로 맞춘다.
+    def _warm_up(self):
+        """오디오 장치를 무음 재생으로 미리 연다 — 첫 재생의 장치 오픈 지연(~0.4초)을 화면 진입(로딩) 때 치른다."""
+        self._warming = True
+        self._audio_out.setMuted(True)
+        self._player.play()
+        QTimer.singleShot(WARM_MS, self._end_warm)
 
-        ponytail: 첫 재생의 장치 오픈 지연(예열 없을 때 ~0.4초)은 한 번 뒤로 맞춰짐 — 앱은 note_synth 예열로
-        ~0.06초. 음원이 실제 스피커에 나오기까지의 출력 지연은 여기서 모름 → 사용자 보정값으로.
+    def _end_warm(self):
+        """예열 끝 — 지금 위치로 맞추고, 그새 재생을 눌렀으면 이제 출발(시계와 음원이 같이)."""
+        self._warming = False
+        start = self._playing and not self._preroll
+        if start:
+            self._elapsed.restart()    # 지금부터 흐름(이동이 바로 내는 음원 보고보다 먼저)
+        else:                          # 멈춤 → 일시정지 후 위치만(일시정지·이동·재생을 잇달아 하면 이동이 무시됨)
+            self._player.pause()
+        self._player.setPosition(round(max(0.0, self._virt_base) * 1000))   # 흐르는 채로 이동(장치는 열린 그대로)
+        self._audio_out.setMuted(False)
+
+    def _on_audio_position(self, ms: int):
+        """화면 시계는 늘 1배속(보정으로 빨라지거나 느려지면 레일·노드 흐름이 출렁인다). 시작 지연은 장치 예열로
+        없애고, 음원 보고와 SNAP_SEC 넘게 어긋날 때(버퍼링 사고)만 바로 맞춘다.
+        ponytail: 남는 오차 = 예열된 장치의 시작 지연(실측 ~20~80ms)·시계 드리프트(수십 ppm) — 사용자 싱크 보정값으로.
         """
         if self._preroll or not self._ticking():
             return
         now = self.position_sec()
         err = ms / 1000.0 - now
-        self._virt_base = now + (err if abs(err) > SNAP_SEC else err * PULL)
-        self._elapsed.restart()
+        self._off = self._off + 1 if abs(err) > SNAP_SEC else 0
+        if self._off >= SNAP_REPORTS:
+            self._off = 0
+            self._virt_base = now + err
+            self._elapsed.restart()
 
     def _on_media_error(self, error, message=""):
         if error == QMediaPlayer.Error.NoError:

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import bisect
 import statistics
+from pathlib import Path
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QPushButton,
@@ -19,7 +20,7 @@ from PyQt6.QtGui import QKeySequence, QShortcut
 from player.timeline import Timeline
 from player.playhead import Playhead
 from player.note_synth import shared_player
-from analyze.theory import degree_number, pc_name
+from analyze.theory import degree_number
 from ml.model import load_model
 from ml.generate import _landing_pc, riff_blocks
 
@@ -33,8 +34,10 @@ from gui.widgets.chord_header import ChordHeader
 from gui.widgets.stage import Stage
 from gui.riff_dialog import RiffDialog, block_goal, landing_goals
 from gui.widgets.play_guide import PlayGuide
+from gui.widgets import gl_stage
 
 TAP_COUNT = 8   # 싱크 보정 탭 횟수
+ASSETS = Path(__file__).resolve().parents[1] / "assets"   # 가이드 이미지(tools/guide_shots.py로 생성)
 
 
 def tap_offset(taps, beats):
@@ -44,6 +47,12 @@ def tap_offset(taps, beats):
         i = bisect.bisect_left(beats, t)
         devs.append(t - min(beats[max(0, i - 1):i + 1], key=lambda b: abs(b - t)))
     return statistics.median(devs)
+
+
+def _in_scale(seg):
+    """건반에 강조할 (코드톤, 근음) — 고른 스케일 안의 음만(밖이면 근음 None)."""
+    ns, root = set(seg.note_set), seg.chord.root % 12
+    return [pc for pc in seg.chord_tones() if pc in ns], (root if root in ns else None)
 
 
 def _fmt_sec(sec: float) -> str:
@@ -95,6 +104,12 @@ class MainScreen(QWidget):
         self.riff = FallingNotes(self.piano)
         self.stage = Stage(self.piano, self.riff)
         root.addWidget(self.stage, 0, 0)
+        # 실제 화면이면 무대는 GL 창이 그리고(60fps), HUD는 그 위 투명 도구 창으로(첫 표시 때 _enter_hud)
+        self.gl_stage = gl_stage.GLStage(self.stage) if gl_stage.available() else None
+        if self.gl_stage is not None:
+            self.gl_stage.frameSwapped.connect(self._on_frame)
+        self.hud = None
+        self._hud_items = []                # (위젯, 정렬) — 무대와 같은 칸에 겹치는 HUD
 
         # ── 왼쪽 위: [<](배경 없는 아이콘) + 곡 제목 + 'D minor | 87 BPM' + 'D 마이너 펜타토닉 스케일' ──
         left = QWidget()
@@ -118,6 +133,7 @@ class MainScreen(QWidget):
         self.scale_lbl.setStyleSheet(self.info_lbl.styleSheet())
         lv.addWidget(self.scale_lbl)
         root.addWidget(left, 0, 0, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+        self._hud_items.append((left, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft))
 
         # ── 상단 가운데: 현재/다음 코드 ──
         self.chord_hdr = ChordHeader()
@@ -126,6 +142,7 @@ class MainScreen(QWidget):
         self._hdr_box.setContentsMargins(0, 0, 0, 0)
         self._hdr_box.addWidget(self.chord_hdr)
         root.addWidget(hdr_wrap, 0, 0, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter)
+        self._hud_items.append((hdr_wrap, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter))
 
         # ── 오른쪽 위: [⚙] + 리프모드(AI를 순환 화살표가 감싼 아이콘, 켜지면 네온색) ──
         right = QWidget()
@@ -143,6 +160,7 @@ class MainScreen(QWidget):
         self.riff_btn.clicked.connect(self._toggle_riff_mode)
         rv.addWidget(self.riff_btn, 0, Qt.AlignmentFlag.AlignRight)
         root.addWidget(right, 0, 0, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignRight)
+        self._hud_items.append((right, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignRight))
 
         # ── 가운데 재생 아이콘: 멈춤일 때만 반투명하게 ──
         self.play_btn = QPushButton("▶")
@@ -157,6 +175,7 @@ class MainScreen(QWidget):
             "QPushButton:hover{background:transparent;color:rgba(255,255,255,0.8);}")
         self.play_btn.clicked.connect(self._toggle_play)
         root.addWidget(self.play_btn, 0, 0, Qt.AlignmentFlag.AlignCenter)
+        self._hud_items.append((self.play_btn, Qt.AlignmentFlag.AlignCenter))
 
         # ── 재생바: 건반 아래 받침 패널(Stage가 그림) 안쪽에 항상 표시 — 자리는 _place_scrub ──
         self.scrub = ScrubBar()
@@ -190,13 +209,115 @@ class MainScreen(QWidget):
 
     def showEvent(self, e):
         super().showEvent(e)
+        if self.gl_stage is not None and self.hud is None:
+            self._enter_hud()
         # 연주 가이드와 건반은 즉시 표시한다. 무대엔 커튼이 열리는 연출(창 복원 같은 자발적 표시는 제외).
         if not e.spontaneous():
-            open_curtain(self.stage)
+            self._open_curtain()            # GL 무대면 HUD 창은 커튼이 끝난 뒤에 뜬다
+        elif self.hud is not None:
+            self.hud.sync()
+
+    def _enter_hud(self):
+        """GL 무대: 무대 칸에 겹친 HUD를 투명 도구 창으로 옮긴다(네이티브 GL 창 밑에선 Qt가 안 그림). 앱 창에 딸려야
+        하므로 첫 표시 때(이때 window()가 앱 창)."""
+        hud = self.hud = gl_stage.HudWindow(self.stage)
+        hud.setPalette(self.palette())
+        grid = QGridLayout(hud)
+        grid.setContentsMargins(0, 0, 0, 0)
+        for widget, align in self._hud_items:
+            grid.addWidget(widget, 0, 0, align)
+        self.scrub_row.setParent(hud)
+        self.scrub_row.show()
+        self.gl_stage.mirror(self.chord_hdr)            # 계속 움직이는 코드 표시는 GL이 그린다(HUD 창은 거의 안 바뀜)
+        QTimer.singleShot(0, self._place_chord_hdr)
+        QTimer.singleShot(0, self._place_scrub)
+
+    def _overlay(self):
+        """HUD·가이드·커튼이 놓이는 위젯 — GL 무대면 HUD 창, 아니면 이 화면."""
+        return self.hud if self.hud is not None else self
+
+    def _from_stage(self, root, pt):
+        """무대 좌표 → root 좌표(HUD 창은 다른 최상위 창이라 화면 좌표를 거친다)."""
+        return root.mapFromGlobal(self.stage.mapToGlobal(pt))
+
+    def paint_native(self, p, origin):
+        """화면 전환 스냅샷에 위젯 grab이 못 잡는 GL 무대·HUD 창을 덧그린다(origin = 스냅샷 좌상단 전역 좌표)."""
+        if self.stage.gl is not None:
+            p.drawImage(self.stage.gl.container.mapToGlobal(QPoint()) - origin, self.stage.gl.grabFramebuffer())
+        if self.hud is not None and self.hud.isVisible():
+            p.drawPixmap(self.hud.mapToGlobal(QPoint()) - origin, self.hud.grab())
+
+    def _curtain_host(self):
+        """커튼이 놓이는 위젯 — GL 무대면 무대(GL 창이 그림), 아니면 이 화면 전체(HUD 위젯까지 덮음)."""
+        return self.stage if self.hud is not None else self
+
+    def _open_curtain(self):
+        """커튼(맨 앞 — HUD까지 덮음)을 닫았다 연다. 로딩(건반 층·배경 굽기)을 먼저 끝내 커튼이 끊기지 않게 한다."""
+        self.stage.prepare()
+        if self.hud is None:
+            open_curtain(self)
+            return
+        # GL 무대: 커튼·떠난 화면·HUD 그림을 GL 한 창이 그린다. HUD 창은 커튼 동안 숨긴다.
+        hud, stage = self.hud, self.stage
+        hud.held = True                     # 이제 앱 창 이동·크기 변경에도 다시 뜨지 않음
+        if not hud.isVisible():
+            hud.sync()                      # 숨은 채 자리만 맞춤
+        hud.layout().activate()
+        self._place_chord_hdr()
+        self._place_scrub()
+        stage.hud_snap = hud.grab()
+        self._opening = True                # 이전 커튼 정리(끝내기)가 HUD 창을 띄우지 않게
+        try:
+            curtain = open_curtain(stage, gl=True)
+        finally:
+            self._opening = False
+        if curtain is None:                 # 효과 축소
+            self._show_hud()
+            return
+        curtain.anim.finished.connect(self._show_hud)
+
+        def go():                           # GL이 로딩 화면(떠난 화면·HUD 그림 + 텍스처 업로드)을 두 번 낸 뒤 시작
+            if getattr(stage, "_curtain", None) is curtain and self.isVisible():
+                hud.hold(True)
+                curtain.start()
+                stage.update()
+        self._after_frame(lambda: self._after_frame(go))
+
+    def _show_hud(self):
+        """커튼이 끝남 → HUD 창을 띄워 지금 그리고, GL이 두 화면 더 낸 뒤 대신 그리던 그림을 치운다(빈 프레임 없음)."""
+        if getattr(self, "_opening", False):
+            return
+        self.hud.hold(False)
+        if self.hud.isVisible():
+            self.hud.repaint()
+
+        def drop():
+            if getattr(self.stage, "_curtain", None) is None:   # 그새 새 커튼이 시작됐으면 그 커튼의 그림
+                self.stage.hud_snap = None
+                self.stage.update()
+        self._after_frame(lambda: self._after_frame(drop))
+
+    def _after_frame(self, fn):
+        """GL 창이 다음 화면을 낸 뒤 fn — 층을 맞바꿀 때 새 층이 먼저 화면에 오르고 옛 층을 치운다."""
+        gl = self.gl_stage
+
+        def done():
+            gl.frameSwapped.disconnect(done)
+            fn()
+        gl.frameSwapped.connect(done)
+        self.stage.update()
+
+    def keyPressEvent(self, e):
+        if self.guide is not None and self.hud is not None:   # HUD 창은 포커스를 안 받음 → 가이드 키는 여기서
+            self.guide.keyPressEvent(e)
+            return
+        super().keyPressEvent(e)
 
     # ── HUD ─────────────────────────────────────────────────────
     def _set_time(self, sec):
-        self.pos_lbl.setText(_fmt_sec(sec))
+        text = _fmt_sec(sec)
+        if text != self.pos_lbl.text():              # 초가 바뀔 때만(HUD 다시 그리기 줄임)
+            self.pos_lbl.setText(text)
 
     def _on_space(self):
         if self.guide is not None:        # 가이드 중 스페이스 = 다음(가이드가 처리)
@@ -214,13 +335,13 @@ class MainScreen(QWidget):
     def _place_chord_hdr(self):
         """코드 표시의 세로 가운데를 천장과 레일(도로) 먼 끝의 중간에."""
         far = self.stage._xf.map(QPointF(self.stage.width() / 2, 0))
-        rail_top = self.stage.mapTo(self.content, far.toPoint()).y()
+        rail_top = self._from_stage(self.chord_hdr.parentWidget().parentWidget(), far.toPoint()).y()
         self._hdr_box.setContentsMargins(0, max(0, rail_top // 2 - self.chord_hdr.height() // 2), 0, 0)
 
     def _place_scrub(self):
         """재생바를 건반 아래 받침 패널 안쪽(꺾인 양끝 안)에 맞춘다."""
         r = self.stage.bar_rect()
-        self.scrub_row.setGeometry(QRect(self.stage.mapTo(self.content, r.topLeft()), r.size()))
+        self.scrub_row.setGeometry(QRect(self._from_stage(self.scrub_row.parentWidget(), r.topLeft()), r.size()))
         side = r.height() // 2 + 6                     # 꺾인 끝 안쪽 여백
         self.scrub_row.layout().setContentsMargins(side, 0, side, 0)
         self.scrub_row.raise_()
@@ -232,67 +353,49 @@ class MainScreen(QWidget):
             return
         self.pause()
         tonic, _ = self._song_scale()
-        scale = (self.tl.practice.get("scale") or {}).get("name") or self.tl.key
-        # 설명용 자리: 근음이 1번이 아닌 첫 코드(1번 표시와 근음 표시가 서로 다른 건반에 보이게)
-        seg = next((s for s in self.tl.segments if s.chord.root % 12 != tonic), self.tl.segments[0])
+        # 설명용 자리: 근음이 1번이 아니고 스케일 안인 첫 코드(1번 표시와 근음 표시가 서로 다른 건반에 보이게)
+        seg = next((s for s in self.tl.segments if _in_scale(s)[1] not in (None, tonic)), self.tl.segments[0])
         self._seek_to(seg.start_sec + 1e-3)
 
+        root = self._overlay()                         # 가이드가 놓이는 곳(GL 무대면 HUD 창) 좌표로
+
         def at(widget):
-            return lambda: [QRect(widget.mapTo(self, QPoint(0, 0)), widget.size())]
+            return lambda: [QRect(root.mapFromGlobal(widget.mapToGlobal(QPoint(0, 0))), widget.size())]
 
         def keys():
-            return [QRect(self.stage.mapTo(self, self.stage.keys_rect().topLeft()), self.stage.keys_rect().size())]
+            return [QRect(self._from_stage(root, self.stage.keys_rect().topLeft()), self.stage.keys_rect().size())]
+
+        def dot(color, name):
+            return f"<span style='color:{color};font-size:20px;'>●</span> {name}"
 
         steps = [
-            ("연주 화면에 오신 걸 환영해요",
-             "노래에 맞춰 건반으로 즉흥 연주하는 화면이에요.<br>"
-             "피아노를 몰라도 괜찮아요. 건반의 <b>숫자</b>와 <b>색</b>만 보면 바로 칠 수 있어요.", None),
-            ("건반 치는 법",
-             "왼쪽으로 갈수록 낮은 음, 오른쪽으로 갈수록 높은 음이에요.<br>"
-             "화면 건반을 <b>마우스로 클릭</b>하거나, <b>MIDI 키보드</b>를 연결해 쳐요.<br>"
-             "흰 건반과 검은 건반 모두 똑같이 한 음씩이에요.", keys),
-            ("건반 위 숫자 = 스케일 번호",
-             f"이 곡은 <b>{scale}</b>로 연습해요. <b>1번 = {pc_name(tonic)}</b>이고, "
-             "곡이 끝날 때까지 번호는 바뀌지 않아요.<br>숫자가 있는 건반만 쳐도 곡과 어울려요.", keys),
-            ("색으로 보는 음의 역할",
-             "<b>파랑·반짝임 = 지금 코드의 근음</b>(가장 안정적인 음)<br>"
-             "초록 = 지금 코드를 이루는 음(코드톤)<br>회색 = 스케일 음<br>"
-             "<b>투명하게 테두리만 보이는 건반</b>(숫자 없음) = 스케일 밖 음이에요. 이 곡과 덜 어울려서 "
-             "누르면 빨갛게 표시되지만 틀린 건 아니에요. 근음은 스케일 밖이어도 파랑으로 보여요.", keys),
-            ("지금 코드",
-             "코드는 반주가 지금 울리는 화음이에요. 가운데 큰 글자가 지금 코드, 위 작은 글자가 다음 코드예요.<br>"
-             "코드가 바뀌면 파란 근음 건반도 따라 옮겨가요.", at(self.chord_hdr)),
-            ("곡 정보",
-             "제목 아래는 곡의 조(키)와 BPM(빠르기, 분당 박 수), 그 아래는 고른 스케일이에요. 지금 위치·전체 길이는 아래 재생바에 있어요.<br>"
-             "<b>&lt;</b> 버튼은 학습 설정으로 돌아가 스케일을 다시 골라요.", at(self.back_btn.parentWidget())),
-            ("재생하기",
-             "가운데 <b>▶</b> 또는 <b>스페이스</b>로 재생·정지해요. 곡 앞에 박을 세는 예비박이 있어요.<br>"
-             "아래 재생바를 클릭·드래그하면 원하는 위치로 이동해요.",
-             lambda: at(self.play_btn)() + at(self.scrub_row)()),
-            ("리프모드(AI 아이콘) — 따라 치기",
-             "누르면 리프(짧은 멜로디) 만들기 창이 열려요. <b>듣기</b>·<b>다시 만들기</b>로 고르고 "
-             "<b>확정</b>하면 시작해요. '3도/7도 착지 섞기'를 켜면 코드의 3도·7도 음으로 끝나는 리프도 섞여요.<br>"
-             "프로그램이 한 마디 치면(어둡고 흐린 블록, 소리로 들려줘요) 다음 마디에 "
-             "<b>내가 같은 리프로 따라 쳐요</b>(선명한 색 블록). "
-             "블록이 건반에 닿을 때 누르면 PERFECT·EARLY·LATE가 떠요.<br>"
-             "켜져 있으면 아이콘이 보라색이고, 다시 누르면 자유연습으로 돌아와요.",
-             at(self.riff_btn)),
-            ("설정 ⚙",
-             "<b>박자 조정</b> — 박이 음악과 어긋나 보일 때<br><b>코드 수정</b> — 표시된 코드가 틀렸을 때<br>"
-             "고치고 확정하면 학습 설정으로 돌아와요.<br>"
-             "그 밖에 MIDI 키보드 연결, 원곡·내 연주 음량, 화면과 소리가 어긋날 때 맞추는 "
-             "<b>싱크 보정</b>('박자에 탭')이 있어요.", at(self.settings_btn)),
-            ("이렇게 시작해 보세요",
-             "① ▶를 누르고 <b>파란 근음 건반</b>만 박자에 맞춰 눌러 보세요.<br>"
-             "② 익숙해지면 <b>숫자 있는 건반</b>으로 넓혀 짧게 쳐 보세요.<br>"
-             "③ 더 연습하고 싶으면 <b>리프모드</b>로 따라 쳐 보세요.", None),
+            ("어울리는 건반",
+             "색이나 번호가 들어온 건반만 치면 어울리는 곡을 칠 수 있습니다.<br>"
+             f"어울림 정도: {dot(T.BADGE_ROOT, '파랑')} &gt; {dot(T.BADGE_CHORD, '초록')} &gt; "
+             f"{dot(T.BADGE_SCALE, '회색')}<br>"
+             "투명한 건반을 치면 어색한 소리가 나기 쉽습니다.", keys, None),
+            ("리프모드(따라치기)",
+             "연주를 생성하고, 따라 치며 연습할 수 있습니다.", at(self.riff_btn), None),
+            ("리프 생성 창",
+             "원하는 부분을 다시 생성할 수 있습니다.", None, str(ASSETS / "guide_riff_dialog.png")),
+            ("번갈아 따라 치기",
+             "프로그램과 번갈아가며 따라쳐보세요.", None, str(ASSETS / "guide_riff_play.png")),
         ]
-        self.guide = PlayGuide(self, steps)
-        self.guide.finished.connect(self._end_guide)
+        def start():
+            if self.guide is None and self.isVisible():   # 커튼 도중 화면을 떠났으면 생략
+                self.guide = PlayGuide(root, steps)
+                self.guide.finished.connect(self._end_guide)
+
+        curtain = getattr(self._curtain_host(), "_curtain", None)
+        if curtain is not None:                        # 커튼이 다 걷힌 뒤 시작
+            curtain.anim.finished.connect(start)
+        else:
+            start()
 
     def _end_guide(self):
         self.guide = None
-        self._seek_to(self.tl.count_in_start())                  # 지금의 연주화면 첫 상태로
+        self._seek_to(self.tl.count_in_start())                  # 자유연습 첫 상태로 — 커튼이 다시 열리며 시작
+        self._open_curtain()
 
     # ── 리프를 재생에 함께 굽기(재생 헤드 동기) ──────────────────
     def _build_riff_events(self):
@@ -333,7 +436,7 @@ class MainScreen(QWidget):
                              [s.start_sec for s in self.tl.segments] if self.tl else [],
                              [(s.start_sec, s.end_sec) for s in self.tl.segments if s.is_detour] if self.tl else [],
                              [span for blk in blocks for span in blk["bars"][::2]],
-                             [(s.start_sec, s.end_sec, s.note_set, s.chord_tones(), s.chord.root % 12)
+                             [(s.start_sec, s.end_sec, s.note_set, *_in_scale(s))
                               for s in self.tl.segments
                               if not (s.is_detour and self.tl.practice.get("skip_detour"))] if self.tl else [])
 
@@ -396,7 +499,7 @@ class MainScreen(QWidget):
             self.pause()
             self._select_practice("free")
             self._seek_to(self.tl.count_in_start())
-            open_curtain(self.stage)          # 처음부터 다시 = 커튼 다시 열림
+            self._open_curtain()          # 처음부터 다시 = 커튼 다시 열림
         else:
             self._open_riff_dialog()
 
@@ -408,7 +511,7 @@ class MainScreen(QWidget):
         if dialog.exec() == QDialog.DialogCode.Accepted:
             self._select_practice("riff")
             self._seek_to(self.tl.count_in_start())
-            open_curtain(self.stage)
+            self._open_curtain()
 
     # ── 재생 제어 ────────────────────────────────────────────────
     def _toggle_play(self):
@@ -417,6 +520,9 @@ class MainScreen(QWidget):
 
     def _on_state(self, playing: bool):
         self.stage.driven = playing          # 재생 중엔 재생 틱 하나로만 그림(반짝이 타이머 멈춤)
+        self.stage.clock = self._visual_clock if playing else None   # GL은 그리는 순간 시각으로(vsync 박자)
+        if playing:
+            self.stage.update()
         if not playing:
             self.stage.beat = None           # 멈춤 = 박 펄스 없이 아지랑이만 숨 쉼
             self.note_player.stop_all()
@@ -425,6 +531,11 @@ class MainScreen(QWidget):
             self.stage.update()
         self.play_btn.setVisible(not playing)    # 멈춤일 때만 가운데 재생 아이콘
         self.bar_play_btn.setText("❚❚" if playing else "▶")
+
+    def _visual_clock(self):
+        """지금 화면에 보일 시각(싱크 보정 반영)과 박 펄스용 (박 위치, 마디당 박) — 재생 틱과 같은 계산."""
+        sec = self.playhead.position_sec() - self._sync_sec
+        return sec, (self.tl.beat_at(sec), self.tl.time_sig_beats())
 
     def _on_seek(self, sec: float):
         self._seek_to(sec)
@@ -441,11 +552,27 @@ class MainScreen(QWidget):
             self._render_at(sec)
             self._riff_idx = bisect.bisect_left(self._riff_times, sec)   # 과거 음 몰아 재생 방지
 
+    def _frame_hud(self) -> bool:
+        """GL 무대 재생 중엔 HUD(재생바·시간·코드 표시)를 화면 교체 직후(_on_frame)에 갱신 — 재생 타이머 박자로 하면
+        GL 그리기와 엇갈려 화면 갱신을 놓친다(실측 p95 19 → 25ms). 재생 로직(리프음·곡 끝)은 타이머 그대로."""
+        return self.gl_stage is not None and self.stage.driven
+
+    def _on_frame(self):
+        if not self._frame_hud() or not self.tl or not self.playhead:
+            return
+        sec = self.playhead.position_sec()
+        if _fmt_sec(sec) != self.pos_lbl.text():        # 재생바·시간 = HUD 창 → 초가 바뀔 때 한 번에(창 갱신 초당 1회)
+            self.scrub.set_position(sec)
+            self._set_time(sec)
+        vis = sec - self._sync_sec
+        self._update_scale_preview(vis, self.tl.segment_index_at(vis))
+
     def _on_tick(self, sec: float):
-        self.scrub.set_position(sec)
+        if not self._frame_hud():
+            self.scrub.set_position(sec)
         if self.tl and self.playhead and self.playhead.is_playing():   # 무대 아지랑이 박 펄스(들리는 위치 기준)
             self.stage.beat = (self.tl.beat_at(sec - self._sync_sec), self.tl.time_sig_beats())
-        if self.tl:
+        if self.tl and not self._frame_hud():
             self._set_time(sec)
         self._render_at(sec)   # 구간 변경 시 무거운 갱신
         if self._seeking:
@@ -464,7 +591,7 @@ class MainScreen(QWidget):
             return
         sec -= self._sync_sec            # 화면은 스피커에서 들리는 위치 기준(리프음 발음은 재생 위치 그대로)
         idx = self.tl.segment_index_at(sec)
-        self._update_scale_preview(sec, idx)
+        self._update_scale_preview(sec, idx, monitor=not self._frame_hud())
         if idx >= 0 and self.tl.practice.get("skip_detour") and self.tl.segments[idx].is_detour:
             idx = -1                     # 제외한 키 밖 코드 = 예비박처럼 곡 스케일만(코드·근음 강조 없음)
         if idx < 0:
@@ -487,13 +614,12 @@ class MainScreen(QWidget):
         if idx < 0:
             return song_notes, [], None, {pc: degree_number(pc, tonic) for pc in song_notes}
         seg = self.tl.segments[idx]
-        chord_tones = seg.chord_tones()
+        chord_tones, root = _in_scale(seg)
         if landing:
             target = _landing_pc(seg, landing)   # 착지음 리프 블록에선 목표음만 초록으로 강조(없으면 코드톤)
-            chord_tones = [target] if target is not None else chord_tones
-        root = seg.chord.root % 12
-        # 번호는 곡 스케일 주음 기준으로 곡 내내 고정(예외 구간 음은 ♭/♯로), 근음은 스케일 밖이어도 번호 표시
-        return seg.note_set, chord_tones, root, {pc: degree_number(pc, tonic) for pc in set(seg.note_set) | {root}}
+            chord_tones = [target] if target in chord_tones else chord_tones
+        # 번호는 곡 스케일 주음 기준으로 곡 내내 고정(예외 구간 음은 ♭/♯로), 스케일 밖 음은 번호 없음
+        return seg.note_set, chord_tones, root, {pc: degree_number(pc, tonic) for pc in seg.note_set}
 
     def _show_keys(self, notes, tones, root, degrees):
         self.piano.set_scale(notes, tones, root)
@@ -511,7 +637,7 @@ class MainScreen(QWidget):
         scale = self.tl.practice.get("scale") or {}
         return scale.get("root", self.tl.key_root) % 12, list(scale.get("note_set", []))
 
-    def _update_scale_preview(self, sec: float, idx: int):
+    def _update_scale_preview(self, sec: float, idx: int, monitor=True):
         """재생 위치 반영: 낙하 노드 위치 + 상단 코드(현재/다음). 다음 스케일 건반 예고는 없음."""
         self.stage.update()
         self.riff.set_position(sec)
@@ -528,7 +654,8 @@ class MainScreen(QWidget):
             upcoming = None
         lead = min(4 * self.tl.beat_sec(), boundary - (seg.start_sec if seg else sec - 4 * self.tl.beat_sec()))
         grow = (sec - boundary + lead) / lead if upcoming and lead > 0 and boundary - lead <= sec < boundary else 0.0
-        self._update_monitor(sec, seg, upcoming, grow, change)
+        if monitor:
+            self._update_monitor(sec, seg, upcoming, grow, change)
 
     def _update_monitor(self, sec, seg, upcoming, grow, change):
         """모니터박스 코드 표시 — 재생 중 코드가 바뀌면 이전 코드를 밀어내는 push(0.5박)."""

@@ -43,8 +43,10 @@ class ScrubBar(QWidget):
         self.update()
 
     def set_position(self, sec: float):
+        moved = round(self._sec_to_x(sec)) != round(self._sec_to_x(self._pos))
         self._pos = sec
-        self.update()
+        if moved:                          # 1px 움직일 때만 다시 그림(재생 틱마다 HUD 창 갱신 ~4ms 방지)
+            self.update()
 
     def _total(self) -> float:
         return self._timeline.total_sec() if self._timeline else 1.0

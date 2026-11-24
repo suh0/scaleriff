@@ -23,7 +23,7 @@ def main():
     screen.resize(1040, 740)
     screen.show()
     app.processEvents()
-    curtain = getattr(screen.stage, "_curtain", None)   # 진입 커튼(불투명)이 덮고 있으면 무대가 안 그려짐 — 끝내고 치움
+    curtain = getattr(screen, "_curtain", None)   # 진입 커튼(불투명)이 덮고 있으면 무대가 안 그려짐 — 끝내고 치움
     if curtain is not None:
         curtain.anim.setCurrentTime(curtain.anim.totalDuration())
     screen._select_practice("riff")

@@ -83,6 +83,8 @@ class LearningFlowTest(unittest.TestCase):
         s = self.screen
         s.resize(1040, 740)
         s.show()
+        if s._curtain is not None:            # 진입 커튼(불투명)이 덮고 있으면 무대가 안 그려짐 — 끝냄
+            s._curtain.anim.setCurrentTime(s._curtain.anim.totalDuration())
         s._seek_to(0.5)                       # Dm7 구간 — 근음 반짝이가 보이는 자리
         stamps = []
         s.playhead.positionChanged.connect(lambda _: stamps.append(time.perf_counter()))
@@ -103,8 +105,8 @@ class LearningFlowTest(unittest.TestCase):
         s.show()
         QTest.qWait(50)                                 # 레이아웃 → 무대 크기 확정
         stage, segs = s.stage, s.tl.segments          # Dm7 G7 Cmaj7 ×2
-        if stage._curtain is not None:                  # 진입 커튼(불투명)이 덮고 있으면 무대가 안 그려짐 — 끝냄
-            stage._curtain.anim.setCurrentTime(stage._curtain.anim.totalDuration())
+        if s._curtain is not None:                      # 진입 커튼(불투명)이 덮고 있으면 무대가 안 그려짐 — 끝냄
+            s._curtain.anim.setCurrentTime(s._curtain.anim.totalDuration())
 
         def frame(sec):
             s._render_at(sec)
@@ -134,20 +136,23 @@ class LearningFlowTest(unittest.TestCase):
         from gui import anim
         s = self.screen
         s.show()                                        # 연주화면 진입 = 무대 커튼
-        curtain = s.stage._curtain
+        curtain = s._curtain
         self.assertIsNotNone(curtain)
-        self.assertIs(curtain.parentWidget(), s.stage, "커튼은 무대만 덮고 HUD는 위에 남음")
+        self.assertIs(curtain.parentWidget(), s, "커튼은 화면 전체(HUD 포함)를 덮음")
+        s.content.raise_()                              # 나중에 다른 층이 올라와도
+        curtain.anim.setCurrentTime(100)                # 다음 프레임에 다시 맨 앞
+        self.assertIs([w for w in s.children() if w.isWidgetType()][-1], curtain, "커튼이 맨 앞 레이어가 아님")
         self.assertTrue(curtain.testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents))
         QTest.qWait(curtain.anim.totalDuration() + 150)
-        self.assertIsNone(s.stage._curtain, "다 열린 뒤 커튼이 남음")
+        self.assertIsNone(s._curtain, "다 열린 뒤 커튼이 남음")
         s._mode = "practice"                            # 리프모드 해제 = 처음부터 다시 → 커튼 다시
         s._toggle_riff_mode()
-        self.assertIsNotNone(s.stage._curtain)
+        self.assertIsNotNone(s._curtain)
         self.app.setProperty("reduceMotion", True)      # 효과 축소면 커튼 없음(이전 커튼은 정리)
         try:
-            anim.open_curtain(s.stage)
+            anim.open_curtain(s)
             QTest.qWait(30)
-            self.assertIsNone(s.stage._curtain)
+            self.assertIsNone(s._curtain)
         finally:
             self.app.setProperty("reduceMotion", False)
 

@@ -39,7 +39,15 @@ class PlayGuideTest(unittest.TestCase):
         s, tl = self.screen, pentatonic_timeline()
         tl.segments[0].chord = parse_chord("F")        # 근음 F는 C 펜타토닉 밖
         s.set_timeline(tl)
-        for seg in tl.segments:
+        # 고른 스케일 밖 음은 근음·코드톤이어도 강조·번호 없음(펜타토닉 = 5음만)
+        s._seek_to(tl.segments[0].start_sec + 1e-3)
+        self.assertIsNone(s.piano._chord_root)
+        self.assertNotIn(5, s.piano._degrees)
+        self.assertTrue(s.piano._is_out(65), "스케일 밖 근음도 누르면 빨강")
+        self.assertEqual(s.piano._chord_tones, {9, 0})  # F 코드톤 중 펜타 안(A·C)만
+        s._seek_to(tl.segments[1].start_sec + 1e-3)     # G7: B·F는 펜타 밖 → 강조 없음
+        self.assertEqual(s.piano._chord_tones, {7, 2})
+        for seg in tl.segments[1:]:
             s._seek_to(seg.start_sec + 1e-3)
             root = seg.chord.root % 12
             self.assertEqual(s.piano._chord_root, root)
@@ -47,10 +55,6 @@ class PlayGuideTest(unittest.TestCase):
             self.assertEqual(s.piano._degrees.get(0), "1")
             self.assertEqual(s.piano._degrees[root], degree_number(root, 0), "근음 번호 없음")
             self.assertEqual(s.stage._tone(60 + root).name(), "#1f4bff", "근음 강조 없음")
-        s._seek_to(tl.segments[0].start_sec + 1e-3)
-        self.assertEqual(s.piano._degrees[5], "4")     # 스케일 밖 근음도 번호 표시
-        self.assertFalse(s.piano._is_out(65), "스케일 밖 근음을 누르면 빨강으로 표시됨")
-        self.assertTrue(s.piano._is_out(66))            # 근음 아닌 스케일 밖 음은 그대로 빨강
 
     def test_count_in_shows_song_scale_numbers_without_root(self):
         s, tl = self.screen, pentatonic_timeline()

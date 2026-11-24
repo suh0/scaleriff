@@ -1,17 +1,18 @@
 """연주화면 첫 진입 가이드 — 화면을 어둡게 덮고 한 부분씩 밝혀 설명, [다음]으로 넘긴다.
 
-steps: [(제목, 본문, 대상 영역 함수 | None)] — 대상 함수는 오버레이 좌표 QRect 목록을 돌려준다
-(None이면 가운데 카드만). 끝까지 넘기거나 건너뛰면 finished 후 스스로 닫힌다.
+steps: [(제목, 본문, 대상 영역 함수 | None, 이미지 경로 | None)] — 대상 함수는 오버레이 좌표 QRect 목록을
+돌려준다(None이면 가운데 카드만). 이미지는 카드 본문 아래에 넣는다. 끝까지 넘기거나 건너뛰면 finished 후 스스로 닫힌다.
 """
 from __future__ import annotations
 
 from PyQt6.QtCore import QRect, QRectF, Qt, pyqtSignal
-from PyQt6.QtGui import QColor, QPainter, QPainterPath, QPen
+from PyQt6.QtGui import QColor, QPainter, QPainterPath, QPen, QPixmap
 from PyQt6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 from gui import theme as T
 
-CARD_W = 400
+CARD_W = 520
+CARD_W_IMG = 600   # 이미지가 있는 단계
 HOLE_PAD = 10      # 밝힌 영역 여백
 GAP = 18           # 밝힌 영역과 카드 사이
 
@@ -34,26 +35,32 @@ class PlayGuide(QWidget):
         v.setContentsMargins(22, 18, 22, 18)
         v.setSpacing(10)
         self.count_lbl = QLabel()
-        self.count_lbl.setStyleSheet(f"color:{T.TEXT_DIM};font-size:11px;letter-spacing:2px;border:none;")
+        self.count_lbl.setStyleSheet(f"color:{T.TEXT_DIM};font-size:13px;letter-spacing:2px;border:none;")
         self.title_lbl = QLabel()
         self.title_lbl.setWordWrap(True)
-        self.title_lbl.setStyleSheet(f"color:{T.TEXT_PRIMARY};font-size:17px;font-weight:700;border:none;")
+        self.title_lbl.setStyleSheet(f"color:{T.TEXT_PRIMARY};font-size:22px;font-weight:700;border:none;")
         self.body_lbl = QLabel()
         self.body_lbl.setWordWrap(True)
         self.body_lbl.setTextFormat(Qt.TextFormat.RichText)
-        self.body_lbl.setStyleSheet(f"color:{T.TEXT_BODY};font-size:13px;line-height:150%;border:none;")
-        for w in (self.count_lbl, self.title_lbl, self.body_lbl):
+        self.body_lbl.setStyleSheet(f"color:{T.TEXT_PRIMARY};font-size:17px;line-height:150%;border:none;")
+        self.img_lbl = QLabel()
+        self.img_lbl.setStyleSheet("border:none;")
+        for w in (self.count_lbl, self.title_lbl, self.body_lbl, self.img_lbl):
             v.addWidget(w)
         row = QHBoxLayout()
         row.setContentsMargins(0, 6, 0, 0)
         self.skip_btn = QPushButton("건너뛰기")
         self.skip_btn.setStyleSheet(T.qss_ghost_btn())
         self.skip_btn.clicked.connect(self.finish)
+        self.prev_btn = QPushButton("← 이전")
+        self.prev_btn.setStyleSheet(T.qss_ghost_btn())
+        self.prev_btn.clicked.connect(self.prev)
         self.next_btn = QPushButton()
         self.next_btn.setStyleSheet(T.qss_primary_btn())
         self.next_btn.clicked.connect(self.next)
         row.addWidget(self.skip_btn)
         row.addStretch(1)
+        row.addWidget(self.prev_btn)
         row.addWidget(self.next_btn)
         v.addLayout(row)
         self.setGeometry(parent.rect())
@@ -69,19 +76,33 @@ class PlayGuide(QWidget):
         self._i += 1
         self._show_step()
 
+    def prev(self):
+        if self._i > 0:
+            self._i -= 1
+            self._show_step()
+
     def finish(self):
         self.hide()
         self.finished.emit()
         self.deleteLater()
 
     def _show_step(self):
-        title, body, _ = self._steps[self._i]
+        title, body, _, image = self._steps[self._i]
         last = self._i + 1 == len(self._steps)
         self.count_lbl.setText(f"{self._i + 1} / {len(self._steps)}")
         self.title_lbl.setText(title)
         self.body_lbl.setText(body)
+        self.card.setFixedWidth(CARD_W_IMG if image else CARD_W)
+        self.img_lbl.setVisible(bool(image))
+        if image:
+            dpr = self.devicePixelRatioF()
+            pix = QPixmap(image).scaledToWidth(round((CARD_W_IMG - 44) * dpr),
+                                               Qt.TransformationMode.SmoothTransformation)
+            pix.setDevicePixelRatio(dpr)
+            self.img_lbl.setPixmap(pix)
         self.next_btn.setText("연주 시작" if last else "다음 →")
         self.skip_btn.setVisible(not last)
+        self.prev_btn.setVisible(self._i > 0)
         self.relayout()
         self.next_btn.setFocus()
 
@@ -127,6 +148,8 @@ class PlayGuide(QWidget):
     def keyPressEvent(self, e):
         if e.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Right, Qt.Key.Key_Space):
             self.next()
+        elif e.key() in (Qt.Key.Key_Left, Qt.Key.Key_Backspace):
+            self.prev()
         elif e.key() == Qt.Key.Key_Escape:
             self.finish()
         else:

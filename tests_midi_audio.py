@@ -266,14 +266,14 @@ class MidiAudioTest(unittest.TestCase):
             head.play()
             deadline = time.monotonic() + 2
             while ((head._pending_seek is not None
-                    or head._player.mediaStatus() != QMediaPlayer.MediaStatus.BufferedMedia
+                    or head._warming                         # 로딩 직후 장치 예열(무음) 뒤 출발
                     or head.position_sec() <= 1.52)
                    and time.monotonic() < deadline):
                 self.assertGreaterEqual(head.position_sec(), 1.5,
                                         "로딩 뒤 seek가 원점으로 되돌아감")
                 QTest.qWait(10)
             self.assertIsNone(head._pending_seek, "실제 음원 seek 완료 시간 초과")
-            self.assertEqual(head._player.mediaStatus(), QMediaPlayer.MediaStatus.BufferedMedia)
+            self.assertFalse(head._warming)
             started = head.position_sec()
             self.assertGreaterEqual(started, 1.5, "로딩 뒤 seek가 원점으로 되돌아감")
             QTest.qWait(500)
@@ -308,6 +308,31 @@ class MidiAudioTest(unittest.TestCase):
                 steps = [(p1 - p0) - (t1 - t0) for (t0, p0), (t1, p1) in zip(samples, samples[1:])]
                 self.assertLess(max(map(abs, steps)), 0.03, "위치가 음원 보고처럼 계단으로 튐")
                 self.assertLess(abs(head.position_sec() - head._player.position() / 1000), 0.15, "음원과 어긋남")
+            finally:
+                head.stop()
+                head._player.setSource(QUrl())
+
+    def test_first_play_clock_never_jumps_back(self):
+        """첫 재생의 장치 오픈 지연 동안 시계가 앞서갔다가 음원 보고로 뒤로 맞춰지면 레일·노드가 위로 튀고,
+        빠르기로 따라잡아도 흐름이 출렁인다 — 예열 뒤 출발, 늘 1배속."""
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, "start.wav")
+            sf.write(path, 0.2 * np.sin(2 * np.pi * 330 * np.arange(22050 * 3) / 22050), 22050)
+            head = Playhead(3, path)
+            try:
+                head.set_volume(0)
+                deadline = time.monotonic() + 2
+                while not head._media_ready and time.monotonic() < deadline:
+                    QTest.qWait(10)
+                head.play()
+                seen, end = [], time.monotonic() + 1.5
+                while time.monotonic() < end:
+                    QTest.qWait(5)
+                    seen.append((time.perf_counter(), head.position_sec()))
+                moving = [(t, p) for t, p in seen if p > 0]
+                self.assertGreater(moving[-1][1], 0.6, "재생이 안 흐름")
+                for (t0, p0), (t1, p1) in zip(moving, moving[1:]):     # 출발 뒤엔 멈춤·되감김·빨라짐 없이 1배속
+                    self.assertAlmostEqual((p1 - p0) - (t1 - t0), 0, delta=0.003, msg="시계 속도가 흔들림")
             finally:
                 head.stop()
                 head._player.setSource(QUrl())

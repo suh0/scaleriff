@@ -12,13 +12,13 @@ import os
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
-    QFileDialog, QFrame, QStackedWidget,
+    QFileDialog, QFrame,
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QSize, QEvent
 from PyQt6.QtGui import QIcon
 
 from gui import theme as T
-from gui.anim import open_curtain
+from gui.anim import CurtainStack, open_curtain
 
 try:
     from PyQt6.QtSvgWidgets import QSvgWidget
@@ -124,7 +124,7 @@ class LinkScreen(QWidget):
     def __init__(self, show_onboarding=True, parent=None):
         super().__init__(parent)
         content = T.compact_content(self, max_width=860)
-        self.stack = QStackedWidget(content)
+        self.stack = CurtainStack(content)
         root = QVBoxLayout(content); root.setContentsMargins(T.PAD_H, T.PAD_V, T.PAD_H, T.PAD_V)
         root.addWidget(self.stack)
 

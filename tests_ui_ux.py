@@ -30,19 +30,34 @@ class UIUXTest(unittest.TestCase):
             w.close()
 
     def test_screen_switch_opens_curtain_then_cleans_up(self):
-        from PyQt6.QtWidgets import QStackedWidget
-        stack = QStackedWidget()
+        stack = anim.CurtainStack()
         first, link = QWidget(), LinkScreen(show_onboarding=True)
         stack.addWidget(first)
         stack.addWidget(link)
         stack.resize(960, 700)
         stack.show()
-        stack.setCurrentWidget(link)                  # 화면 전환 = 새 화면 전체를 덮은 커튼이 걷힘
+        stack.setCurrentWidget(link)                  # 화면 전환 = 떠난 화면 위로 양옆에서 닫혔다 걷힘
         curtain = link._curtain
         self.assertIsNotNone(curtain, "전환 커튼 없음")
         self.assertIs(curtain.parentWidget(), link)
         self.assertEqual(curtain.size(), link.size())
         self.assertTrue(curtain.testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents))
+        self.assertIsNotNone(curtain._under, "떠난 화면 그림 없이 닫힘")
+        self.assertIsNone(anim._leaving, "떠난 화면 그림이 다음 커튼에 남음")
+        half = curtain.width() / 2
+        curtain.anim.setCurrentTime(0)
+        self.assertLess(max(curtain.edges), 1, "양끝에서 시작 안 함")
+        for t in range(0, anim.CLOSE_MS + anim.HOLD_MS - 10, 8):   # 밑단 스프링을 차례로 — 닫힌 채 멈춘 끝무렵
+            curtain.anim.setCurrentTime(t)
+        self.assertGreaterEqual(min(curtain.edges), half, "가운데서 안 만남")
+        self.assertLess(max(curtain.profile) - min(curtain.profile), 1, "닫혔는데 일자로 안 섬")
+        self.assertTrue(curtain._under.isVisible())
+        curtain.anim.setCurrentTime(anim.CLOSE_MS + anim.HOLD_MS + anim.OPEN_MS // 2)
+        self.assertLess(curtain.edges[0], half * 0.8, "안 걷힘")
+        self.assertFalse(curtain._under.isVisible(), "걷히는데 떠난 화면이 남음")
+        bounce = [anim._closing(s / 100) for s in range(61, 101)]   # 가운데서 만난 뒤
+        self.assertGreater(max(bounce) - min(bounce), 0.02, "가운데서 안 튕김")
+        self.assertGreaterEqual(min(bounce), 1, "튕길 때 가운데 틈이 벌어짐")
         link.stack.setCurrentIndex(1)                 # 온보딩 → 입력도 커튼 — 이전 커튼 대신 새 커튼 하나
         self.assertIsNot(link._curtain, curtain)
         QTest.qWait(link._curtain.anim.totalDuration() + 150)
@@ -120,7 +135,7 @@ class UIUXTest(unittest.TestCase):
         self.assertGreater(down, stage._pulse(), "마디 첫 박이 더 세게")
         stage.beat = (9.6, 4)
         self.assertLess(stage._pulse(), 0.05, "박 사이엔 잦아듦")
-        curtain = getattr(stage, "_curtain", None)    # 진입 커튼(불투명)이 덮고 있으면 무대는 안 그려짐 — 끝내고 확인
+        curtain = getattr(screen, "_curtain", None)   # 진입 커튼(불투명)이 덮고 있으면 무대는 안 그려짐 — 끝내고 확인
         if curtain is not None:
             curtain.anim.setCurrentTime(curtain.anim.totalDuration())
         img = QImage(stage.size(), QImage.Format.Format_ARGB32_Premultiplied)
@@ -128,6 +143,38 @@ class UIUXTest(unittest.TestCase):
         self.assertIsNotNone(stage._haze)
         screen.hide()
         self.assertFalse(stage._haze_timer.isActive())
+
+    def test_guide_waits_for_curtain_and_goes_back(self):
+        screen = MainScreen()
+        screen.set_timeline(build_dummy_timeline())
+        screen.resize(1200, 800)
+        screen.show()                                 # 진입 커튼이 열리는 중
+        screen.show_guide()
+        curtain = screen._curtain
+        self.assertIsNotNone(curtain)
+        self.assertIsNone(screen.guide, "커튼이 걷히기 전에 가이드가 뜸")
+        curtain.anim.setCurrentTime(curtain.anim.totalDuration())
+        guide = screen.guide
+        self.assertIsNotNone(guide, "커튼이 다 걷힌 뒤 가이드가 안 뜸")
+        self.assertFalse(guide.prev_btn.isVisibleTo(guide), "첫 단계엔 이전 없음")
+        guide.next()
+        guide.next()
+        self.assertTrue(guide.prev_btn.isVisibleTo(guide))
+        guide.prev_btn.click()
+        self.assertEqual(guide._i, 1)
+        QTest.keyClick(guide, Qt.Key.Key_Left)
+        self.assertEqual(guide._i, 0)
+        guide.prev()                                  # 처음에서 더 못 감
+        self.assertEqual(guide._i, 0)
+        self.assertEqual(len(guide._steps), 4)
+        for i in (2, 3):                              # 리프 생성 창·리프모드 캡쳐 이미지
+            guide._i = i
+            guide._show_step()
+            self.assertFalse(guide.img_lbl.pixmap().isNull(), f"{i + 1}단계 이미지 없음")
+        guide.next()                                  # 마지막 → 끝나면 자유연습으로 커튼이 다시 열림
+        self.assertIsNone(screen.guide)
+        self.assertEqual(screen._mode, "guide")
+        self.assertIsNotNone(getattr(screen, "_curtain", None), "가이드 끝에 커튼이 안 열림")
 
     def test_player_uses_width_and_keeps_controls_visible(self):
         screen = MainScreen()
